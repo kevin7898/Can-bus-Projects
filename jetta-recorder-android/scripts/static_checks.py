@@ -14,7 +14,9 @@ required = [
     "app/src/main/java/ca/jettatelemetry/app/obd/Elm327Client.kt",
     "app/src/main/java/ca/jettatelemetry/app/obd/Mode01Decoder.kt",
     "app/src/main/java/ca/jettatelemetry/app/obd/RawCanParser.kt",
+    "app/src/main/java/ca/jettatelemetry/app/obd/JettaDiagnosticDiscovery.kt",
     "app/src/main/java/ca/jettatelemetry/app/recording/WebCanCsv.kt",
+    "app/src/main/java/ca/jettatelemetry/app/recording/DiagnosticDiscoveryCsv.kt",
     "app/src/main/java/ca/jettatelemetry/app/data/ObdRepository.kt",
     "app/src/main/java/ca/jettatelemetry/app/ui/JettaRecorderScreen.kt",
 ]
@@ -38,6 +40,8 @@ assert "gaugeBoostKpa" in repository
 assert re.search(r'query\("010C"', repository)
 assert re.search(r'query\("010D"', repository)
 assert "startRawCanProbe" in repository
+assert "startDiagnosticDiscovery" in repository
+assert "readDataByIdentifier" in repository
 assert "STCMM0" in (ROOT / "app/src/main/java/ca/jettatelemetry/app/obd/Elm327Client.kt").read_text()
 assert "STP 31" in (ROOT / "app/src/main/java/ca/jettatelemetry/app/obd/Elm327Client.kt").read_text()
 
@@ -45,5 +49,10 @@ workflow = (ROOT / ".github/workflows/android-debug.yml").read_text()
 assert "assembleDebug" in workflow
 assert "upload-artifact" in workflow
 
-print(f"static checkpoint OK: {len(required)} required files, Bluetooth SPP, raw CAN probe and APK workflow")
+discovery = (ROOT / "app/src/main/java/ca/jettatelemetry/app/obd/JettaDiagnosticDiscovery.kt").read_text()
+assert "service 0x22" in discovery.lower()
+assert "OBDb/Volkswagen-Jetta" in discovery
+assert 'const val REQUEST_HEADER = "7E0"' in discovery
+
+print(f"static checkpoint OK: {len(required)} required files, Bluetooth SPP, raw CAN and read-only UDS discovery")
 
