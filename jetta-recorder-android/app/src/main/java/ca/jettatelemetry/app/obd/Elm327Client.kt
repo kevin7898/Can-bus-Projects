@@ -33,6 +33,17 @@ class Elm327Client(private val transport: ObdLinkTransport) {
 
     suspend fun raw(command: String): ObdReply = transport.request(command, timeoutMillis = 5_000)
 
+    suspend fun configureUdsDiscovery(onExchange: (command: String, reply: ObdReply) -> Unit) {
+        // Keep ISO-TP formatting enabled so the adapter reassembles multi-frame
+        // UDS responses. Only service 0x22 (read data by identifier) follows.
+        listOf("ATE0", "ATL0", "ATS0", "ATH0", "ATCAF1", "ATSH7E0", "ATCRA7E8").forEach { command ->
+            transport.request(command, timeoutMillis = 5_000).also { onExchange(command, it) }
+        }
+    }
+
+    suspend fun readDataByIdentifier(did: String): ObdReply =
+        transport.request("22${did.uppercase()}", timeoutMillis = 4_000)
+
     suspend fun configureRawCanMonitor(onExchange: (command: String, reply: ObdReply) -> Unit) {
         // STP31 = ISO 11898 raw CAN, 11-bit transmit IDs, 500 kbit/s, variable DLC.
         // STCMM0 is receive-only and emits no ACKs. The zero-mask pass filter

@@ -20,6 +20,9 @@ class MainViewModel(private val repository: ObdRepository) : ViewModel() {
     fun startRawCanProbe() = repository.startRawCanProbe()
     fun stopRawCanProbe() = repository.stopRawCanProbe()
     fun exportRawCanProbe(destination: Uri) = repository.exportRawCanProbe(destination)
+    fun startDiagnosticDiscovery() = repository.startDiagnosticDiscovery()
+    fun stopDiagnosticDiscovery() = repository.stopDiagnosticDiscovery()
+    fun exportDiagnosticDiscovery(destination: Uri) = repository.exportDiagnosticDiscovery(destination)
 
     override fun onCleared() {
         repository.close()

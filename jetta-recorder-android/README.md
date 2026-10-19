@@ -19,6 +19,9 @@ Android acquisition slice for the user's OnePlus 6T and OBDLink MX+.
 - Displays frame rate, unique identifiers and a live frame sample.
 - Exports the exact webCAN CSV schema consumed by the CSS Electronics
   reverse-engineering scripts.
+- Runs a curated, read-only UDS discovery pack against engine ECU `7E0/7E8`.
+- Preserves every raw diagnostic reply alongside candidate decoded values and
+  exports a validation CSV before any signal is promoted to the dashboard.
 - Builds and retains a debug APK through GitHub Actions.
 
 ## Toolchain
@@ -77,6 +80,24 @@ That file feeds the CSS Electronics `survey.py`, `correlate.py`, `bitsearch.py`,
 `build_dbc.py` and `verify.py` pipeline directly. After stopping, the app
 restores ordinary ELM/STN initialization and resumes dashboard polling.
 
+## Jetta sensor discovery
+
+Choose **Run discovery** while the engine is running. Dashboard polling pauses,
+the MX+ targets engine ECU `7E0`, and the app sequentially sends only UDS
+service `0x22` (ReadDataByIdentifier). The initial pack checks sixteen
+high-value candidates: boost, oil temperature, fuel flow and DPF temperatures,
+pressure, soot, ash and regeneration counters. It does not enter a diagnostic
+session, perform an actuator test, clear faults, code a module or write data.
+
+Results distinguish positive replies, UDS negative responses, no-data replies
+and transport errors. **Found** means that the ECU answered; it does not yet
+prove that OBDb's candidate scaling or engineering unit is correct. Export the
+result CSV after the run so the raw bytes and decoded preview can be compared
+against driving conditions. Normal Mode 01 polling is restored automatically.
+
+The candidate definitions are kept in a single attributed profile. See
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 ## Known boundaries
 
 - The app must be in the foreground in this checkpoint.
@@ -86,6 +107,8 @@ restores ordinary ELM/STN initialization and resumes dashboard polling.
   current poll request.
 - The manual console is unavailable while the raw monitor owns the adapter
   stream; stop capture before issuing a command.
+- The console and raw CAN monitor are unavailable while Jetta sensor discovery
+  owns the adapter request stream.
 - The poller proves the path and measures throughput; the full priority/freshness
   scheduler from Phase 1 comes next.
 - GPS, Room storage, trip lifecycle, reconnection and background recording are

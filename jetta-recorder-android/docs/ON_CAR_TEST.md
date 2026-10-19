@@ -77,3 +77,21 @@ Interpretation:
 The app deliberately uses `STCMM0`, so the adapter listens without acknowledging
 or transmitting CAN frames. Do not change this to normal-node mode in a vehicle.
 
+## Read-only Jetta sensor discovery
+
+Run this as a separate parked test; do not run the raw CAN monitor at the same
+time.
+
+1. Start the engine and let it idle. Connect until the normal dashboard is live.
+2. Tap **Run discovery** under **Jetta sensor discovery**.
+3. Leave the engine running until all sixteen candidates have finished.
+4. Confirm the dashboard resumes normal RPM and speed polling automatically.
+5. Note which rows say **FOUND** and whether each preview is physically
+   plausible. A response alone does not validate its scale or unit.
+6. Tap **Export results** and retain the CSV unchanged.
+
+The run sends only `22xxxx` UDS ReadDataByIdentifier requests to engine request
+ID `7E0` and accepts replies from `7E8`. It does not clear DTCs, change coding,
+run actuators or write ECU data. If the app fails to restore normal polling,
+disconnect and reconnect; preserve the console and exported CSV for diagnosis.
+
