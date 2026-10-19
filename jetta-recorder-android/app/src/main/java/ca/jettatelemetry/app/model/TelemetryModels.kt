@@ -51,6 +51,41 @@ data class RawCanProbeState(
     val exportedFileName: String? = null
 )
 
+enum class DiagnosticProbeStatus {
+    PENDING,
+    RUNNING,
+    SUPPORTED,
+    NEGATIVE_RESPONSE,
+    NO_DATA,
+    ERROR,
+    CANCELLED
+}
+
+data class DiagnosticProbeResult(
+    val id: String,
+    val name: String,
+    val did: String,
+    val category: String,
+    val status: DiagnosticProbeStatus = DiagnosticProbeStatus.PENDING,
+    val rawReply: String = "",
+    val payloadHex: String? = null,
+    val decodedValue: Double? = null,
+    val unit: String? = null,
+    val latencyMillis: Long? = null,
+    val note: String? = null
+)
+
+data class DiagnosticDiscoveryState(
+    val isRunning: Boolean = false,
+    val startedAtMillis: Long? = null,
+    val currentProbeId: String? = null,
+    val completedCount: Int = 0,
+    val totalCount: Int = 0,
+    val results: List<DiagnosticProbeResult> = emptyList(),
+    val captureFileAvailable: Boolean = false,
+    val exportedFileName: String? = null
+)
+
 data class ConsoleEntry(
     val id: Long,
     val timestampMillis: Long,
@@ -71,7 +106,8 @@ data class MainUiState(
     val console: List<ConsoleEntry> = emptyList(),
     val errorMessage: String? = null,
     val isPolling: Boolean = false,
-    val rawCanProbe: RawCanProbeState = RawCanProbeState()
+    val rawCanProbe: RawCanProbeState = RawCanProbeState(),
+    val diagnosticDiscovery: DiagnosticDiscoveryState = DiagnosticDiscoveryState()
 )
 
 object DerivedSignals {
