@@ -11,8 +11,8 @@ android {
         applicationId = "ca.jettatelemetry.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.3.1-startup-fix"
+        versionCode = 5
+        versionName = "0.3.2-bootstrap-diagnostics"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
