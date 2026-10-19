@@ -40,12 +40,12 @@ jobs:
       - name: Install Android platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.6.0"
+          gradle-version: "8.9"
 
       - name: Run unit tests and assemble debug APK
         run: gradle --no-daemon testDebugUnitTest assembleDebug
