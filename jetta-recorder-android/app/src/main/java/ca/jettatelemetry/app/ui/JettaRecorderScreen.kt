@@ -56,6 +56,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ca.jettatelemetry.app.model.ConnectionPhase
 import ca.jettatelemetry.app.model.ConsoleEntry
+import ca.jettatelemetry.app.model.DiagnosticDiscoveryState
+import ca.jettatelemetry.app.model.DiagnosticProbeResult
+import ca.jettatelemetry.app.model.DiagnosticProbeStatus
 import ca.jettatelemetry.app.model.DerivedSignals
 import ca.jettatelemetry.app.model.LiveVehicleData
 import ca.jettatelemetry.app.model.MainUiState
@@ -80,6 +83,9 @@ fun JettaRecorderApp(viewModel: MainViewModel) {
     val csvExporter = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
     ) { uri -> uri?.let(viewModel::exportRawCanProbe) }
+    val discoveryExporter = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri -> uri?.let(viewModel::exportDiagnosticDiscovery) }
     JettaTheme {
         JettaRecorderScreen(
             state = state,
@@ -93,6 +99,11 @@ fun JettaRecorderApp(viewModel: MainViewModel) {
             onStopRawCan = viewModel::stopRawCanProbe,
             onExportRawCan = {
                 csvExporter.launch("jetta-raw-can-${System.currentTimeMillis()}.csv")
+            },
+            onStartDiscovery = viewModel::startDiagnosticDiscovery,
+            onStopDiscovery = viewModel::stopDiagnosticDiscovery,
+            onExportDiscovery = {
+                discoveryExporter.launch("jetta-diagnostic-discovery-${System.currentTimeMillis()}.csv")
             }
         )
     }
@@ -125,7 +136,10 @@ fun JettaRecorderScreen(
     onClearConsole: () -> Unit,
     onStartRawCan: () -> Unit,
     onStopRawCan: () -> Unit,
-    onExportRawCan: () -> Unit
+    onExportRawCan: () -> Unit,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onExportDiscovery: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = Night) {
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -142,7 +156,10 @@ fun JettaRecorderScreen(
                         onClearConsole = onClearConsole,
                         onStartRawCan = onStartRawCan,
                         onStopRawCan = onStopRawCan,
-                        onExportRawCan = onExportRawCan
+                        onExportRawCan = onExportRawCan,
+                        onStartDiscovery = onStartDiscovery,
+                        onStopDiscovery = onStopDiscovery,
+                        onExportDiscovery = onExportDiscovery
                     )
                 } else {
                     ConnectionContent(
@@ -285,7 +302,10 @@ private fun LiveContent(
     onClearConsole: () -> Unit,
     onStartRawCan: () -> Unit,
     onStopRawCan: () -> Unit,
-    onExportRawCan: () -> Unit
+    onExportRawCan: () -> Unit,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onExportDiscovery: () -> Unit
 ) {
     var showConsole by remember { mutableStateOf(false) }
     val dashboard: @Composable (Modifier) -> Unit = { modifier ->
@@ -299,8 +319,18 @@ private fun LiveContent(
                 }
             }
             item {
+                DiagnosticDiscoveryPanel(
+                    discovery = state.diagnosticDiscovery,
+                    enabled = !state.rawCanProbe.isCapturing,
+                    onStart = onStartDiscovery,
+                    onStop = onStopDiscovery,
+                    onExport = onExportDiscovery
+                )
+            }
+            item {
                 RawCanProbePanel(
                     probe = state.rawCanProbe,
+                    enabled = !state.diagnosticDiscovery.isRunning,
                     onStart = onStartRawCan,
                     onStop = onStopRawCan,
                     onExport = onExportRawCan
@@ -341,6 +371,7 @@ private fun LiveContent(
 @Composable
 private fun RawCanProbePanel(
     probe: RawCanProbeState,
+    enabled: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onExport: () -> Unit
@@ -386,7 +417,7 @@ private fun RawCanProbePanel(
                     Text("Stop capture")
                 }
             } else {
-                Button(onClick = onStart, colors = ButtonDefaults.buttonColors(containerColor = VwBlue)) {
+                Button(onClick = onStart, enabled = enabled, colors = ButtonDefaults.buttonColors(containerColor = VwBlue)) {
                     Text("Start probe")
                 }
             }
@@ -403,6 +434,91 @@ private fun RawCanProbePanel(
                 modifier = Modifier.padding(top = 7.dp)
             )
         }
+    }
+}
+
+@Composable
+private fun DiagnosticDiscoveryPanel(
+    discovery: DiagnosticDiscoveryState,
+    enabled: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onExport: () -> Unit
+) {
+    val supported = discovery.results.count { it.status == DiagnosticProbeStatus.SUPPORTED }
+    val rejected = discovery.results.count { it.status == DiagnosticProbeStatus.NEGATIVE_RESPONSE || it.status == DiagnosticProbeStatus.NO_DATA }
+    SectionCard(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("JETTA SENSOR DISCOVERY", color = IceBlue, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
+                Text(
+                    if (discovery.isRunning) "READ-ONLY UDS 0x22 • ENGINE ECU" else "CURATED 2014 TDI CANDIDATES",
+                    color = if (discovery.isRunning) Good else Muted,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            Box(Modifier.size(9.dp).background(if (discovery.isRunning) Good else Muted, RoundedCornerShape(50)))
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ProbeStat("PROGRESS", "${discovery.completedCount}/${discovery.totalCount}", Modifier.weight(1f))
+            ProbeStat("SUPPORTED", supported.toString(), Modifier.weight(1f))
+            ProbeStat("NO MATCH", rejected.toString(), Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Safely checks boost, oil temperature, fuel-flow and DPF identifiers. Candidate scaling stays unverified until the values make sense on your car.",
+            color = Muted,
+            fontSize = 12.sp
+        )
+        val visibleResults = discovery.results.filter {
+            it.status != DiagnosticProbeStatus.PENDING && it.status != DiagnosticProbeStatus.CANCELLED
+        }.takeLast(6).reversed()
+        if (visibleResults.isNotEmpty()) {
+            Spacer(Modifier.height(9.dp))
+            visibleResults.forEach { result -> DiscoveryResultRow(result) }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (discovery.isRunning) {
+                Button(onClick = onStop, colors = ButtonDefaults.buttonColors(containerColor = Red)) {
+                    Text("Stop discovery")
+                }
+            } else {
+                Button(onClick = onStart, enabled = enabled, colors = ButtonDefaults.buttonColors(containerColor = VwBlue)) {
+                    Text("Run discovery")
+                }
+            }
+            OutlinedButton(
+                onClick = onExport,
+                enabled = discovery.captureFileAvailable && !discovery.isRunning
+            ) { Text("Export results") }
+        }
+    }
+}
+
+@Composable
+private fun DiscoveryResultRow(result: DiagnosticProbeResult) {
+    val (status, color) = when (result.status) {
+        DiagnosticProbeStatus.SUPPORTED -> "FOUND" to Good
+        DiagnosticProbeStatus.RUNNING -> "READING" to Warning
+        DiagnosticProbeStatus.NEGATIVE_RESPONSE -> "REJECTED" to Muted
+        DiagnosticProbeStatus.NO_DATA -> "NO DATA" to Muted
+        DiagnosticProbeStatus.ERROR -> "ERROR" to Red
+        DiagnosticProbeStatus.CANCELLED -> "SKIPPED" to Muted
+        DiagnosticProbeStatus.PENDING -> "WAITING" to Muted
+    }
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(result.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text("22${result.did} • ${result.category}", color = Muted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+        }
+        val value = result.decodedValue?.let { decoded ->
+            val digits = if (kotlin.math.abs(decoded) >= 100) 1 else 2
+            ", %.${digits}f %s".format(decoded, result.unit.orEmpty())
+        }.orEmpty()
+        Text("$status$value", color = color, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
     }
 }
 
