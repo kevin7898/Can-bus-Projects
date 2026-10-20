@@ -495,7 +495,11 @@ private fun DiagnosticDiscoveryPanel(
             Column(Modifier.weight(1f)) {
                 Text("JETTA SENSOR DISCOVERY", color = IceBlue, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
                 Text(
-                    if (discovery.isRunning) "READ-ONLY UDS 0x22 • ENGINE ECU" else "CURATED 2014 TDI CANDIDATES",
+                    when {
+                        discovery.isRunning && discovery.currentProbeId == null -> "READING ECU DETAILS"
+                        discovery.isRunning -> "READ-ONLY UDS 0x22 • ENGINE ECU"
+                        else -> "CURATED 2014 TDI CANDIDATES"
+                    },
                     color = if (discovery.isRunning) Good else Muted,
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace

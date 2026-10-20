@@ -38,7 +38,8 @@ class Elm327Client(private val transport: ObdLinkTransport) {
     suspend fun raw(command: String): ObdReply = transport.request(command, timeoutMillis = 5_000)
 
     suspend fun configureUdsDiscovery(onExchange: (command: String, reply: ObdReply) -> Unit) {
-        prepareUdsDiscovery(transport::request, onExchange)
+        val control = prepareUdsDiscovery(transport::request, onExchange)
+        collectEcuInventory(control, transport::request, onExchange)
     }
 
     suspend fun readDataByIdentifier(did: String): ObdReply =

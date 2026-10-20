@@ -6,7 +6,7 @@ import java.io.IOException
 internal suspend fun prepareUdsDiscovery(
     request: suspend (String, Long) -> ObdReply,
     onExchange: (String, ObdReply) -> Unit
-) {
+): ObdReply {
     // The Android deadline does not extend the adapter's own response window.
     // Disable adaptive shortening for this run; initialize() restores normal polling settings.
     val commands = listOf(
@@ -31,4 +31,5 @@ internal suspend fun prepareUdsDiscovery(
                 "Sensor identifiers were not tested."
         )
     }
+    return control
 }

@@ -101,12 +101,18 @@ time.
    Discovery uses `ATAT0` and `STPTO 1000` to give the adapter a fixed one-second
    response window; Android's four-second deadline is a separate outer limit.
    Leave the engine running until all sixteen candidates have finished.
+   Before those candidates, it also reads supported Mode 01 PID pages (following
+   only advertised continuation bits, up to `01E0`), Mode 09 support (`0900`),
+   calibration ID (`0904`), and ECU name (`090A`). These raw inventory replies
+   are included as `setup` rows in the same CSV, even when a query returns
+   `NO DATA`. They identify the controller before choosing further candidates;
+   they do not establish support for a particular proprietary protocol.
 4. Confirm the dashboard resumes normal RPM and speed polling automatically.
 5. Note which rows say **FOUND** and whether each preview is physically
    plausible. A response alone does not validate its scale or unit.
 6. Tap **Export results** and retain the CSV unchanged.
 
-The run sends a read-only Mode 01 `0100` control followed by `22xxxx` UDS
+The run sends read-only Mode 01/09 inventory requests followed by `22xxxx` UDS
 ReadDataByIdentifier requests to engine request ID `7E0` and accepts replies
 from `7E8`. The CSV retains its original probe columns and adds `record_type`,
 `command`, `app_version`, and `run_error`. Rows marked `setup` preserve every
