@@ -67,12 +67,11 @@ class ObdLinkTransport(context: Context) {
         requestMutex.withLock {
             withContext(Dispatchers.IO) {
                 val writer = requireNotNull(output) { "Adapter is not connected" }
-                val started = System.nanoTime()
-                writer.write((command.trim() + "\r").toByteArray(StandardCharsets.US_ASCII))
-                writer.flush()
                 val reader = requireNotNull(input) { "Adapter input is not available" }
-                val body = readObdPrompt(reader, command.trim(), timeoutMillis)
-                ObdReply(command.trim(), body, (System.nanoTime() - started) / 1_000_000)
+                val activeSocket = socket
+                exchangeObdCommand(reader, writer, command, timeoutMillis) {
+                    if (socket === activeSocket) closeImmediately()
+                }
             }
         }
 

@@ -515,6 +515,9 @@ private fun DiagnosticDiscoveryPanel(
             color = Muted,
             fontSize = 12.sp
         )
+        discovery.runError?.let { message ->
+            Text("Discovery stopped: $message", color = Red, fontSize = 12.sp)
+        }
         val visibleResults = discovery.results.filter {
             it.status != DiagnosticProbeStatus.PENDING && it.status != DiagnosticProbeStatus.CANCELLED
         }.takeLast(6).reversed()

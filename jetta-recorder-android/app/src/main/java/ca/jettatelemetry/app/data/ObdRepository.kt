@@ -6,6 +6,8 @@ import android.util.Log
 import ca.jettatelemetry.app.model.ConnectionPhase
 import ca.jettatelemetry.app.model.ConsoleEntry
 import ca.jettatelemetry.app.model.DiagnosticDiscoveryState
+import ca.jettatelemetry.app.model.DiagnosticSetupExchange
+import ca.jettatelemetry.app.BuildConfig
 import ca.jettatelemetry.app.model.DiagnosticProbeResult
 import ca.jettatelemetry.app.model.DiagnosticProbeStatus
 import ca.jettatelemetry.app.model.DerivedSignals
@@ -153,8 +155,6 @@ class ObdRepository(context: Context) {
 
     fun startRawCanProbe() {
         if (_state.value.connectionPhase != ConnectionPhase.LIVE || monitorJob?.isActive == true || discoveryJob?.isActive == true) return
-        pollingJob?.cancel()
-        pollingJob = null
 
         monitorJob = scope.launch {
             var writer: BufferedWriter? = null
@@ -166,6 +166,8 @@ class ObdRepository(context: Context) {
             var lastUiUpdate = 0L
             val startedAtMillis = System.currentTimeMillis()
             try {
+                pollingJob?.cancelAndJoin()
+                pollingJob = null
                 system("Preparing silent raw CAN probe (11-bit / 500 kbit/s)")
                 elm.configureRawCanMonitor(::logExchange)
 
@@ -313,7 +315,16 @@ class ObdRepository(context: Context) {
 
             try {
                 system("Starting read-only Jetta UDS discovery (${definitions.size} identifiers)")
-                elm.configureUdsDiscovery(::logExchange)
+                elm.configureUdsDiscovery { command, reply ->
+                    logExchange(command, reply)
+                    _state.update { current ->
+                        current.copy(diagnosticDiscovery = current.diagnosticDiscovery.copy(
+                            setupExchanges = current.diagnosticDiscovery.setupExchanges +
+                                DiagnosticSetupExchange(command, reply.body, reply.latencyMillis)
+                        ))
+                    }
+                }
+                system("Engine route 7E0/7E8 verified with 0100; starting sensor requests")
                 definitions.forEachIndexed { index, definition ->
                     _state.update { current ->
                         current.copy(
@@ -376,6 +387,11 @@ class ObdRepository(context: Context) {
                 system("Jetta diagnostic discovery stopped")
             } catch (failure: Throwable) {
                 system("Jetta diagnostic discovery failed: ${failure.message ?: failure::class.java.simpleName}")
+                _state.update { current ->
+                    current.copy(diagnosticDiscovery = current.diagnosticDiscovery.copy(
+                        runError = failure.message ?: failure::class.java.simpleName
+                    ))
+                }
             } finally {
                 withContext(NonCancellable) {
                     _state.update { current ->
@@ -394,7 +410,11 @@ class ObdRepository(context: Context) {
                     runCatching {
                         val file = File(appContext.cacheDir, "jetta-diagnostic-discovery-latest.csv")
                         file.bufferedWriter().use { writer ->
-                            DiagnosticDiscoveryCsv.write(writer, _state.value.diagnosticDiscovery.results)
+                            val discovery = _state.value.diagnosticDiscovery
+                            DiagnosticDiscoveryCsv.write(
+                                writer, discovery.results, discovery.setupExchanges,
+                                discovery.runError, BuildConfig.VERSION_NAME
+                            )
                         }
                         discoveryCaptureFile = file
                         _state.update { current ->
@@ -525,7 +545,7 @@ class ObdRepository(context: Context) {
         monitorJob = null
         discoveryJob?.cancelAndJoin()
         discoveryJob = null
-        pollingJob?.cancel()
+        pollingJob?.cancelAndJoin()
         pollingJob = null
         runCatching { transport.disconnect() }
         _state.update {

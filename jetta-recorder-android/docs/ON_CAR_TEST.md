@@ -85,19 +85,35 @@ or transmitting CAN frames. Do not change this to normal-node mode in a vehicle.
 
 ## Read-only Jetta sensor discovery
 
+Mode changes wait for the in-flight polling reply and its `>` prompt before
+sending setup commands. A cancelled poll still consumes its bounded reply,
+then propagates cancellation. A transport timeout or I/O failure closes the
+connection rather than allowing later commands to consume an old response.
+
 Run this as a separate parked test; do not run the raw CAN monitor at the same
 time.
 
 1. Start the engine and let it idle. Connect until the normal dashboard is live.
 2. Tap **Run discovery** under **Jetta sensor discovery**.
-3. Leave the engine running until all sixteen candidates have finished.
+3. The app first requires OK replies to its setup commands and a valid `0100`
+   response through `7E0`/`7E8`. If this control fails, it stops without testing
+   any sensor identifiers and displays the setup failure. Export this result too.
+   Discovery uses `ATAT0` and `STPTO 1000` to give the adapter a fixed one-second
+   response window; Android's four-second deadline is a separate outer limit.
+   Leave the engine running until all sixteen candidates have finished.
 4. Confirm the dashboard resumes normal RPM and speed polling automatically.
 5. Note which rows say **FOUND** and whether each preview is physically
    plausible. A response alone does not validate its scale or unit.
 6. Tap **Export results** and retain the CSV unchanged.
 
-The run sends only `22xxxx` UDS ReadDataByIdentifier requests to engine request
-ID `7E0` and accepts replies from `7E8`. It does not clear DTCs, change coding,
+The run sends a read-only Mode 01 `0100` control followed by `22xxxx` UDS
+ReadDataByIdentifier requests to engine request ID `7E0` and accepts replies
+from `7E8`. The CSV retains its original probe columns and adds `record_type`,
+`command`, `app_version`, and `run_error`. Rows marked `setup` preserve every
+completed setup exchange and the control reply; `probe` rows retain the sixteen
+candidate results. An early setup failure exports cancelled candidates and the
+error, without labeling them unsupported. Normal initialization restores the
+adapter timing settings afterward. The run does not clear DTCs, change coding,
 run actuators or write ECU data. If the app fails to restore normal polling,
 disconnect and reconnect; preserve the console and exported CSV for diagnosis.
 

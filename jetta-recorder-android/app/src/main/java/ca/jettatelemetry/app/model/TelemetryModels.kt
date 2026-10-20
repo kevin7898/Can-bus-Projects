@@ -75,6 +75,12 @@ data class DiagnosticProbeResult(
     val note: String? = null
 )
 
+data class DiagnosticSetupExchange(
+    val command: String,
+    val rawReply: String,
+    val latencyMillis: Long
+)
+
 data class DiagnosticDiscoveryState(
     val isRunning: Boolean = false,
     val startedAtMillis: Long? = null,
@@ -83,7 +89,9 @@ data class DiagnosticDiscoveryState(
     val totalCount: Int = 0,
     val results: List<DiagnosticProbeResult> = emptyList(),
     val captureFileAvailable: Boolean = false,
-    val exportedFileName: String? = null
+    val exportedFileName: String? = null,
+    val setupExchanges: List<DiagnosticSetupExchange> = emptyList(),
+    val runError: String? = null
 )
 
 data class ConsoleEntry(

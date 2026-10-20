@@ -38,11 +38,7 @@ class Elm327Client(private val transport: ObdLinkTransport) {
     suspend fun raw(command: String): ObdReply = transport.request(command, timeoutMillis = 5_000)
 
     suspend fun configureUdsDiscovery(onExchange: (command: String, reply: ObdReply) -> Unit) {
-        // Keep ISO-TP formatting enabled so the adapter reassembles multi-frame
-        // UDS responses. Only service 0x22 (read data by identifier) follows.
-        listOf("ATE0", "ATL0", "ATS0", "ATH0", "ATCAF1", "ATSH7E0", "ATCRA7E8").forEach { command ->
-            transport.request(command, timeoutMillis = 5_000).also { onExchange(command, it) }
-        }
+        prepareUdsDiscovery(transport::request, onExchange)
     }
 
     suspend fun readDataByIdentifier(did: String): ObdReply =
