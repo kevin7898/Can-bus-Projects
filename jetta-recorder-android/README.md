@@ -26,26 +26,30 @@ Android acquisition slice for the user's OnePlus 6T and OBDLink MX+.
 
 ## Toolchain
 
-- Android Gradle Plugin 9.4.0
-- Kotlin 2.4.10
-- Gradle 9.6.0
-- compile/target SDK 37; minimum SDK 26
-- Compose BOM 2026.09.00
+- Android Gradle Plugin 8.7.3
+- Kotlin / Compose compiler plugin 2.0.21
+- Gradle 8.9 (included wrapper)
+- compile/target SDK 35; minimum SDK 26
+- Compose BOM 2024.12.01
 - JDK 17
 
-The wrapper properties are included, but the binary wrapper JAR is intentionally
-not hand-vendored. Open the project in Android Studio Quail 4 or newer, or run
-`gradle wrapper --gradle-version 9.6.0` once with a local Gradle installation.
-GitHub Actions does not require the wrapper JAR; the workflow installs the
-pinned Gradle version before running tests and assembling the APK.
+The generated Gradle wrapper is included. Set `JAVA_HOME` to JDK 17 for terminal
+builds and select JDK 17 as the Gradle JDK in Android Studio. The Kotlin Android
+plugin must stay applied alongside the Compose compiler plugin: AGP 8.7 does
+not compile Kotlin on its own. Omitting it can produce an APK without either
+activity and report the Kotlin unit tests as `NO-SOURCE`.
 
 ## Build
 
 1. Open this folder as a project in Android Studio.
-2. Let Gradle sync and install SDK 37 when prompted.
+2. Let Gradle sync and install SDK 35 when prompted.
 3. Connect the OnePlus 6T with USB debugging enabled.
 4. Run the `app` debug configuration.
 5. Follow [`docs/ON_CAR_TEST.md`](docs/ON_CAR_TEST.md).
+
+From this directory, run `./gradlew testDebugUnitTest assembleDebug` (Windows:
+`.\gradlew.bat testDebugUnitTest assembleDebug`). The APK is written to
+`app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Architecture
 
