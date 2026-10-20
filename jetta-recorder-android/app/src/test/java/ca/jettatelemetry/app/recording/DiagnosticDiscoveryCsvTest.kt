@@ -9,6 +9,22 @@ import org.junit.Test
 
 class DiagnosticDiscoveryCsvTest {
     @Test
+    fun standardResultsExportTheCorrectServiceSourceAndDecodedFields() {
+        val writer = StringWriter()
+        DiagnosticDiscoveryCsv.write(writer, listOf(DiagnosticProbeResult(
+            "obd_dpf_pressure", "Standard DPF pressures", "7A", "DPF",
+            status = DiagnosticProbeStatus.SUPPORTED,
+            rawReply = "009\r0:417A01FF9C00\r1:000000",
+            note = "Differential: -1.00 kPa", service = "01"
+        )))
+        val csv = writer.toString()
+        assertTrue(csv.contains("\"OBDb/SAEJ1979 @ 06690177\""))
+        assertTrue(csv.contains("\"7E8\",\"01\",\"7A\""))
+        assertTrue(csv.contains("\"probe\",\"017A\""))
+        assertTrue(csv.contains("Differential: -1.00 kPa"))
+        assertTrue(!csv.contains("227A"))
+    }
+    @Test
     fun exportIncludesControlEvidenceVersionAndTheUnmodifiedProbeReply() {
         val writer = StringWriter()
         DiagnosticDiscoveryCsv.write(

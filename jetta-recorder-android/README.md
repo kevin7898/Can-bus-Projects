@@ -19,7 +19,8 @@ Android acquisition slice for the user's OnePlus 6T and OBDLink MX+.
 - Displays frame rate, unique identifiers and a live frame sample.
 - Exports the exact webCAN CSV schema consumed by the CSS Electronics
   reverse-engineering scripts.
-- Runs a curated, read-only UDS discovery pack against engine ECU `7E0/7E8`.
+- Reads advertised standard OBD sensor families, then runs the existing curated,
+  read-only UDS discovery pack against engine ECU `7E0/7E8`.
 - Preserves every raw diagnostic reply alongside candidate decoded values and
   exports a validation CSV before any signal is promoted to the dashboard.
 - Builds and retains a debug APK through GitHub Actions.
@@ -86,9 +87,20 @@ restores ordinary ELM/STN initialization and resumes dashboard polling.
 
 ## Jetta sensor discovery
 
-Choose **Run discovery** while the engine is running. Dashboard polling pauses,
-the MX+ targets engine ECU `7E0`, and the app sequentially sends only UDS
-service `0x22` (ReadDataByIdentifier). The initial pack checks sixteen
+Choose **Run discovery** while the engine is running. Dashboard polling pauses
+and the MX+ targets engine ECU `7E0/7E8`. After setup and ECU inventory, the app
+first reads five standard Mode 01 families when the ECU advertises them:
+fuel rate (`015E`), boost pressures (`0170`), bank 1 exhaust temperatures
+(`0178`), DPF pressures (`017A`), and regeneration information (`018B`).
+Unadvertised PIDs are skipped without transmission. Numbered ELM multiline
+replies are reassembled before decoding, and internal availability flags gate
+every sensor field. Values are shown as discovery snapshots and retained in
+the CSV; they are not automatically promoted to dashboard polling. Exhaust
+sensor numbers are not assumed to identify DPF inlet/outlet locations, and
+regeneration trigger/average intervals are not soot mass or time since regen.
+
+The existing sixteen proprietary candidates follow unchanged, using UDS
+service `0x22` (ReadDataByIdentifier). This pack checks
 high-value candidates: boost, oil temperature, fuel flow and DPF temperatures,
 pressure, soot, ash and regeneration counters. It does not enter a diagnostic
 session, perform an actuator test, clear faults, code a module or write data.
@@ -97,7 +109,9 @@ Results distinguish positive replies, UDS negative responses, no-data replies
 and transport errors. **Found** means that the ECU answered; it does not yet
 prove that OBDb's candidate scaling or engineering unit is correct. Export the
 result CSV after the run so the raw bytes and decoded preview can be compared
-against driving conditions. Normal Mode 01 polling is restored automatically.
+against driving conditions. Standard results identify service `01` and their
+own source in the same CSV schema. Found results remain visible when later
+candidates return no data. Normal Mode 01 polling is restored automatically.
 
 The candidate definitions are kept in a single attributed profile. See
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

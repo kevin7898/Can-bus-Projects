@@ -57,6 +57,7 @@ enum class DiagnosticProbeStatus {
     SUPPORTED,
     NEGATIVE_RESPONSE,
     NO_DATA,
+    NOT_ADVERTISED,
     ERROR,
     CANCELLED
 }
@@ -72,7 +73,8 @@ data class DiagnosticProbeResult(
     val decodedValue: Double? = null,
     val unit: String? = null,
     val latencyMillis: Long? = null,
-    val note: String? = null
+    val note: String? = null,
+    val service: String = "22"
 )
 
 data class DiagnosticSetupExchange(

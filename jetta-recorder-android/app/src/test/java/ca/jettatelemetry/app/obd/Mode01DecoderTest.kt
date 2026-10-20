@@ -20,6 +20,8 @@ class Mode01DecoderTest {
     @Test fun returnsNullForNoDataAndTruncatedFrames() {
         assertNull(Mode01Decoder.rpm("NO DATA"))
         assertNull(Mode01Decoder.rpm("41 0C 1A"))
+        assertNull(Mode01Decoder.rpm("410C1A\r410C1AF8"))
+        assertNull(Mode01Decoder.rpm("Adapter error 410C1AF8"))
     }
 }
 

@@ -15,19 +15,8 @@ object Mode01Decoder {
     fun barometricKpa(reply: String): Double? = dataBytes(reply, "33", 1)?.first()?.toDouble()
 
     internal fun dataBytes(reply: String, pid: String, count: Int): List<Int>? {
-        val compact = reply
-            .uppercase()
-            .replace("SEARCHING...", "")
-            .replace(Regex("[^0-9A-F]"), "")
-        val marker = "41${pid.uppercase()}"
-        val markerIndex = compact.indexOf(marker)
-        if (markerIndex < 0) return null
-        val dataStart = markerIndex + marker.length
-        val dataEnd = dataStart + count * 2
-        if (compact.length < dataEnd) return null
-        return (dataStart until dataEnd step 2).map { index ->
-            compact.substring(index, index + 2).toIntOrNull(16) ?: return null
-        }
+        val bytes = ElmObdPayload.read(reply, "41${pid.uppercase()}") ?: return null
+        return bytes.takeIf { it.size >= count }?.take(count)
     }
 }
 

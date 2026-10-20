@@ -17,10 +17,11 @@ import ca.jettatelemetry.app.model.PairedObdDevice
 import ca.jettatelemetry.app.model.RawCanProbeState
 import ca.jettatelemetry.app.obd.Elm327Client
 import ca.jettatelemetry.app.obd.JettaDiagnosticDiscovery
+import ca.jettatelemetry.app.obd.StandardObdDiscovery
 import ca.jettatelemetry.app.obd.Mode01Decoder
 import ca.jettatelemetry.app.obd.ObdLinkTransport
 import ca.jettatelemetry.app.obd.RawCanParser
-import ca.jettatelemetry.app.obd.UdsReadDataDecoder
+import ca.jettatelemetry.app.obd.readDiagnosticProbe
 import ca.jettatelemetry.app.recording.DiagnosticDiscoveryCsv
 import ca.jettatelemetry.app.recording.WebCanCsv
 import java.io.BufferedWriter
@@ -290,7 +291,7 @@ class ObdRepository(context: Context) {
         discoveryJob = scope.launch {
             pollingJob?.cancelAndJoin()
             pollingJob = null
-            val definitions = JettaDiagnosticDiscovery.probes
+            val definitions = StandardObdDiscovery.probes + JettaDiagnosticDiscovery.probes
             val startedAtMillis = System.currentTimeMillis()
             _state.update { current ->
                 current.copy(
@@ -306,7 +307,8 @@ class ObdRepository(context: Context) {
                                 did = definition.did,
                                 category = definition.category,
                                 unit = definition.unit,
-                                note = definition.note
+                                note = definition.note,
+                                service = definition.service
                             )
                         }
                     )
@@ -314,8 +316,8 @@ class ObdRepository(context: Context) {
             }
 
             try {
-                system("Starting read-only Jetta UDS discovery (${definitions.size} identifiers)")
-                elm.configureUdsDiscovery { command, reply ->
+                system("Starting read-only standard OBD and Jetta candidate discovery (${definitions.size} requests)")
+                val supportedPids = elm.configureUdsDiscovery { command, reply ->
                     logExchange(command, reply)
                     _state.update { current ->
                         current.copy(diagnosticDiscovery = current.diagnosticDiscovery.copy(
@@ -338,25 +340,9 @@ class ObdRepository(context: Context) {
                     }
 
                     val result = try {
-                        val reply = elm.readDataByIdentifier(definition.did)
-                        logExchange(definition.command, reply)
-                        val parsed = UdsReadDataDecoder.parse(reply.body, definition.did)
-                        val decoded = if (parsed.status == DiagnosticProbeStatus.SUPPORTED) {
-                            UdsReadDataDecoder.decode(parsed.payloadHex, definition)
-                        } else null
-                        DiagnosticProbeResult(
-                            id = definition.id,
-                            name = definition.name,
-                            did = definition.did,
-                            category = definition.category,
-                            status = parsed.status,
-                            rawReply = reply.body,
-                            payloadHex = parsed.payloadHex,
-                            decodedValue = decoded,
-                            unit = definition.unit,
-                            latencyMillis = reply.latencyMillis,
-                            note = parsed.negativeResponseCode?.let { "UDS negative response 0x$it" } ?: definition.note
-                        )
+                        readDiagnosticProbe(definition, supportedPids) { command ->
+                            elm.readDiscoveryCommand(command).also { logExchange(command, it) }
+                        }
                     } catch (failure: Throwable) {
                         if (failure is CancellationException) throw failure
                         DiagnosticProbeResult(
@@ -367,7 +353,8 @@ class ObdRepository(context: Context) {
                             status = DiagnosticProbeStatus.ERROR,
                             rawReply = failure.message.orEmpty(),
                             unit = definition.unit,
-                            note = definition.note
+                            note = definition.note,
+                            service = definition.service
                         )
                     }
 

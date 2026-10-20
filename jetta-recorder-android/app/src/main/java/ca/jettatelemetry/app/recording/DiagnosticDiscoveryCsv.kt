@@ -3,6 +3,7 @@ package ca.jettatelemetry.app.recording
 import ca.jettatelemetry.app.model.DiagnosticProbeResult
 import ca.jettatelemetry.app.model.DiagnosticSetupExchange
 import ca.jettatelemetry.app.obd.JettaDiagnosticDiscovery
+import ca.jettatelemetry.app.obd.StandardObdDiscovery
 import java.io.Writer
 
 object DiagnosticDiscoveryCsv {
@@ -25,13 +26,13 @@ object DiagnosticDiscoveryCsv {
         }
         results.forEach { result ->
             val fields = listOf(
-                JettaDiagnosticDiscovery.SOURCE_NAME,
+                if (result.service == "01") StandardObdDiscovery.SOURCE_NAME else JettaDiagnosticDiscovery.SOURCE_NAME,
                 result.id,
                 result.category,
                 result.name,
                 JettaDiagnosticDiscovery.REQUEST_HEADER,
                 JettaDiagnosticDiscovery.RESPONSE_HEADER,
-                "22",
+                result.service,
                 result.did,
                 result.status.name,
                 result.latencyMillis?.toString().orEmpty(),
@@ -41,7 +42,7 @@ object DiagnosticDiscoveryCsv {
                 result.note.orEmpty(),
                 result.rawReply,
                 "probe",
-                "22${result.did}",
+                "${result.service}${result.did}",
                 appVersion,
                 runError.orEmpty()
             )

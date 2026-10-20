@@ -27,9 +27,10 @@ data class DiagnosticProbeDefinition(
     val divisor: Double = 1.0,
     val offset: Double = 0.0,
     val unit: String? = null,
-    val note: String? = null
+    val note: String? = null,
+    val service: String = "22"
 ) {
-    val command: String get() = "22$did"
+    val command: String get() = "$service$did"
 }
 
 object JettaDiagnosticDiscovery {

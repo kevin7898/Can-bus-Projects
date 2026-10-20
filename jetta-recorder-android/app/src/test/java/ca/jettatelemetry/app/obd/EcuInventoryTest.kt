@@ -12,6 +12,21 @@ class EcuInventoryTest {
     private fun control(body: String) = ObdReply("0100", body, 1_018)
 
     @Test
+    fun capturedJettaSupportPagesAdvertiseStandardAlternativesButNotGenericMap() = runBlocking {
+        val capturedPages = mapOf(
+            "0120" to "41209801A011", "0140" to "4140C4D2800D",
+            "0160" to "4160EAA9A343", "0180" to "4180C0A00000"
+        )
+        val supported = collectEcuInventory(control("410098192013"), { command, _ ->
+            ObdReply(command, capturedPages[command] ?: "NO DATA", 1_000)
+        }) { _, _ -> }
+        assertTrue(supported.containsAll(setOf(0x5E, 0x70, 0x78, 0x7A, 0x8B)))
+        assertTrue(0x0B !in supported)
+        assertTrue(0x5C !in supported)
+        assertTrue(0x8C !in supported)
+    }
+
+    @Test
     fun followsOnlyAdvertisedSupportedPidPages() = runBlocking {
         val commands = mutableListOf<String>()
         val logged = mutableListOf<String>()

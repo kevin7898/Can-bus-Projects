@@ -37,13 +37,16 @@ class Elm327Client(private val transport: ObdLinkTransport) {
 
     suspend fun raw(command: String): ObdReply = transport.request(command, timeoutMillis = 5_000)
 
-    suspend fun configureUdsDiscovery(onExchange: (command: String, reply: ObdReply) -> Unit) {
+    suspend fun configureUdsDiscovery(onExchange: (command: String, reply: ObdReply) -> Unit): Set<Int> {
         val control = prepareUdsDiscovery(transport::request, onExchange)
-        collectEcuInventory(control, transport::request, onExchange)
+        return collectEcuInventory(control, transport::request, onExchange)
     }
 
     suspend fun readDataByIdentifier(did: String): ObdReply =
         transport.request("22${did.uppercase()}", timeoutMillis = 4_000)
+
+    suspend fun readDiscoveryCommand(command: String): ObdReply =
+        transport.request(command, timeoutMillis = 4_000)
 
     suspend fun configureRawCanMonitor(onExchange: (command: String, reply: ObdReply) -> Unit) {
         // STP31 = ISO 11898 raw CAN, 11-bit transmit IDs, 500 kbit/s, variable DLC.

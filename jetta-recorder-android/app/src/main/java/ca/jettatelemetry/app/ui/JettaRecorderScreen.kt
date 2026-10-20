@@ -497,8 +497,8 @@ private fun DiagnosticDiscoveryPanel(
                 Text(
                     when {
                         discovery.isRunning && discovery.currentProbeId == null -> "READING ECU DETAILS"
-                        discovery.isRunning -> "READ-ONLY UDS 0x22 • ENGINE ECU"
-                        else -> "CURATED 2014 TDI CANDIDATES"
+                        discovery.isRunning -> "READ-ONLY OBD + UDS • ENGINE ECU"
+                        else -> "STANDARD OBD + 2014 TDI CANDIDATES"
                     },
                     color = if (discovery.isRunning) Good else Muted,
                     fontSize = 10.sp,
@@ -515,16 +515,20 @@ private fun DiagnosticDiscoveryPanel(
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "Safely checks boost, oil temperature, fuel-flow and DPF identifiers. Candidate scaling stays unverified until the values make sense on your car.",
+            "Reads advertised standard sensors first, then checks Jetta candidates. Results are snapshots; validate values on your car before dashboard use.",
             color = Muted,
             fontSize = 12.sp
         )
         discovery.runError?.let { message ->
             Text("Discovery stopped: $message", color = Red, fontSize = 12.sp)
         }
-        val visibleResults = discovery.results.filter {
+        val completedResults = discovery.results.filter {
             it.status != DiagnosticProbeStatus.PENDING && it.status != DiagnosticProbeStatus.CANCELLED
-        }.takeLast(6).reversed()
+        }
+        val foundResults = completedResults.filter { it.status == DiagnosticProbeStatus.SUPPORTED }
+        val recentResults = completedResults.filter { it.status != DiagnosticProbeStatus.SUPPORTED }
+            .takeLast((6 - foundResults.size).coerceAtLeast(0)).reversed()
+        val visibleResults = (foundResults + recentResults).take(6)
         if (visibleResults.isNotEmpty()) {
             Spacer(Modifier.height(9.dp))
             visibleResults.forEach { result -> DiscoveryResultRow(result) }
@@ -555,20 +559,26 @@ private fun DiscoveryResultRow(result: DiagnosticProbeResult) {
         DiagnosticProbeStatus.RUNNING -> "READING" to Warning
         DiagnosticProbeStatus.NEGATIVE_RESPONSE -> "REJECTED" to Muted
         DiagnosticProbeStatus.NO_DATA -> "NO DATA" to Muted
+        DiagnosticProbeStatus.NOT_ADVERTISED -> "SKIPPED" to Muted
         DiagnosticProbeStatus.ERROR -> "ERROR" to Red
         DiagnosticProbeStatus.CANCELLED -> "SKIPPED" to Muted
         DiagnosticProbeStatus.PENDING -> "WAITING" to Muted
     }
-    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(result.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Text("22${result.did} • ${result.category}", color = Muted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(result.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text("${result.service}${result.did} • ${result.category}", color = Muted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+            }
+            val value = result.decodedValue?.let { decoded ->
+                val digits = if (kotlin.math.abs(decoded) >= 100) 1 else 2
+                ", %.${digits}f %s".format(decoded, result.unit.orEmpty())
+            }.orEmpty()
+            Text("$status$value", color = color, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
         }
-        val value = result.decodedValue?.let { decoded ->
-            val digits = if (kotlin.math.abs(decoded) >= 100) 1 else 2
-            ", %.${digits}f %s".format(decoded, result.unit.orEmpty())
-        }.orEmpty()
-        Text("$status$value", color = color, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        if (result.service == "01") {
+            result.note?.let { Text(it, color = Muted, fontSize = 10.sp) }
+        }
     }
 }
 
