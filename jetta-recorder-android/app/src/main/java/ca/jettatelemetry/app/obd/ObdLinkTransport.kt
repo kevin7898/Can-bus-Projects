@@ -14,7 +14,6 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
@@ -71,7 +70,8 @@ class ObdLinkTransport(context: Context) {
                 val started = System.nanoTime()
                 writer.write((command.trim() + "\r").toByteArray(StandardCharsets.US_ASCII))
                 writer.flush()
-                val body = readUntilPrompt(timeoutMillis)
+                val reader = requireNotNull(input) { "Adapter input is not available" }
+                val body = readObdPrompt(reader, command.trim(), timeoutMillis)
                 ObdReply(command.trim(), body, (System.nanoTime() - started) / 1_000_000)
             }
         }
@@ -139,23 +139,6 @@ class ObdLinkTransport(context: Context) {
         val oldSocket = socket
         socket = null
         runCatching { oldSocket?.close() }
-    }
-
-    private suspend fun readUntilPrompt(timeoutMillis: Long): String = withTimeout(timeoutMillis) {
-        val reader = requireNotNull(input) { "Adapter input is not available" }
-        val response = StringBuilder()
-        while (true) {
-            if (reader.available() == 0) {
-                delay(4)
-                continue
-            }
-            val byte = reader.read()
-            check(byte >= 0) { "Adapter disconnected while reading" }
-            val character = byte.toChar()
-            if (character == '>') break
-            response.append(character)
-        }
-        response.toString().trim()
     }
 
     private fun drainInput() {

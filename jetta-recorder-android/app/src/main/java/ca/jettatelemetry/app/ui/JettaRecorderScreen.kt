@@ -6,6 +6,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -49,6 +52,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -64,6 +69,7 @@ import ca.jettatelemetry.app.model.LiveVehicleData
 import ca.jettatelemetry.app.model.MainUiState
 import ca.jettatelemetry.app.model.PairedObdDevice
 import ca.jettatelemetry.app.model.RawCanProbeState
+import ca.jettatelemetry.app.BuildConfig
 import java.text.DateFormat
 import java.util.Date
 
@@ -246,16 +252,53 @@ private fun ConnectionContent(
 
     if (landscape) {
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            content(Modifier.weight(1f))
-            ProofChecklist(Modifier.weight(1f))
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                content(Modifier.fillMaxWidth())
+            }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                if (state.console.isNotEmpty()) ConnectionLog(state)
+                else ProofChecklist(Modifier.fillMaxWidth())
+            }
         }
     } else {
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item { content(Modifier.fillMaxWidth()) }
+            if (state.console.isNotEmpty()) item { ConnectionLog(state) }
             item { ProofChecklist(Modifier.fillMaxWidth()) }
         }
     }
 
+}
+
+@Composable
+private fun ConnectionLog(state: MainUiState) {
+    val clipboard = LocalClipboardManager.current
+    val report = remember(state.console, state.errorMessage) {
+        buildString {
+            appendLine("Jetta Recorder ${BuildConfig.VERSION_NAME}")
+            state.errorMessage?.let { appendLine(it) }
+            appendLine()
+            state.console.forEach { entry ->
+                appendLine("${java.time.Instant.ofEpochMilli(entry.timestampMillis)} ${entry.direction}: ${entry.text}")
+            }
+        }
+    }
+    SectionCard(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Connection log", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            TextButton(onClick = { clipboard.setText(AnnotatedString(report)) }) { Text("Copy report") }
+        }
+        Text("Kept after a connection or polling failure.", color = Muted, fontSize = 12.sp)
+        SelectionContainer {
+            Text(
+                report,
+                color = IceBlue,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                modifier = Modifier.fillMaxWidth().height(230.dp).verticalScroll(rememberScrollState())
+            )
+        }
+    }
 }
 
 @Composable

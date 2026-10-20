@@ -7,7 +7,10 @@ data class ElmInitialization(
 )
 
 class Elm327Client(private val transport: ObdLinkTransport) {
-    suspend fun initialize(onExchange: (command: String, reply: ObdReply) -> Unit): ElmInitialization {
+    suspend fun initialize(
+        onExchange: (command: String, reply: ObdReply) -> Unit,
+        onStatus: (String) -> Unit = {}
+    ): ElmInitialization {
         fun clean(reply: ObdReply) = sanitize(reply.command, reply.body)
 
         val reset = transport.request("ATZ", timeoutMillis = 6_000).also { onExchange("ATZ", it) }
@@ -20,7 +23,8 @@ class Elm327Client(private val transport: ObdLinkTransport) {
         identityReply?.let { onExchange("STI", it) }
         val firmwareReply = runCatching { transport.request("STDI") }.getOrNull()
         firmwareReply?.let { onExchange("STDI", it) }
-        val protocolReply = transport.request("ATDP").also { onExchange("ATDP", it) }
+        onStatus("Detecting vehicle protocol with 0100; allowing up to 60 seconds for automatic search")
+        val protocolReply = establishObdProtocol(transport::request, onExchange)
 
         return ElmInitialization(
             identity = identityReply?.let(::clean) ?: clean(reset),

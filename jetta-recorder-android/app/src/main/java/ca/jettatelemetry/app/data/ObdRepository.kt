@@ -2,6 +2,7 @@ package ca.jettatelemetry.app.data
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import ca.jettatelemetry.app.model.ConnectionPhase
 import ca.jettatelemetry.app.model.ConsoleEntry
 import ca.jettatelemetry.app.model.DiagnosticDiscoveryState
@@ -102,7 +103,7 @@ class ObdRepository(context: Context) {
                 transport.connect(selected)
                 _state.update { it.copy(connectionPhase = ConnectionPhase.INITIALIZING) }
                 system("Bluetooth connected; initializing ELM/STN interface")
-                val initialization = elm.initialize(::logExchange)
+                val initialization = elm.initialize(::logExchange, ::system)
                 _state.update {
                     it.copy(
                         connectionPhase = ConnectionPhase.LIVE,
@@ -559,6 +560,7 @@ class ObdRepository(context: Context) {
     private fun fail(message: String, failure: Throwable? = null) {
         val detail = failure?.message?.takeIf(String::isNotBlank)
         val fullMessage = if (detail == null) message else "$message: $detail"
+        if (failure != null) Log.e("JettaRecorder", fullMessage, failure)
         system(fullMessage)
         _state.update {
             it.copy(

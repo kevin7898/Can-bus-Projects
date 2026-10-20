@@ -13,8 +13,11 @@ Target hardware: OnePlus 6T, OBDLink MX+, 2014 Volkswagen Jetta TDI.
 
 1. Open Jetta Recorder and grant the nearby-device permission.
 2. Select the paired OBDLink MX+ and tap **Connect**.
-3. Confirm the console reports Bluetooth connected, initialization replies and
-   a detected CAN protocol.
+3. Wait for initialization: the first `0100` request allows up to 60 seconds for
+   automatic protocol search. Confirm the console records a valid `4100` ECU
+   response and then the detected protocol from `ATDP` before the state is LIVE.
+   Normal live requests retain their 2.5-second deadline. A missing or invalid
+   ECU response leaves a connection fault with the command and reply in the log.
 4. Confirm RPM and speed respond smoothly.
 5. Confirm coolant changes plausibly during warm-up.
 6. With key-on/engine-off, MAP and BARO should be close and gauge boost should
@@ -50,8 +53,11 @@ Leave the console entries intact and record:
 - ignition/engine state;
 - Android version on the OnePlus.
 
-The next diagnostic feature will export this console plus timing statistics as
-a shareable support bundle.
+After a connection or polling failure, scroll below the paired-adapter card to
+**Connection log** and tap **Copy report**. The report remains available after
+disconnecting. Command timeouts identify the command, deadline, and exact bytes
+received before the adapter prompt was missed. Failures are also written to
+Android Logcat under the `JettaRecorder` tag. No timeout is automatically retried.
 
 ## Raw CAN gateway visibility test
 

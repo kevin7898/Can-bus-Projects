@@ -12,8 +12,8 @@ android {
         applicationId = "ca.jettatelemetry.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.3.2-bootstrap-diagnostics"
+        versionCode = 7
+        versionName = "0.3.4-protocol-startup"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -63,6 +63,9 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 
     testImplementation("junit:junit:4.13.2")
 }

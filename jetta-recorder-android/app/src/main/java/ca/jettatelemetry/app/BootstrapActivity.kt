@@ -29,7 +29,7 @@ class BootstrapActivity : Activity() {
     private fun showLauncher() {
         val column = baseColumn()
         column.addView(title("JETTA RECORDER"))
-        column.addView(body("Startup diagnostic 0.3.2\n\nThe platform launcher is running. Tap below to start the dashboard."))
+        column.addView(body("Startup diagnostic ${BuildConfig.VERSION_NAME}\n\nThe platform launcher is running. Tap below to start the dashboard."))
         column.addView(Button(this).apply {
             text = "Launch dashboard"
             setOnClickListener {
