@@ -1,4 +1,14 @@
-# Jetta Recorder — Android hardware proof
+# CAN / CONNECT Pocket Recorder
+
+The launcher now opens a small, platform-native recorder for the OnePlus 6T and OBDLink MX+. It uses standard PID requests observed in the supplied Car Scanner log, preserves raw replies, records phone GPS, and queues completed files for an authenticated HTTPS endpoint. It does not require Car Scanner or copy its app/database.
+
+See [Pocket Recorder setup, limitations and upload contract](docs/POCKET_RECORDER.md).
+
+The source below documents the earlier Compose acquisition checkpoint, which remains in the project for development. Its foreground-only limitation applies to that legacy screen, not the new foreground recorder service.
+
+---
+
+## Legacy Jetta Recorder — Android hardware proof
 
 This checkpoint turns the Phase 1 telemetry contract into the first native
 Android acquisition slice for the user's OnePlus 6T and OBDLink MX+.
@@ -26,23 +36,23 @@ Android acquisition slice for the user's OnePlus 6T and OBDLink MX+.
 
 ## Toolchain
 
-- Android Gradle Plugin 9.4.0
-- Kotlin 2.4.10
-- Gradle 9.6.0
-- compile/target SDK 37; minimum SDK 26
-- Compose BOM 2026.09.00
+- Android Gradle Plugin 8.7.3
+- Kotlin Android + Compose plugins 2.0.21
+- Gradle 8.9
+- compile/target SDK 35; minimum SDK 26
+- Compose BOM 2024.12.01
 - JDK 17
 
 The wrapper properties are included, but the binary wrapper JAR is intentionally
-not hand-vendored. Open the project in Android Studio Quail 4 or newer, or run
-`gradle wrapper --gradle-version 9.6.0` once with a local Gradle installation.
+not hand-vendored. Open the project in a compatible Android Studio installation, or run
+`gradle wrapper --gradle-version 8.9` once with a local Gradle installation.
 GitHub Actions does not require the wrapper JAR; the workflow installs the
 pinned Gradle version before running tests and assembling the APK.
 
 ## Build
 
 1. Open this folder as a project in Android Studio.
-2. Let Gradle sync and install SDK 37 when prompted.
+2. Let Gradle sync and install SDK 35 when prompted.
 3. Connect the OnePlus 6T with USB debugging enabled.
 4. Run the `app` debug configuration.
 5. Follow [`docs/ON_CAR_TEST.md`](docs/ON_CAR_TEST.md).

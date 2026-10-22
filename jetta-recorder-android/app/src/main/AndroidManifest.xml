@@ -10,13 +10,21 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:label="Jetta Recorder"
         android:supportsRtl="true"
         android:theme="@style/Theme.JettaRecorder">
         <activity
-            android:name=".BootstrapActivity"
+            android:name=".pocket.PocketRecorderActivity"
             android:exported="true"
             android:screenOrientation="unspecified">
             <intent-filter>
@@ -24,6 +32,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service android:name=".pocket.PocketRecorderService" android:exported="false" android:foregroundServiceType="connectedDevice|location" />
+        <activity android:name=".BootstrapActivity" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="false"

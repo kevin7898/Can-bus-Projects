@@ -45,7 +45,7 @@ assert "readDataByIdentifier" in repository
 assert "STCMM0" in (ROOT / "app/src/main/java/ca/jettatelemetry/app/obd/Elm327Client.kt").read_text()
 assert "STP 31" in (ROOT / "app/src/main/java/ca/jettatelemetry/app/obd/Elm327Client.kt").read_text()
 
-workflow = (ROOT / ".github/workflows/android-debug.yml").read_text()
+workflow = (ROOT.parent / ".github/workflows/android-debug.yml").read_text()
 assert "assembleDebug" in workflow
 assert "upload-artifact" in workflow
 

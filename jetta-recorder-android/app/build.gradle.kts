@@ -1,4 +1,5 @@
 plugins {
+    id("org.jetbrains.kotlin.android")
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
@@ -11,8 +12,8 @@ android {
         applicationId = "ca.jettatelemetry.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.3.2-bootstrap-diagnostics"
+        versionCode = 6
+        versionName = "0.4.0-pocket-recorder"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -47,6 +48,7 @@ dependencies {
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-compose:1.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
@@ -62,3 +64,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
+
+kotlin {
+    compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+}

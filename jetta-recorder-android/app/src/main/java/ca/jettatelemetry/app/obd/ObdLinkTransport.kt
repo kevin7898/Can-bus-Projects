@@ -49,9 +49,11 @@ class ObdLinkTransport(context: Context) {
         val bluetoothAdapter = requireNotNull(adapter) { "Bluetooth is not available on this phone" }
         check(bluetoothAdapter.isEnabled) { "Bluetooth is turned off" }
         val device = bluetoothAdapter.getRemoteDevice(address)
-        bluetoothAdapter.cancelDiscovery()
+        // Discovery is optional and needs a separate BLUETOOTH_SCAN grant on Android 12+.
+        runCatching { bluetoothAdapter.cancelDiscovery() }
 
         val candidate = device.createRfcommSocketToServiceRecord(SPP_UUID)
+        socket = candidate // Stop can close a pending RFCOMM connection.
         try {
             candidate.connect()
             socket = candidate
