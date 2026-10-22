@@ -11,3 +11,7 @@ An Android-first, local-first driving recorder for the Volkswagen Jetta, initial
 The first hardware milestone establishes a real ELM327/STN connection, records standard OBD-II telemetry, captures raw CAN observations, and exports evidence for decoder development.
 
 > Privacy: raw captures, GPS traces, VINs, and personal vehicle logs are intentionally excluded from this public repository.
+
+### [Jetta Telemetry Dashboard](jetta-telemetry-dashboard/)
+
+A responsive, web-first telemetry UI prototype with simulated Jetta data. It models a local-first telemetry box that streams compact data over cellular and automatically defers oversized CAN captures to resumable Wi-Fi upload.
