@@ -1,0 +1,23 @@
+name: CAN CONNECT frontend
+on:
+  pull_request:
+    paths: ['telemetry-server/frontend/**', '.github/workflows/can-connect.yml']
+  push:
+    branches: [main]
+    paths: ['telemetry-server/frontend/**', '.github/workflows/can-connect.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: telemetry-server/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: telemetry-server/frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
