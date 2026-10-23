@@ -25,6 +25,8 @@ object PocketState {
     @Volatile var upload = "No ingestion endpoint configured"
     @Volatile var recording = false
     @Volatile var gps = "GPS not started"
+    @Volatile var rates: PocketRates? = null
+    @Volatile var pollMode = ""
 }
 
 class PocketRecorderService : Service(), LocationListener {
@@ -62,7 +64,7 @@ class PocketRecorderService : Service(), LocationListener {
             while (running.get()) {
                 try {
                     PocketState.status = "Connecting…"; transport.connect(address)
-                    val init = listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH1", "ATD0", "ATSP6", "ATCAF1", "ATCFC1", "ATSH7DF", "ATCRA7E8")
+                    val init = listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH1", "ATD0", "ATSP6", "ATAT1", "ATCAF1", "ATCFC1", "ATSH7DF", "ATCRA7E8")
                     for (command in init) {
                         if (!running.get()) break
                         val reply = transport.request(command, if (command == "ATZ") 6_000 else 2_500)
@@ -73,28 +75,46 @@ class PocketRecorderService : Service(), LocationListener {
                     check(EngineIsoTp.messages(probe.body).any { it.take(2) == listOf(0x41, 0) }) { "No engine OBD response" }
                     store.begin(); PocketState.recording = true; PocketState.readings.clear()
                     PocketState.status = "Recording · engine ECU 7E8"; updateNotification(PocketState.status)
-                    val due = ObservedJettaProfile.polls.associate { it.pid to 0L }.toMutableMap()
+                    val optimized = getSharedPreferences("pocket", MODE_PRIVATE).getBoolean("optimize", true)
+                    val polling = PocketPolling(optimized)
+                    val due = mutableMapOf<String, Long>()
+                    val rates = PocketRates(SystemClock.elapsedRealtime()); PocketState.rates = rates
                     var consecutiveEmpty = 0
                     while (running.get()) {
-                        val poll = ObservedJettaProfile.polls.minBy { due.getValue(it.pid) }
-                        val wait = due.getValue(poll.pid) - SystemClock.elapsedRealtime()
-                        if (wait > 0) { delay(minOf(wait, 100)); continue }
-                        val reply = transport.request("01${poll.pid}", 2_500)
-                        val now = SystemClock.elapsedRealtime(); val decoded = ObservedJettaProfile.decode(poll.pid, reply.body)
-                        store.append(JSONObject().put("type", "obd").put("recordedAt", Instant.now().toString())
-                            .put("elapsedMs", now).put("pid", poll.pid).put("ecu", "7E8").put("raw", reply.body)
-                            .put("latencyMs", reply.latencyMillis).put("signals", JSONArray(decoded.map { JSONObject()
-                                .put("id", it.id).put("value", it.value).put("unit", it.unit) })))
+                        val tasks = polling.tasks()
+                        val poll = tasks.minBy { due[it.id] ?: 0L }
+                        val wait = (due[poll.id] ?: 0L) - SystemClock.elapsedRealtime()
+                        if (wait > 0) { delay(minOf(wait, 50)); continue }
+                        val started = SystemClock.elapsedRealtime()
+                        val command = polling.command(poll)
+                        val reply = transport.request(command, 2_500)
+                        val now = SystemClock.elapsedRealtime()
+                        val decodedByPid = ObservedJettaProfile.decodeMany(poll.pids, reply.body)
+                        val decoded = decodedByPid.values.flatten()
+                        // Publish each actual reply before writing the local log.
                         decoded.forEach { PocketState.readings[it.id] = PocketState.Reading(it.value, it.unit, now) }
+                        polling.observe(poll, reply.body, decodedByPid.keys)
+                        rates.add(now, decodedByPid.size, reply.latencyMillis)
+                        PocketState.pollMode = if (optimized) "Grouped reads · ${polling.fallbackGroups} compatibility fallbacks" else "Individual reads · compatibility mode"
+                        store.append(JSONObject().put("type", "obd").put("recordedAt", Instant.now().toString())
+                            .put("elapsedMs", now).put("pids", JSONArray(poll.pids)).put("command", command)
+                            .put("ecu", "7E8").put("raw", reply.body).put("latencyMs", reply.latencyMillis)
+                            .put("signals", JSONArray(decoded.map { JSONObject()
+                                .put("id", it.id).put("value", it.value).put("unit", it.unit) })))
                         if (decoded.isEmpty()) {
-                            failures[poll.pid] = (failures[poll.pid] ?: 0) + 1
-                            due[poll.pid] = now + minOf(300_000, 30_000L * failures.getValue(poll.pid))
+                            failures[poll.id] = (failures[poll.id] ?: 0) + 1
+                            due[poll.id] = now + minOf(300_000, 30_000L * failures.getValue(poll.id))
                             consecutiveEmpty++
                         } else {
-                            failures[poll.pid] = 0; due[poll.pid] = now + poll.periodMs; consecutiveEmpty = 0
+                            failures[poll.id] = 0
+                            // Period runs from request start, rather than adding an extra
+                            // period after every completed reply. No catch-up bursts.
+                            due[poll.id] = maxOf(now, started + poll.periodMs)
+                            consecutiveEmpty = 0
                         }
                         check(consecutiveEmpty < 8) { "Repeated missing replies; reconnecting" }
                     }
+
                 } catch (failure: Exception) {
                     PocketState.status = if (running.get()) "Disconnected: ${failure.message}; retrying" else "Stopped"
                     updateNotification(PocketState.status)

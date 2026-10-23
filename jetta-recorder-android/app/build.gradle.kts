@@ -9,11 +9,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "ca.jettatelemetry.app"
+        applicationId = "ca.jettatelemetry.app.pocket"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.4.0-pocket-recorder"
+        versionCode = 7
+        versionName = "0.4.1-pocket-recorder"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

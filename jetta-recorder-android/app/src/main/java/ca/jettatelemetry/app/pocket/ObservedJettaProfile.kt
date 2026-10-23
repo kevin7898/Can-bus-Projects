@@ -8,19 +8,38 @@ data class PocketSignal(val id: String, val value: Double, val unit: String)
 data class PocketPoll(val pid: String, val periodMs: Long)
 
 object ObservedJettaProfile {
-    val polls = listOf(
-        PocketPoll("0D", 250), PocketPoll("0C", 500), PocketPoll("5E", 500),
-        PocketPoll("70", 750), PocketPoll("05", 5_000), PocketPoll("46", 10_000),
-        PocketPoll("33", 30_000), PocketPoll("78", 2_000), PocketPoll("7A", 5_000),
-        PocketPoll("8B", 10_000), PocketPoll("42", 10_000), PocketPoll("04", 2_000),
-        PocketPoll("10", 2_000)
-    )
+    val polls = PocketPolling(false).tasks().map { PocketPoll(it.pids.single(), it.periodMs) }
 
-    fun decode(pid: String, reply: String): List<PocketSignal> {
-        val payload = EngineIsoTp.messages(reply).lastOrNull {
-            it.size >= 2 && it[0] == 0x41 && it[1] == pid.toInt(16)
-        } ?: return emptyList()
-        val d = payload.drop(2)
+    val dataLengths = mapOf("0D" to 1, "0C" to 2, "5E" to 2, "70" to 10,
+        "05" to 1, "46" to 1, "33" to 1, "78" to 9, "7A" to 7,
+        "8B" to 7, "42" to 2, "04" to 1, "10" to 2)
+
+    fun decode(pid: String, reply: String): List<PocketSignal> = decodeMany(listOf(pid), reply)[pid].orEmpty()
+
+    /** A combined response has one 0x41 service byte followed by PID/data pairs.
+     * Walk known lengths: never search for a PID-looking byte inside another value.
+     * Some ECUs send separate 0x41 messages instead; both forms are accepted.
+     */
+    fun decodeMany(requested: List<String>, reply: String): Map<String, List<PocketSignal>> {
+        val result = linkedMapOf<String, List<PocketSignal>>()
+        for (payload in EngineIsoTp.messages(reply)) {
+            if (payload.firstOrNull() != 0x41) continue
+            var offset = 1
+            while (offset < payload.size) {
+                val pid = "%02X".format(payload[offset++])
+                val length = dataLengths[pid] ?: break
+                if (offset + length > payload.size) break
+                if (pid in requested) {
+                    val signals = decodeData(pid, payload.subList(offset, offset + length))
+                    if (signals.isNotEmpty()) result[pid] = signals
+                }
+                offset += length
+            }
+        }
+        return result
+    }
+
+    private fun decodeData(pid: String, d: List<Int>): List<PocketSignal> {
         val result = mutableListOf<PocketSignal>()
         fun add(id: String, unit: String, value: Double) { if (value.isFinite()) result += PocketSignal(id, value, unit) }
         fun u16(i: Int) = d[i] * 256 + d[i + 1]
@@ -72,7 +91,7 @@ object EngineIsoTp {
             val line = raw.replace(" ", "").trim()
             if (!line.startsWith("7E8")) continue
             val hex = line.drop(3)
-            if (hex.length < 2 || hex.length % 2 != 0 || !hex.all { it in "0123456789ABCDEF" }) continue
+            if (hex.length !in 2..16 || hex.length % 2 != 0 || !hex.all { it in "0123456789ABCDEF" }) continue
             val frame = hex.chunked(2).map { it.toInt(16) }
             when (frame[0] shr 4) {
                 0 -> {

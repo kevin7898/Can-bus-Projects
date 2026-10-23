@@ -20,7 +20,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="Jetta Recorder"
+        android:label="CAN / CONNECT 1 Hz"
         android:supportsRtl="true"
         android:theme="@style/Theme.JettaRecorder">
         <activity

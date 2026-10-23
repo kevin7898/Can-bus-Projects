@@ -22,6 +22,8 @@ class PocketRecorderActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var values: TextView
     private lateinit var queue: TextView
+    private lateinit var acquisition: TextView
+    private lateinit var optimize: CheckBox
     private lateinit var endpoint: EditText
     private lateinit var token: EditText
     private lateinit var unmetered: CheckBox
@@ -45,11 +47,14 @@ class PocketRecorderActivity : Activity() {
             saveSettings()
             startForegroundService(Intent(this, PocketRecorderService::class.java).putExtra("address", address))
         })
+        val preferences = getSharedPreferences("pocket", Context.MODE_PRIVATE)
+        optimize = CheckBox(this).apply { text = "Grouped reads (applies next connection)"; isChecked = preferences.getBoolean("optimize", true) }
+        content.addView(optimize)
         content.addView(button("Stop recording") { startService(Intent(this, PocketRecorderService::class.java).setAction("stop")) })
+        acquisition = label("Target: driving / exhaust 1 Hz · temperatures / DPF every 5 s"); content.addView(acquisition)
         values = label("Waiting for vehicle data…", 14f).apply { typeface = android.graphics.Typeface.MONOSPACE }; content.addView(values)
         content.addView(label("DPF regeneration trigger is not verified soot %. Missing/stale values are never shown as current."))
         content.addView(label("UPLOAD DESTINATION", 16f))
-        val preferences = getSharedPreferences("pocket", Context.MODE_PRIVATE)
         endpoint = EditText(this).apply { hint = "HTTPS ingestion URL (optional)"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI; setSingleLine(); setText(preferences.getString("endpoint", "")) }
         token = EditText(this).apply { hint = "Ingestion bearer token"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; setSingleLine(); setText(preferences.getString("token", "")) }
         unmetered = CheckBox(this).apply { text = "Upload on unmetered networks only"; isChecked = preferences.getBoolean("unmetered", false) }
@@ -70,15 +75,20 @@ class PocketRecorderActivity : Activity() {
         status.text = PocketState.status + "\n" + PocketState.gps
         val names = linkedMapOf("speed" to "Speed", "rpm" to "RPM", "fuel_rate" to "Fuel rate", "coolant" to "Coolant", "ambient" to "Ambient", "boost_absolute" to "Boost absolute", "baro" to "Barometric", "egt_1" to "EGT bank1 sensor1", "dpf_delta_pressure" to "DPF delta pressure", "dpf_regen_active" to "DPF regen active", "dpf_regen_trigger" to "DPF regen trigger", "ecu_voltage" to "ECU voltage")
         val now = SystemClock.elapsedRealtime()
+        val rates = PocketState.rates?.snapshot(now)
+        acquisition.text = "Target: driving / exhaust 1 Hz · temperatures / DPF every 5 s" +
+            if (PocketState.recording && rates != null) String.format(Locale.US,
+                "\nMeasured: %.1f requests/s · %.1f PID replies/s · %.0f ms/reply\n%s",
+                rates.requestsPerSecond, rates.pidsPerSecond, rates.averageReplyMs, PocketState.pollMode) else ""
         val lines = names.map { (id, title) ->
             val reading = PocketState.readings[id]
-            val stale = reading == null || !PocketState.recording || now - reading.elapsedMs > (if (id == "baro") 120_000 else 30_000)
+            val stale = reading == null || !PocketState.recording || now - reading.elapsedMs > (if (id in setOf("baro", "coolant", "ambient", "ecu_voltage", "dpf_regen_active", "dpf_regen_trigger")) 15_000 else 3_000)
             "$title: " + if (reading == null) "—" else String.format(Locale.US, "%.2f %s%s", reading.value, reading.unit, if (stale) " [last known]" else "")
         }.toMutableList()
         val boost = PocketState.readings["boost_absolute"]; val baro = PocketState.readings["baro"]
-        if (PocketState.recording && boost != null && baro != null && now - boost.elapsedMs < 5_000 && now - baro.elapsedMs < 120_000) lines += String.format(Locale.US, "Gauge boost: %.2f psi", (boost.value - baro.value) * 0.1450377377)
+        if (PocketState.recording && boost != null && baro != null && now - boost.elapsedMs < 3_000 && now - baro.elapsedMs < 15_000) lines += String.format(Locale.US, "Gauge boost: %.2f psi", (boost.value - baro.value) * 0.1450377377)
         val speed = PocketState.readings["speed"]; val fuel = PocketState.readings["fuel_rate"]
-        if (PocketState.recording && speed != null && fuel != null && now - speed.elapsedMs < 5_000 && now - fuel.elapsedMs < 5_000) lines += if (speed.value > 1) String.format(Locale.US, "Instant economy: %.2f L/100km", 100 * fuel.value / speed.value) else "Stationary: fuel rate in L/h"
+        if (PocketState.recording && speed != null && fuel != null && now - speed.elapsedMs < 3_000 && now - fuel.elapsedMs < 3_000) lines += if (speed.value > 1) String.format(Locale.US, "Instant economy: %.2f L/100km", 100 * fuel.value / speed.value) else "Stationary: fuel rate in L/h"
         values.text = lines.joinToString("\n")
         val store = PocketStore(this); queue.text = "${store.completed().size} completed · ${store.pending().size} queued\n${PocketState.upload}"
     }
@@ -96,7 +106,7 @@ class PocketRecorderActivity : Activity() {
     }
     private fun saveSettings() {
         getSharedPreferences("pocket", Context.MODE_PRIVATE).edit().putString("endpoint", endpoint.text.toString().trim())
-            .putString("token", token.text.toString().trim()).putBoolean("unmetered", unmetered.isChecked).apply()
+            .putString("token", token.text.toString().trim()).putBoolean("unmetered", unmetered.isChecked).putBoolean("optimize", optimize.isChecked).apply()
     }
     @Deprecated("Platform result callback") override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
