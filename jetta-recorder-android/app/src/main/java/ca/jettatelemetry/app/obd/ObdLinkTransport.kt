@@ -49,9 +49,11 @@ class ObdLinkTransport(context: Context) {
         val bluetoothAdapter = requireNotNull(adapter) { "Bluetooth is not available on this phone" }
         check(bluetoothAdapter.isEnabled) { "Bluetooth is turned off" }
         val device = bluetoothAdapter.getRemoteDevice(address)
-        bluetoothAdapter.cancelDiscovery()
+        // Discovery is optional and needs a separate BLUETOOTH_SCAN grant on Android 12+.
+        runCatching { bluetoothAdapter.cancelDiscovery() }
 
         val candidate = device.createRfcommSocketToServiceRecord(SPP_UUID)
+        socket = candidate // Stop can close a pending RFCOMM connection.
         try {
             candidate.connect()
             socket = candidate
@@ -144,16 +146,20 @@ class ObdLinkTransport(context: Context) {
     private suspend fun readUntilPrompt(timeoutMillis: Long): String = withTimeout(timeoutMillis) {
         val reader = requireNotNull(input) { "Adapter input is not available" }
         val response = StringBuilder()
+        val buffer = ByteArray(2048)
         while (true) {
-            if (reader.available() == 0) {
-                delay(4)
-                continue
+            val available = reader.available()
+            if (available == 0) { delay(2); continue }
+            val count = reader.read(buffer, 0, minOf(buffer.size, available))
+            check(count > 0) { "Adapter disconnected while reading" }
+            var complete = false
+            for (i in 0 until count) {
+                val character = buffer[i].toInt().toChar()
+                if (character == '>') { complete = true; break }
+                response.append(character)
             }
-            val byte = reader.read()
-            check(byte >= 0) { "Adapter disconnected while reading" }
-            val character = byte.toChar()
-            if (character == '>') break
-            response.append(character)
+            check(response.length <= 262144) { "Adapter response exceeded limit" }
+            if (complete) break
         }
         response.toString().trim()
     }
