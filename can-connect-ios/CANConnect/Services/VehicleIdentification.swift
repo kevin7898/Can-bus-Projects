@@ -47,6 +47,7 @@ final class ELMWiFiSession {
     private var waiting: CheckedContinuation<String, Error>?
     private var timeout: Task<Void,Never>?
     private var buffer = ""
+    private var pendingCommand = ""
     private var ready = false
     func identify(host: String, port: UInt16) async throws -> ScannerIdentity {
         guard Self.isLocalHost(host), port > 0 else { throw AppFailure("Enter the scanner's local IPv4 address (or .local hostname) and TCP port from its instructions.") }
@@ -64,7 +65,7 @@ final class ELMWiFiSession {
         }
         let vehicleProtocol = try await command("ATDP")
         guard vin != nil || !supported.isEmpty else { throw AppFailure("The adapter replied, but the vehicle did not provide identification. Check ignition and connection, or continue manually.") }
-        return ScannerIdentity(vin:vin,adapter:clean(adapter),vehicleProtocol:clean(vehicleProtocol),supportedPIDs:supported.filter {$0 % 32 != 0})
+        return ScannerIdentity(vin:vin,adapter:clean(adapter),vehicleProtocol:["ISO","CAN","J1850","SAE"].contains(where:{vehicleProtocol.uppercased().contains($0)}) ? clean(vehicleProtocol) : "Unknown",supportedPIDs:supported.filter {$0 % 32 != 0})
     }
     static func isLocalHost(_ input: String) -> Bool {
         let host = input.lowercased().trimmingCharacters(in:.whitespacesAndNewlines)
@@ -98,7 +99,7 @@ final class ELMWiFiSession {
         guard ready, waiting == nil, let c = connection else { throw AppFailure("Scanner connection is unavailable.") }
         buffer = ""
         return try await withCheckedThrowingContinuation { continuation in
-            waiting = continuation; armTimeout()
+            waiting = continuation; pendingCommand = text; armTimeout()
             c.send(content:Data((text+"\r").utf8),completion:.contentProcessed { [weak self] error in
                 if let error { Task { @MainActor in self?.fail(error) } }
             })
@@ -110,10 +111,13 @@ final class ELMWiFiSession {
                 guard let self, self.connection != nil else { return }
                 if let data { self.buffer += String(decoding:data,as:UTF8.self) }
                 if self.buffer.count > 64_000 { self.fail(AppFailure("The adapter response was too large.")); return }
-                if let end = self.buffer.firstIndex(of:">") {
+                while let end = self.buffer.firstIndex(of:">") {
                     let response = String(self.buffer[..<end])
                     self.buffer = String(self.buffer[self.buffer.index(after:end)...])
-                    if !response.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, let pending = self.waiting {
+                    let normalized = response.uppercased().replacingOccurrences(of:self.pendingCommand,with:"").trimmingCharacters(in:.whitespacesAndNewlines)
+                    let configuration = self.pendingCommand.hasPrefix("AT") && self.pendingCommand != "ATI" && self.pendingCommand != "ATDP"
+                    let accepted = !normalized.isEmpty && (!configuration || normalized.contains("OK") || normalized.contains("?") || normalized.contains("ERROR"))
+                    if accepted, let pending = self.waiting {
                         self.waiting = nil; self.timeout?.cancel(); pending.resume(returning:response)
                     }
                 }

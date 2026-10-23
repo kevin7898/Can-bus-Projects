@@ -8,14 +8,29 @@ struct VehicleView: View {
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             Text(store.activeVehicle?.isSample == true ? "Sample vehicle snapshot · recorded values" : "\(store.activeVehicle?.title ?? "Vehicle") · recorded values").captionStyle()
-            PageControl(labels:["Fuel","Engine","DPF","Logbook"], selection:$page)
+            PageControl(labels:[store.activeVehicle?.fuel == .electric ? "Energy" : "Fuel",store.activeVehicle?.fuel == .electric ? "Powertrain" : "Engine",store.activeVehicle?.fuel == .diesel ? "DPF" : "Health","Logbook"], selection:$page)
             TabView(selection:$page) {
                 Group { if store.activeVehicle?.isSample == true { fuelPage } else { recordedFuel } }.tag(0)
                 Group { if store.activeVehicle?.isSample == true { engine } else { recordedEngine } }.tag(1)
-                dpf.tag(2)
-                logbook.tag(3)
+                Group { if store.activeVehicle?.fuel == .diesel { dpf } else { health } }.tag(2)
+                Group { if store.activeVehicle?.fuel == .electric { energyLog } else { logbook } }.tag(3)
             }.tabViewStyle(.page(indexDisplayMode:.never))
         }.sheet(isPresented:$fuel) { FuelForm() }.sheet(isPresented:$history) { FuelHistory() }
+    }
+    private var health: some View {
+        VStack(alignment:.leading,spacing:17) {
+            Text("Vehicle-specific health").font(.system(size:18))
+            InfoNote(text:"Health data depends on this vehicle and a compatible diagnostic source. Identification alone does not provide fault codes or manufacturer-specific readings.")
+            AppButton(title:"Open Live",secondary:true) { store.selectedTab = .live }
+            Spacer(minLength:0)
+        }.padding(.top,12)
+    }
+    private var energyLog: some View {
+        VStack(alignment:.leading,spacing:17) {
+            Text("Energy log").font(.system(size:18))
+            InfoNote(text:"Charging and kWh logging are not available in this build. GPS trips and vehicle profiles work for electric vehicles.")
+            Spacer(minLength:0)
+        }.padding(.top,12)
     }
     private var recordedFuel: some View {
         VStack(alignment:.leading,spacing:17) {
@@ -30,7 +45,8 @@ struct VehicleView: View {
     private var recordedEngine: some View {
         VStack(alignment:.leading,spacing:16) {
             Text("Waiting for recorded vehicle signals").font(.system(size:17))
-            DataRow(label:"Coolant temperature",value:"— °C"); DataRow(label:"Engine speed",value:"— rpm"); DataRow(label:"System voltage",value:"— V")
+            if store.activeVehicle?.fuel != .electric { DataRow(label:"Coolant temperature",value:"— °C"); DataRow(label:"Engine speed",value:"— rpm") }
+            DataRow(label:"System voltage",value:"— V")
             InfoNote(text:"Scanner identification detects the vehicle and supported standard PIDs. Continuous signal recording needs a compatible recorder transport.")
             if let vehicle = store.activeVehicle, !vehicle.supportedPIDs.isEmpty { Text("\(vehicle.supportedPIDs.count) standard OBD PIDs confirmed during setup").captionStyle() }
             Spacer(minLength:0)

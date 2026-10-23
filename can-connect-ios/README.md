@@ -33,7 +33,7 @@ The existing Android recorder exports raw CAN CSV for decoder development. This 
 
 ## Tests
 
-Use **Product → Test** (⌘U). The project includes eight unit tests for GPS validation, recording source semantics, partial-fill economy, archive validation, persistence, and independent signal settings, including idempotent import and interrupted-session recovery, plus a UI smoke test that navigates tabs and pages and records a sample drive.
+Use **Product → Test** (⌘U). The project includes fourteen unit tests for GPS validation, recording source semantics, partial-fill economy, archive validation, persistence, and independent signal settings, including idempotent import and interrupted-session recovery, plus two UI smoke tests covering the original sample-recording flow and manual vehicle onboarding/switching.
 
 The repository's `iOS companion` GitHub Actions workflow builds and tests on a macOS iPhone simulator and saves the Xcode results bundle. Test launch data is isolated from normal app data.
 
@@ -53,3 +53,18 @@ Visual baseline v1.0, approved October 23, 2026: dark graphite, VW blue, compact
 Sample trip names and Nanaimo road coverage are illustrative; they are not personal GPS recordings. No VIN, credentials or personal vehicle captures are included. Real records remain in the app's Application Support directory until you export or delete them. Removing the app removes its local data. Export recordings before uninstalling if you want to keep them. Server backup is not active.
 
 Map attribution: City of Nanaimo open data (road, water and park geometry) and Apple Maps (expanded/native route maps). See `INTEGRATION.md` for source endpoints.
+
+## Vehicle onboarding and garage
+
+The app now opens with vehicle setup. Add a car, pickup, motorcycle, van, or other vehicle. Use **Enter vehicle manually**, **Look up VIN**, or **Read from a scanner**, then review the details before saving. **Try the sample dashboard** keeps the original sample Jetta available without making it your real vehicle.
+
+- The header's vehicle menu switches profiles; **Manage vehicles** adds or edits profiles.
+- Trips, fuel entries, and dashboard signal/layout choices are separate for each vehicle. Switching is blocked during recording, and the recording keeps its original vehicle ID.
+- Existing v1 data migrates without loss. Real legacy records go to **Previous vehicle** for review; the app does not infer a real make/model from the old Jetta prototype.
+- New profiles show unavailable vehicle readings until a compatible data source supplies them. The sample Jetta's range and temperatures stay in the sample profile.
+- VIN lookup uses NHTSA vPIC after your explicit action. Details may be incomplete and must be reviewed; odometer and tank size are manual optional values.
+- Scanner assistance currently supports **ELM327-compatible Wi-Fi TCP adapters**. Join the adapter's Wi-Fi, enable ignition, and enter the local address and port from its instructions. The app requests local network permission at connection time. Identification reads Mode 09 VIN, protocol and supported standard Mode 01 PIDs. It does not clear faults, code modules, or implement continuous OBD streaming.
+- Bluetooth/MFi adapters (including the existing MX+ path) and the future dual-CAN recorder still need their respective transports. Scanner hardware compatibility has not been bench-tested here.
+- Diesel profiles keep the DPF page; other profiles show Health. Electric profiles show Energy/Powertrain, while charging/kWh logging remains future work.
+
+Recording exports include their vehicle profiles. Import matches existing profiles by VIN or ID and keeps other vehicles' trips separate. Older archives without a vehicle ID are assigned to the selected profile. VINs stay out of this public repository; exported archives may include the VIN you entered.

@@ -45,3 +45,18 @@ Raw Android CAN/OBD captures require their own parser and decoder. The current r
 - https://nanmap.nanaimo.ca/arcgis/rest/services/NanMap/Basemap/MapServer/5
 
 The bundled map is clipped to the Nanaimo sample area. Personal GPS routes use native MapKit, which can display routes elsewhere. Sample road highlights illustrate coverage; the illustrative sample trip polyline is not a claim of a measured journey.
+
+## Vehicle identity and storage v2
+
+State schema v2 adds `vehicles`, `selectedVehicleID`, and `onboardingCompleted`. `Trip`, `FuelEntry`, and `RecordingDraft` carry optional `vehicleID`. The migration assigns v1 history to one explicit legacy/sample profile; recovery preserves the draft's vehicle ID. Existing records are not assumed to belong to a particular real Jetta.
+
+The additive archive v1 envelope may now include `vehicles`. Export supplies profiles for its trips; import maps foreign IDs to a local profile with the same VIN or ID, creates other profiles as needed, and never overwrites an existing profile from imported suggestions. Missing vehicle IDs in old archives bind to the selected vehicle. An unknown vehicle ID without its profile is rejected instead of guessed. Recordings cannot change vehicles while active.
+
+`VehicleIdentification.swift` implements explicit local-network TCP ELM327 identification, prompt buffering/timeouts, formatted ISO/J1850 VIN parsing, supported-PID bitmaps, and NHTSA vPIC lookup. It reads only identification/capability commands. It does not provide live CAN transport, infer manufacturer DPF PIDs, or assume every scanner is accessible through Core Bluetooth.
+
+The setup workflow separates scanner facts from VIN-decoder suggestions and manual fields. Odometer, tank capacity and missing identity fields remain unknown until entered or provided by a compatible source. Decoder lookup is optional, user-initiated, and uses an ephemeral session. Scanner addresses are restricted to private/link-local IPv4 addresses and `.local` hostnames; the app does not sweep the network.
+
+Sources:
+- NHTSA vPIC flat VIN API: https://vpic.nhtsa.dot.gov/api/
+- ELM327L command and Mode 09 examples: https://www.elmelectronics.com/wp-content/uploads/2016/07/ELM327L_Data_Sheet.pdf
+- Apple local network privacy: https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy
