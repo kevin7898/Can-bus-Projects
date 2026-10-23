@@ -1,0 +1,132 @@
+import SwiftUI
+import Charts
+
+struct SignalChart:View {
+    let trip:Trip
+    let signal:Signal
+    @Binding var selectedDate:Date?
+    var height:CGFloat = 160
+    var values:[TelemetrySample] {
+        let data = trip.samples.filter { $0.value(signal) != nil }
+        let step = max(1,data.count/3000)
+        return stride(from:0,to:data.count,by:step).map { data[$0] }
+    }
+    var body:some View {
+        VStack(alignment:.leading,spacing:6) {
+            HStack { Text(signal.title); Spacer(); Text(signal.unit).foregroundStyle(Theme.muted) }.font(.system(size:11))
+            if values.isEmpty { Text("No recorded \(signal.title.lowercased()) signal").font(.system(size:12)).foregroundStyle(Theme.muted).frame(maxWidth:.infinity,maxHeight:.infinity) }
+            else {
+                Chart {
+                    ForEach(values) { sample in
+                        if let value = sample.value(signal) { LineMark(x:.value("Time",sample.timestamp),y:.value(signal.unit,value)).foregroundStyle(Theme.blue) }
+                    }
+                    if let selectedDate = selectedDate { RuleMark(x:.value("Playback",selectedDate)).foregroundStyle(Theme.muted).lineStyle(StrokeStyle(lineWidth:1,dash:[3])) }
+                }.chartXScale(domain:trip.start...max(trip.end,trip.start.addingTimeInterval(0.001)))
+                    .chartOverlay { proxy in GeometryReader { geometry in
+                        Rectangle().fill(Color.clear).contentShape(Rectangle()).gesture(DragGesture(minimumDistance:0).onChanged { value in
+                            let x = value.location.x-geometry[proxy.plotAreaFrame].origin.x
+                            if let date:Date = proxy.value(atX:x) { selectedDate = min(max(date,trip.start),trip.end) }
+                        })
+                    } }
+            }
+        }.padding(13).frame(height:height)
+    }
+}
+struct TripStats:View {
+    let trip:Trip
+    var body:some View {
+        HStack(spacing:24) {
+            stat(number(trip.distanceKm),"km recorded")
+            stat(duration(trip.duration),"duration")
+            stat(number(trip.economyL100),"L/100 km")
+            stat(number(trip.fuelUsedL,digits:2),"litres used")
+            if trip.rawFrameCount>0 { stat(String(trip.rawFrameCount),"raw frames") }
+        }.padding(14).frame(maxWidth:.infinity,alignment:.leading)
+    }
+    func stat(_ value:String,_ caption:String) -> some View { VStack(alignment:.leading,spacing:4) { Text(value).font(.system(size:21,weight:.medium,design:.monospaced)); Text(caption).font(.system(size:10)).foregroundStyle(Theme.muted) } }
+}
+struct TripRow:View {
+    let trip:Trip
+    var selected = false
+    var action:()->Void
+    var body:some View {
+        Button(action:action) {
+            HStack {
+                VStack(alignment:.leading,spacing:5) { Text(trip.name).font(.system(size:12,weight:.medium)).lineLimit(2); Text(trip.start.formatted(date:.abbreviated,time:.shortened)+" · "+trip.source).font(.system(size:10)).foregroundStyle(Theme.muted) }
+                Spacer()
+                Text(number(trip.distanceKm)+" km").font(.system(size:12,design:.monospaced))
+                Text(duration(trip.duration)).font(.system(size:11)).foregroundStyle(Theme.muted).frame(width:60,alignment:.trailing)
+                if trip.isDemo { Text("DEMO").font(.system(size:9)).foregroundStyle(Theme.blue) }
+            }.padding(12).background(selected ? Theme.blue.opacity(0.17) : Color.clear).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+}
+struct TripsView:View {
+    @EnvironmentObject var store:AppStore
+    @State private var viewport = MapViewport()
+    @State private var playSeconds = 0.0
+    @State private var playing = false
+    @State private var selectedDate:Date?
+    @State private var signal = Signal.speedKph
+    let timer = Timer.publish(every:0.25,on:.main,in:.common).autoconnect()
+    var body:some View {
+        if let trip = store.selectedTrip {
+            HStack(alignment:.top,spacing:14) {
+                Panel(title:"Drive history") { ScrollView { LazyVStack(spacing:0) { ForEach(store.vehicleTrips) { item in TripRow(trip:item,selected:item.id==trip.id) { store.selectedTripID = item.id } } } }.frame(maxHeight:700) }.frame(width:285)
+                VStack(spacing:14) {
+                    Panel(title:trip.name,icon:trip.isDemo ? "testtube.2" : "route") {
+                        MapPanel(trips:[trip],viewport:$viewport,style:store.preferences.mapStyle,height:330,marker:playbackSample(trip))
+                        TripStats(trip:trip)
+                        HStack { Text(trip.source).foregroundStyle(Theme.muted); Spacer(); Button("Export JSON") { store.export(trip) }; Button("Export CSV") { store.export(trip,asJSON:false) } }.font(.system(size:11)).padding(12)
+                    }
+                    Panel(title:"Drive playback") {
+                        HStack { Picker("Signal",selection:$signal) { ForEach(Signal.allCases) { s in Text(s.title).tag(s) } }.frame(maxWidth:300); Spacer(); Text("Historical recording").foregroundStyle(Theme.muted) }.font(.system(size:11)).padding(12)
+                        SignalChart(trip:trip,signal:signal,selectedDate:$selectedDate)
+                        HStack {
+                            Button { if playSeconds>=trip.duration { playSeconds = 0 }; playing.toggle() } label: { Image(systemName:playing ? "pause.fill" : "play.fill") }.help("Play or pause")
+                            Text(duration(playSeconds)).monospacedDigit().frame(width:65)
+                            Slider(value:$playSeconds,in:0...max(0.001,trip.duration)).onChange(of:playSeconds) { _,value in selectedDate = trip.start.addingTimeInterval(value) }
+                            Text(duration(trip.duration)).monospacedDigit()
+                        }.font(.system(size:11)).padding(12)
+                    }
+                    if trip.rawFrameCount>0 { Panel(title:"Raw CAN IDs · no decoder applied") { ForEach(trip.arbitrationIDs.keys.sorted(),id:\.self) { key in KeyValue(label:key,value:String(trip.arbitrationIDs[key] ?? 0)+" frames").padding(.horizontal,14).padding(.vertical,5) } } }
+                }
+            }.id(trip.id).onAppear { viewport = RouteMap.fitted([trip]); selectedDate = trip.start; playSeconds = 0 }
+                .onChange(of:trip.id) { _,_ in viewport = RouteMap.fitted([trip]); playSeconds = 0; playing = false; selectedDate = trip.start }
+                .onReceive(timer) { _ in guard playing else { return }; playSeconds = min(trip.duration,playSeconds+0.25); if playSeconds>=trip.duration { playing = false } }
+                .onChange(of:selectedDate) { _,date in if let date = date { playSeconds = min(max(0,date.timeIntervalSince(trip.start)),trip.duration) } }
+        } else { EmptyPanel(title:"No drives yet",message:"Select a vehicle and import a recording to explore trips, signals, and playback.") }
+    }
+    func playbackSample(_ trip:Trip) -> TelemetrySample? {
+        guard let date = selectedDate else { return nil }
+        let closest = trip.coordinates.min { abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date)) }
+        guard let closest = closest,abs(closest.timestamp.timeIntervalSince(date))<=10 else { return nil }; return closest
+    }
+}
+struct CompareView:View {
+    @EnvironmentObject var store:AppStore
+    @State private var a:UUID?
+    @State private var b:UUID?
+    @State private var viewport = MapViewport()
+    @State private var selectedDate:Date?
+    var body:some View {
+        if store.vehicleTrips.count<2 { EmptyPanel(title:"Two recordings needed",message:"Import at least two recordings for the selected vehicle to compare them.") }
+        else {
+            VStack(alignment:.leading,spacing:14) {
+                Label("Maps share zoom and center. Each drive selection remains independent.",systemImage:"link").font(.system(size:12)).foregroundStyle(Theme.muted)
+                HStack(alignment:.top,spacing:14) { comparison("Drive A",selection:$a,fallback:0); comparison("Drive B",selection:$b,fallback:1) }
+            }.onAppear { a = a ?? store.vehicleTrips.first?.id; b = b ?? store.vehicleTrips.dropFirst().first?.id; viewport = RouteMap.fitted(store.vehicleTrips) }
+        }
+    }
+    @ViewBuilder func comparison(_ title:String,selection:Binding<UUID?>,fallback:Int) -> some View {
+        if let trip = store.vehicleTrips.first(where:{$0.id==selection.wrappedValue}) ?? store.vehicleTrips.dropFirst(fallback).first {
+            Panel(title:title) {
+                Picker(title,selection:selection) { ForEach(store.vehicleTrips) { t in Text(t.name+" · "+t.start.formatted(date:.abbreviated,time:.shortened)).tag(Optional(t.id)) } }.padding(12)
+                MapPanel(trips:[trip],viewport:$viewport,style:store.preferences.mapStyle,height:350)
+                TripStats(trip:trip)
+                SignalChart(trip:trip,signal:.speedKph,selectedDate:$selectedDate,height:180)
+                Text(trip.source).font(.system(size:10)).foregroundStyle(Theme.muted).padding(12)
+            }
+        }
+    }
+}
