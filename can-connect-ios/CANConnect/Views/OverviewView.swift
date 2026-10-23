@@ -2,7 +2,7 @@ import SwiftUI
 
 struct OverviewView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var page = 0
+    @Binding var page: Int
     @State private var map = false
     @State private var customize = false
     @State private var latestTrip: Trip?

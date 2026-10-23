@@ -100,7 +100,9 @@ struct TripArchive: Codable {
                   trip.distanceKM.isFinite, trip.distanceKM >= 0,
                   trip.route.count <= 100_000, trip.route.allSatisfy(\.isValid),
                   trip.economy.map({ $0.isFinite && $0 >= 0 }) ?? true,
-                  trip.fuelLitres.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw AppFailure("The recording contains invalid values.") }
+                  trip.fuelLitres.map({ $0.isFinite && $0 >= 0 }) ?? true,
+                  trip.source != .phoneGPS || (trip.economy == nil && trip.fuelLitres == nil),
+                  trip.source != .demo || trip.isSample else { throw AppFailure("The recording contains invalid values.") }
         }
         return archive
     }

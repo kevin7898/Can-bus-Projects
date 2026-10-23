@@ -1,0 +1,31 @@
+import XCTest
+@testable import CANConnect
+
+final class AppStoreTests: XCTestCase {
+    @MainActor
+    func testImportIsIdempotentAndPersists() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let disk = LocalStore(url:directory.appendingPathComponent("state.json"))
+        let store = AppStore(disk:disk)
+        let originalCount = store.state.trips.count
+        var trip = SampleData.state().trips[0]; trip.id = UUID()
+        let archive = try TripArchive(trips:[trip]).encoded()
+        try store.importTrips(archive); try store.importTrips(archive)
+        XCTAssertEqual(store.state.trips.count,originalCount+1)
+        XCTAssertEqual(try disk.load()?.trips.count,originalCount+1)
+    }
+    @MainActor
+    func testInterruptedRecordingRecoveredOnlyOnce() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let disk = LocalStore(url:directory.appendingPathComponent("state.json"))
+        let start = Date().addingTimeInterval(-30)
+        let draft = RecordingDraft(source:.phoneGPS,startedAt:start,updatedAt:start.addingTimeInterval(20))
+        var state = StoredState(); state.draft = draft; try disk.save(state)
+        let first = AppStore(disk:disk)
+        XCTAssertFalse(first.recording); XCTAssertEqual(first.state.trips.count,1)
+        XCTAssertEqual(first.state.trips[0].duration,20,accuracy:0.001)
+        XCTAssertEqual(AppStore(disk:disk).state.trips.count,1)
+    }
+}

@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class GPSRecorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var speedKMH: Double?
+    @Published var lastFix: Date?
     @Published var status = "Ready when you are"
     var onPoint: ((RoutePoint) -> Void)?
     var onReady: (() -> Void)?
@@ -31,6 +32,7 @@ final class GPSRecorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         manager.stopUpdatingLocation()
         manager.allowsBackgroundLocationUpdates = false
         speedKMH = nil
+        lastFix = nil
         status = "Ready when you are"
     }
     private func beginUpdates() {
@@ -53,7 +55,8 @@ final class GPSRecorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard wantsRecording else { return }
         for location in locations where abs(location.timestamp.timeIntervalSinceNow) < 15 && location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 50 {
-            speedKMH = location.speed >= 0 ? location.speed * 3.6 : nil
+            lastFix = location.timestamp
+            speedKMH = location.speed >= 0 && location.speed <= 80 ? location.speed * 3.6 : nil
             status = "GPS active · ±\(Int(location.horizontalAccuracy)) m"
             onPoint?(RoutePoint(latitude:location.coordinate.latitude, longitude:location.coordinate.longitude, timestamp:location.timestamp, accuracy:location.horizontalAccuracy, speed:location.speed >= 0 ? location.speed : nil))
         }

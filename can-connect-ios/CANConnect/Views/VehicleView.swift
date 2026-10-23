@@ -2,7 +2,7 @@ import SwiftUI
 
 struct VehicleView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var page = 0
+    @Binding var page: Int
     @State private var fuel = false
     @State private var history = false
     var body: some View {
@@ -18,9 +18,9 @@ struct VehicleView: View {
         }.sheet(isPresented:$fuel) { FuelForm() }.sheet(isPresented:$history) { FuelHistory() }
     }
     private var fuelPage: some View {
-        VStack(alignment:.leading,spacing:18) {
-            VStack(alignment:.leading,spacing:15) {
-                HStack(alignment:.bottom) { VStack(alignment:.leading,spacing:7) { Text("Estimated range · sample").captionStyle(); HStack(alignment:.firstTextBaseline,spacing:5) { Text("620").font(.system(size:52)); Text("km").foregroundStyle(Palette.muted) } }; Spacer(); VStack(spacing:7) { Image(systemName:"fuelpump").foregroundStyle(Palette.blue); Text("62%").font(.system(size:23)) } }
+        VStack(alignment:.leading,spacing:13) {
+            VStack(alignment:.leading,spacing:13) {
+                HStack(alignment:.bottom) { VStack(alignment:.leading,spacing:7) { Text("Estimated range · sample").captionStyle(); HStack(alignment:.firstTextBaseline,spacing:5) { Text("620").font(.system(size:46)); Text("km").foregroundStyle(Palette.muted) } }; Spacer(); VStack(spacing:7) { Image(systemName:"fuelpump").foregroundStyle(Palette.blue); Text("62%").font(.system(size:23)) } }
                 GeometryReader { g in Capsule().fill(Palette.border).overlay(alignment:.leading) { Capsule().fill(Palette.blue).frame(width:g.size.width*0.62) } }.frame(height:5)
                 HStack { Text("33.9 L remaining"); Spacer(); Text("216,482 km") }.captionStyle()
             }.card()

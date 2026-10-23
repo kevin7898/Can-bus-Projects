@@ -33,7 +33,7 @@ The existing Android recorder exports raw CAN CSV for decoder development. This 
 
 ## Tests
 
-Use **Product → Test** (⌘U). The project includes six unit tests for GPS validation, recording source semantics, partial-fill economy, archive validation, persistence, and independent signal settings, plus a UI smoke test that navigates tabs and pages and records a sample drive.
+Use **Product → Test** (⌘U). The project includes eight unit tests for GPS validation, recording source semantics, partial-fill economy, archive validation, persistence, and independent signal settings, including idempotent import and interrupted-session recovery, plus a UI smoke test that navigates tabs and pages and records a sample drive.
 
 The repository's `iOS companion` GitHub Actions workflow builds and tests on a macOS iPhone simulator and saves the Xcode results bundle. Test launch data is isolated from normal app data.
 

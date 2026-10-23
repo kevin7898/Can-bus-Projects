@@ -2,7 +2,7 @@ import SwiftUI
 
 struct LiveView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var page = 0
+    @Binding var page: Int
     @State private var slot: String?
     var body: some View {
         GeometryReader { geometry in

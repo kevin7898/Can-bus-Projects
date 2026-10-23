@@ -17,9 +17,13 @@ final class SmokeTests: XCTestCase {
         app.buttons["Finish & save recording"].tap()
         app.buttons["Trips"].tap()
         XCTAssertTrue(app.staticTexts["Sample drive"].waitForExistence(timeout:5))
+        app.buttons["Live"].tap()
+        XCTAssertTrue(app.buttons["Drive"].isSelected)
         app.buttons["Vehicle"].tap(); app.buttons["Logbook"].tap()
         XCTAssertTrue(app.buttons["Log a fill-up"].waitForExistence(timeout:3))
         app.buttons["Connect"].tap(); app.buttons["Transfers"].tap()
         XCTAssertTrue(app.buttons["Export all recordings"].waitForExistence(timeout:3))
+        app.buttons["Vehicle"].tap()
+        XCTAssertTrue(app.buttons["Logbook"].isSelected)
     }
 }

@@ -3,8 +3,8 @@ import UniformTypeIdentifiers
 
 struct TripsView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var filter = 0
-    @State private var page = 0
+    @Binding var filter: Int
+    @Binding var page: Int
     @State private var selected: Trip?
     private var filtered: [Trip] { store.sortedTrips.filter { filter == 0 || (filter == 1 ? $0.source == .phoneGPS : $0.source != .phoneGPS) } }
     var body: some View {

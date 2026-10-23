@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 struct ConnectView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var page = 0
+    @Binding var page: Int
     @State private var importing = false
     @State private var exporting = false
     @State private var document = JSONDocument(data:Data())

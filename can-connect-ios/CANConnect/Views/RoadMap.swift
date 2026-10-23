@@ -5,7 +5,8 @@ struct RoadFeature: Decodable { var kind: String; var name: String; var major: B
 enum RoadAtlas {
     static let features: [RoadFeature] = {
         guard let url = Bundle.main.url(forResource:"NanaimoMap", withExtension:"json"), let data = try? Data(contentsOf:url) else { return [] }
-        return (try? JSONDecoder().decode([RoadFeature].self, from:data)) ?? []
+        let features = (try? JSONDecoder().decode([RoadFeature].self, from:data)) ?? []
+        return features.sorted { ($0.kind == "roads" ? 2 : $0.kind == "parks" ? 1 : 0) < ($1.kind == "roads" ? 2 : $1.kind == "parks" ? 1 : 0) }
     }()
     static let highlighted = ["Departure Bay Rd","Brechin Rd","Terminal Ave","Terminal Ave N","Bowen Rd","Island Hwy N","Nanaimo Parkway"]
 }
@@ -36,6 +37,12 @@ struct NativeRouteMap: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let view = MKMapView(); view.overrideUserInterfaceStyle = .dark; view.delegate = context.coordinator
         view.showsCompass = true; view.pointOfInterestFilter = .excludingAll
+        return view
+    }
+    func updateUIView(_ view: MKMapView, context: Context) {
+        guard context.coordinator.points != route || !context.coordinator.configured else { return }
+        context.coordinator.points = route; context.coordinator.configured = true
+        view.removeOverlays(view.overlays)
         let coords = route.map { CLLocationCoordinate2D(latitude:$0.latitude, longitude:$0.longitude) }
         if coords.count > 1 {
             let line = MKPolyline(coordinates:coords, count:coords.count); view.addOverlay(line)
@@ -43,11 +50,11 @@ struct NativeRouteMap: UIViewRepresentable {
         } else if let coordinate = coords.first {
             view.setRegion(MKCoordinateRegion(center:coordinate, latitudinalMeters:1500, longitudinalMeters:1500), animated:false)
         } else { view.setRegion(MKCoordinateRegion(center:CLLocationCoordinate2D(latitude:49.185, longitude:-123.96), latitudinalMeters:10000, longitudinalMeters:10000), animated:false) }
-        return view
     }
-    func updateUIView(_ uiView: MKMapView, context: Context) {}
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator: NSObject, MKMapViewDelegate {
+        var points: [RoutePoint] = []
+        var configured = false
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay:overlay) }
             let renderer = MKPolylineRenderer(polyline:line); renderer.strokeColor = UIColor(red:88/255,green:167/255,blue:1,alpha:1); renderer.lineWidth = 4; return renderer

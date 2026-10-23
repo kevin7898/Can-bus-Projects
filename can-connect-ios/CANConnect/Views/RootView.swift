@@ -19,11 +19,11 @@ struct RootView: View {
                 } else { Text(store.selectedTab == .live && store.source == .demo ? "Demo" : "On iPhone").font(.system(size:10)).foregroundStyle(Palette.muted).padding(.horizontal,11).padding(.vertical,7).background(Palette.surface, in:Capsule()) }
             }
             Group { switch store.selectedTab {
-            case .overview: OverviewView()
-            case .trips: TripsView()
-            case .live: LiveView()
-            case .vehicle: VehicleView()
-            case .connect: ConnectView()
+            case .overview: OverviewView(page:$store.overviewPage)
+            case .trips: TripsView(filter:$store.tripFilter, page:$store.tripPage)
+            case .live: LiveView(page:$store.livePage)
+            case .vehicle: VehicleView(page:$store.vehiclePage)
+            case .connect: ConnectView(page:$store.connectPage)
             } }.frame(maxWidth:.infinity, maxHeight:.infinity)
         }
         .padding(.horizontal,18).padding(.top,8).padding(.bottom,8)

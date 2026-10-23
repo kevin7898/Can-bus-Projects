@@ -7,6 +7,12 @@ final class AppStore: ObservableObject {
     @Published var state: StoredState
     @Published var source: TripSource = .demo
     @Published var selectedTab: AppTab = .overview
+    @Published var overviewPage = 0
+    @Published var livePage = 0
+    @Published var vehiclePage = 0
+    @Published var connectPage = 0
+    @Published var tripFilter = 0
+    @Published var tripPage = 0
     @Published var now = Date()
     @Published var error: String?
     @Published var toast: String?
@@ -52,7 +58,11 @@ final class AppStore: ObservableObject {
     var recording: Bool { state.draft != nil }
     var elapsed: Double { state.draft.map { max(0, now.timeIntervalSince($0.startedAt)) } ?? 0 }
     var timerText: String { let n = Int(elapsed); return n >= 3600 ? String(format:"%d:%02d:%02d",n/3600,(n%3600)/60,n%60) : String(format:"%02d:%02d",n/60,n%60) }
-    var speedText: String { source == .demo ? "78" : gps.speedKMH.map { $0.text(0) } ?? "—" }
+    var speedText: String {
+        if source == .demo { return "78" }
+        guard let fix = gps.lastFix, now.timeIntervalSince(fix) <= 10 else { return "—" }
+        return gps.speedKMH.map { $0.text(0) } ?? "—"
+    }
     var sortedTrips: [Trip] { state.trips.sorted { $0.startedAt > $1.startedAt } }
     var latest: Trip? { sortedTrips.first }
     var weekTrips: [Trip] { let interval = Calendar.current.dateInterval(of:.weekOfYear, for:now); return sortedTrips.filter { interval?.contains($0.startedAt) ?? false } }
@@ -84,9 +94,13 @@ final class AppStore: ObservableObject {
             draft.distanceKM = max(0, endedAt.timeIntervalSince(draft.startedAt)) * 78 / 3600
             draft.route = SampleData.route(date:draft.startedAt)
         }
-        gps.stop()
-        state.trips.insert(draft.trip(endedAt:endedAt), at:0)
-        state.draft = nil; save(); notify("Recording saved on this iPhone")
+        var next = state
+        next.trips.insert(draft.trip(endedAt:endedAt), at:0)
+        next.draft = nil
+        do {
+            try disk.save(next)
+            gps.stop(); state = next; notify("Recording saved on this iPhone")
+        } catch { self.error = "Could not save the recording. Keep the app open and retry Finish. \(error.localizedDescription)" }
     }
     func signal(_ slot: String) -> Signal { state.preferences.signals[slot] ?? .rpm }
     func setSignal(_ signal: Signal, slot: String) { state.preferences.signals[slot] = signal; save() }
@@ -100,8 +114,9 @@ final class AppStore: ObservableObject {
         guard litres.isFinite, litres > 0, litres <= 150, cost.isFinite, cost >= 0, odometer.isFinite, odometer >= 0 else { throw AppFailure("Check litres, cost and odometer.") }
         let realFills = state.fills.filter { !$0.isSample }
         guard !realFills.contains(where: { $0.date < date && $0.odometerKM > odometer || $0.date > date && $0.odometerKM < odometer }) else { throw AppFailure("The odometer must follow the order of your other fills.") }
-        state.fills.append(FuelEntry(date:date, litres:litres, costCAD:cost, odometerKM:odometer, full:full))
-        save(); notify("Fill-up saved")
+        var next = state
+        next.fills.append(FuelEntry(date:date, litres:litres, costCAD:cost, odometerKM:odometer, full:full))
+        try disk.save(next); state = next; notify("Fill-up saved")
     }
     func importTrips(_ data: Data) throws {
         guard canWrite else { throw AppFailure("Saved data is unavailable.") }
@@ -112,7 +127,9 @@ final class AppStore: ObservableObject {
             if !trip.isSample && trip.source != .phoneGPS { trip.source = .imported }
             return trip
         }
-        state.trips += additions; save(); notify("Imported \(additions.count) recording\(additions.count == 1 ? "" : "s")")
+        var next = state; next.trips += additions
+        try disk.save(next); state = next
+        notify("Imported \(additions.count) recording\(additions.count == 1 ? "" : "s")")
     }
     func addSample() { state.trips.insert(Trip(name:"Sample imported drive", startedAt:Date(), duration:1260, distanceKM:15.2, source:.imported, isSample:true, economy:5.3, fuelLitres:0.81, route:SampleData.route()), at:0); save(); notify("Sample recording added") }
     func removeTrip(_ id: UUID) { state.trips.removeAll { $0.id == id }; save() }
