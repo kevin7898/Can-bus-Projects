@@ -2,7 +2,7 @@ import CoreLocation
 import Combine
 
 @MainActor
-final class GPSRecorder: NSObject, ObservableObject, CLLocationManagerDelegate {
+final class GPSRecorder: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     @Published var speedKMH: Double?
     @Published var lastFix: Date?
     @Published var status = "Ready when you are"
@@ -11,6 +11,8 @@ final class GPSRecorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     var onFailure: ((String) -> Void)?
     private let manager = CLLocationManager()
     private var wantsRecording = false
+    // Core Location delivers delegate calls on the run loop where its manager was created.
+    // This manager is created on the main actor; the conformance checks that at runtime.
     override init() {
         super.init()
         manager.delegate = self
