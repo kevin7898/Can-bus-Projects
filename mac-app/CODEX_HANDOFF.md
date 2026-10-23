@@ -6,6 +6,14 @@ Continue this work in **local Codex on Kevin's Mac**, with Xcode already open. R
 
 The approved Mac design is immutable in `mac-app/design/`; start with `DESIGN_LOCK.md` and `preview.html`. Preserve the widescreen sidebar / map-first dashboard / right inspector / graphite and VW-blue direction. The native source is under `mac-app/Sources/`. This is a substantial initial implementation that needs compile, runtime, and visual validation on the Mac, not a completed production system.
 
+## Validation at handoff
+
+Implementation commit **`41ec9aeb616288ee918e554c706c4749f8da472f`** passed the [macOS validation run](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40040333349): **12 core tests, Xcode Debug application build for arm64 and x86_64, and the real API integration test**. The runner used Xcode 26.6 / Swift 6.3.3 with the project in Swift 5 language mode. An initial listener endpoint error found by integration was fixed and the complete check passed on retest.
+
+The API check covers bearer authentication, vehicle creation, canonical recording upload, processing receipt completion, byte deduplication, trip retrieval, invalid vehicle rejection, and preserved originals. UI appearance/interactions, local signing/Keychain prompts, launch-at-login behavior, and physical scanner compatibility remain untested. Scanner callbacks emit Swift 6 concurrency warnings in Swift 5 mode; harden their queue isolation before changing language mode. Charts uses a deprecated `plotAreaFrame` API that should migrate to `plotFrame` during local polish.
+
+The workflow also produced a debug app artifact. Use the source project for the local Codex continuation, rather than treating the unsigned CI artifact as a notarized installation.
+
 ## Start here
 
 1. Locate Kevin's existing checkout before cloning a second copy. Inspect `git status` and preserve all unrelated work.
@@ -40,7 +48,7 @@ For normal local running, keep the project's ad-hoc signing identity or choose K
 
 ## Verify carefully
 
-- This chat ran in Linux, with no `swift`, `xcodebuild`, or connection to Kevin's local Xcode. XML/plist/Python structural checks were performed locally. Treat native compilation, UI runtime, and hardware behavior as unverified unless the current macOS CI result proves otherwise. Check actual CI conclusions rather than this document's creation-time status.
+- This chat ran in Linux, with no `swift`, `xcodebuild`, or connection to Kevin's local Xcode. XML/plist/Python structural checks were performed locally; native compilation and automated tests passed on the macOS runner as recorded above. UI runtime, visual fidelity, and hardware behavior still require local validation. Check the current branch's latest CI conclusion when continuing.
 - The app compiles core source files directly into its app target. The separate `Package.swift` only builds/tests CANConnectCore via CSQLite. If adding/removing Swift files, run `python3 mac-app/scripts/generate_project.py` and commit the regenerated `.pbxproj` and shared scheme.
 - Verify SwiftUI type-checking and API availability, actor/thread handoffs in Network and scanner callbacks, headless service startup, MapKit delegate update loops, and keyboard / focus behavior.
 - Check duplicate detection and recovery after termination, interrupted manifest writes, permissions/read errors, and .scanlogs WAL handling. Never overwrite a corrupt manifest with an empty library.
