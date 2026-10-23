@@ -13,7 +13,8 @@ final class LocalServer {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         if !allowLAN { params.requiredLocalEndpoint = .hostPort(host:"127.0.0.1",port:nwPort) }
-        let listener = try NWListener(using:params,on:nwPort)
+        // The explicit local endpoint already supplies the port; passing it twice is EINVAL.
+        let listener = allowLAN ? try NWListener(using:params,on:nwPort) : try NWListener(using:params)
         self.listener = listener
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
