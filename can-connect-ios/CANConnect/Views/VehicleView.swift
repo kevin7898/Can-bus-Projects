@@ -7,15 +7,34 @@ struct VehicleView: View {
     @State private var history = false
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
-            Text("Sample vehicle snapshot · recorded values").captionStyle()
+            Text(store.activeVehicle?.isSample == true ? "Sample vehicle snapshot · recorded values" : "\(store.activeVehicle?.title ?? "Vehicle") · recorded values").captionStyle()
             PageControl(labels:["Fuel","Engine","DPF","Logbook"], selection:$page)
             TabView(selection:$page) {
-                fuelPage.tag(0)
-                engine.tag(1)
+                Group { if store.activeVehicle?.isSample == true { fuelPage } else { recordedFuel } }.tag(0)
+                Group { if store.activeVehicle?.isSample == true { engine } else { recordedEngine } }.tag(1)
                 dpf.tag(2)
                 logbook.tag(3)
             }.tabViewStyle(.page(indexDisplayMode:.never))
         }.sheet(isPresented:$fuel) { FuelForm() }.sheet(isPresented:$history) { FuelHistory() }
+    }
+    private var recordedFuel: some View {
+        VStack(alignment:.leading,spacing:17) {
+            HStack { Metric(title:"Estimated range",value:"—",unit:"km"); Metric(title:store.activeVehicle?.fuel == .electric ? "Battery" : "Fuel level",value:"—",unit:"%") }.card()
+            InfoNote(text:"Range and level need a compatible vehicle data source. GPS alone cannot provide them.")
+            if let odo = store.activeVehicle?.odometerKM { DataRow(label:"Starting odometer",value:"\(odo.text(0)) km") }
+            if let economy = FuelMath.latestEconomy(store.vehicleFills) { Metric(title:"Last full tank",value:economy.text(),unit:"L/100 km").card() }
+            AppButton(title:"Open logbook",secondary:true) { page = 3 }
+            Spacer(minLength:0)
+        }.padding(.horizontal,1).padding(.top,8)
+    }
+    private var recordedEngine: some View {
+        VStack(alignment:.leading,spacing:16) {
+            Text("Waiting for recorded vehicle signals").font(.system(size:17))
+            DataRow(label:"Coolant temperature",value:"— °C"); DataRow(label:"Engine speed",value:"— rpm"); DataRow(label:"System voltage",value:"— V")
+            InfoNote(text:"Scanner identification detects the vehicle and supported standard PIDs. Continuous signal recording needs a compatible recorder transport.")
+            if let vehicle = store.activeVehicle, !vehicle.supportedPIDs.isEmpty { Text("\(vehicle.supportedPIDs.count) standard OBD PIDs confirmed during setup").captionStyle() }
+            Spacer(minLength:0)
+        }.padding(.horizontal,1).padding(.top,8)
     }
     private var fuelPage: some View {
         VStack(alignment:.leading,spacing:13) {
@@ -40,10 +59,10 @@ struct VehicleView: View {
     private var logbook: some View {
         VStack(alignment:.leading,spacing:18) {
             HStack { Text("Latest fill-up").font(.system(size:17)); Spacer(); Button("History") { history = true }.font(.system(size:11)) }
-            if let entry = store.state.fills.sorted(by: { $0.date > $1.date }).first {
-                VStack(alignment:.leading,spacing:16) { HStack { Text(entry.isSample ? "Diesel · sample" : "Diesel"); Spacer(); Text(entry.full ? "Full fill" : "Partial fill").foregroundStyle(Palette.muted) }.font(.system(size:12)); HStack { Metric(title:"Added",value:entry.litres.text(),unit:"L"); Metric(title:"Total cost",value:"$\(entry.costCAD.text(2))",unit:"CAD") }; HStack { Text("\(entry.odometerKM.text(0)) km"); Spacer(); Text(entry.date.formatted(date:.abbreviated,time:.omitted)) }.captionStyle() }.card()
+            if let entry = store.vehicleFills.sorted(by: { $0.date > $1.date }).first {
+                VStack(alignment:.leading,spacing:16) { HStack { Text(entry.isSample ? "Fuel · sample" : (store.activeVehicle?.fuel.title ?? "Fuel")); Spacer(); Text(entry.full ? "Full fill" : "Partial fill").foregroundStyle(Palette.muted) }.font(.system(size:12)); HStack { Metric(title:"Added",value:entry.litres.text(),unit:"L"); Metric(title:"Total cost",value:"$\(entry.costCAD.text(2))",unit:"CAD") }; HStack { Text("\(entry.odometerKM.text(0)) km"); Spacer(); Text(entry.date.formatted(date:.abbreviated,time:.omitted)) }.captionStyle() }.card()
             } else { InfoNote(text:"Your fill-ups will appear here.",icon:"fuelpump") }
-            if let economy = FuelMath.latestEconomy(store.state.fills) { Metric(title:"Last full tank economy",value:economy.text(),unit:"L/100 km").card() }
+            if let economy = FuelMath.latestEconomy(store.vehicleFills) { Metric(title:"Last full tank economy",value:economy.text(),unit:"L/100 km").card() }
             InfoNote(text:"Keep full and partial fills together. Economy is calculated between two full fills, including the partial fills between them.",icon:"book.closed")
             AppButton(title:"Log a fill-up",icon:"plus") { fuel = true }
             Spacer(minLength:0)
@@ -61,7 +80,7 @@ struct FuelForm: View {
     @State private var error: String?
     private func number(_ input: String) -> Double? { Double(input.replacingOccurrences(of:",",with:".")) }
     var body: some View { SheetShell(title:"Log a fill-up") {
-        field("Diesel added · L",text:$litres)
+        field("Fuel added · L",text:$litres)
         field("Total cost · CAD",text:$cost)
         field("Odometer · km",text:$odometer)
         DatePicker("Date",selection:$date,in:...Date(),displayedComponents:[.date,.hourAndMinute]).font(.system(size:13))
@@ -78,7 +97,7 @@ struct FuelForm: View {
 struct FuelHistory: View {
     @EnvironmentObject private var store: AppStore
     var body: some View { SheetShell(title:"Fuel logbook") {
-        if store.state.fills.isEmpty { InfoNote(text:"No fill-ups yet.") }
-        ForEach(store.state.fills.sorted { $0.date > $1.date }) { entry in VStack(alignment:.leading,spacing:8) { Text(entry.date.formatted(date:.abbreviated,time:.shortened)).captionStyle(); Text("\(entry.litres.text()) L · $\(entry.costCAD.text(2)) CAD"); Text("\(entry.odometerKM.text(0)) km · \(entry.full ? "Full" : "Partial")\(entry.isSample ? " · Sample" : "")").captionStyle() }.frame(maxWidth:.infinity,alignment:.leading).card() }
+        if store.vehicleFills.isEmpty { InfoNote(text:"No fill-ups yet.") }
+        ForEach(store.vehicleFills.sorted { $0.date > $1.date }) { entry in VStack(alignment:.leading,spacing:8) { Text(entry.date.formatted(date:.abbreviated,time:.shortened)).captionStyle(); Text("\(entry.litres.text()) L · $\(entry.costCAD.text(2)) CAD"); Text("\(entry.odometerKM.text(0)) km · \(entry.full ? "Full" : "Partial")\(entry.isSample ? " · Sample" : "")").captionStyle() }.frame(maxWidth:.infinity,alignment:.leading).card() }
     } }
 }

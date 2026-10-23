@@ -9,8 +9,9 @@ final class AppStoreTests: XCTestCase {
         let disk = LocalStore(url:directory.appendingPathComponent("state.json"))
         let store = AppStore(disk:disk)
         let originalCount = store.state.trips.count
-        var trip = SampleData.state().trips[0]; trip.id = UUID()
-        let archive = try TripArchive(trips:[trip]).encoded()
+        let fixture = SampleData.state()
+        var trip = fixture.trips[0]; trip.id = UUID()
+        let archive = try TripArchive(vehicles:fixture.vehicles,trips:[trip]).encoded()
         try store.importTrips(archive); try store.importTrips(archive)
         XCTAssertEqual(store.state.trips.count,originalCount+1)
         XCTAssertEqual(try disk.load()?.trips.count,originalCount+1)

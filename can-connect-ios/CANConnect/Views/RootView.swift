@@ -8,7 +8,14 @@ struct RootView: View {
     var body: some View {
         VStack(spacing:12) {
             HStack { HStack(spacing:9) { Text("CAN"); Text("/").foregroundStyle(Palette.blue); Text("CONNECT") }.font(.system(size:12, weight:.medium)).tracking(2)
-                Spacer(); Button { settings = true } label: { Image(systemName:"slider.horizontal.3").frame(width:36,height:30) }.foregroundStyle(Palette.muted).accessibilityLabel("App settings")
+                Spacer()
+                Menu {
+                    ForEach(store.state.vehicles) { vehicle in Button(vehicle.title) { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } } }
+                    Divider()
+                    Button("Add a vehicle",systemImage:"plus") { store.vehicleSetupPresented = true }
+                    Button("Manage vehicles",systemImage:"car.2") { store.garagePresented = true }
+                } label: { HStack(spacing:5) { Image(systemName:store.activeVehicle?.kind.icon ?? "car.side"); Text(store.activeVehicle?.title ?? "Add vehicle").lineLimit(1).minimumScaleFactor(0.7) }.font(.system(size:10)).foregroundStyle(Palette.blue).frame(maxWidth:120) }.disabled(store.recording || store.pendingGPS).accessibilityLabel("Choose vehicle")
+                Button { settings = true } label: { Image(systemName:"slider.horizontal.3").frame(width:36,height:30) }.foregroundStyle(Palette.muted).accessibilityLabel("App settings")
             }
             HStack(alignment:.bottom) {
                 VStack(alignment:.leading, spacing:5) { Eyebrow(text:store.selectedTab.eyebrow); Text(store.selectedTab.title).font(.system(size:28, weight:.regular)) }
@@ -31,6 +38,8 @@ struct RootView: View {
         .safeAreaInset(edge:.bottom, spacing:0) { tabBar }
         .overlay(alignment:.bottom) { if let toast = store.toast { Text(toast).font(.system(size:12)).padding(12).background(Palette.raised, in:Capsule()).padding(.bottom,10).allowsHitTesting(false) } }
         .sheet(isPresented:$settings) { SettingsView() }
+        .sheet(isPresented:$store.garagePresented) { GarageView() }
+        .fullScreenCover(isPresented:Binding(get:{!store.state.onboardingCompleted || store.vehicleSetupPresented},set:{store.vehicleSetupPresented = $0})) { VehicleSetupView() }
         .fileImporter(isPresented:$importFile, allowedContentTypes:[.json]) { result in importRecording(result, store:store) }
         .alert("CAN / CONNECT", isPresented:Binding(get:{ store.error != nil }, set:{ if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
     }

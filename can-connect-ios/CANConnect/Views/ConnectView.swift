@@ -37,17 +37,19 @@ struct ConnectView: View {
             Text("Preferences are saved for the server integration. No uploads run in this build.").captionStyle().fixedSize(horizontal:false,vertical:true)
             Spacer(minLength:0)
             AppButton(title:"Import recordings",icon:"square.and.arrow.down",secondary:true) { importing = true }
-            AppButton(title:"Export all recordings",icon:"square.and.arrow.up") { do { document = JSONDocument(data:try TripArchive(trips:store.sortedTrips).encoded()); exporting = true } catch { store.error = error.localizedDescription } }
+            AppButton(title:"Export all recordings",icon:"square.and.arrow.up") { do { document = JSONDocument(data:try store.archive(store.state.trips).encoded()); exporting = true } catch { store.error = error.localizedDescription } }
         }.padding(.horizontal,1).padding(.top,10)
     }
 }
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
+    @State private var garage = false
     @State private var removeSamples = false
     var body: some View { SheetShell(title:"CAN / CONNECT") {
         Eyebrow(text:"iOS companion · Native v1.0")
         Text("The design is locked.").font(.title2)
         InfoNote(text:"Five tabs. Pages within each tab. Independent signal cards. Local recordings and fill-ups.")
+        AppButton(title:"Manage vehicles",icon:"car.2",secondary:true) { garage = true }
         DataRow(label:"GPS recording",value:"Available")
         DataRow(label:"Live vehicle data",value:"Sample feed")
         DataRow(label:"CAN / Mac mini",value:"Not configured")
@@ -56,5 +58,5 @@ struct SettingsView: View {
         Text("This removes only bundled sample trips and fill-ups. Your own recordings stay on the phone.").captionStyle()
         Text("Map data: City of Nanaimo open data. Expanded route maps: Apple Maps.").captionStyle()
         Link("View project on GitHub",destination:URL(string:"https://github.com/kevin7898/Can-bus-Projects")!).font(.system(size:13))
-    }.confirmationDialog("Remove sample trips and fill-ups?",isPresented:$removeSamples,titleVisibility:.visible) { Button("Remove samples",role:.destructive) { store.removeSamples() } } }
+    }.sheet(isPresented:$garage) { GarageView() }.confirmationDialog("Remove sample trips and fill-ups?",isPresented:$removeSamples,titleVisibility:.visible) { Button("Remove samples",role:.destructive) { store.removeSamples() } } }
 }

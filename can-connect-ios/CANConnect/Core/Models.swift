@@ -28,6 +28,7 @@ struct RoutePoint: Codable, Equatable {
 }
 struct Trip: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
+    var vehicleID: UUID?
     var name: String
     var startedAt: Date
     var duration: Double
@@ -41,6 +42,7 @@ struct Trip: Codable, Identifiable, Equatable {
 }
 struct FuelEntry: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
+    var vehicleID: UUID?
     var date: Date
     var litres: Double
     var costCAD: Double
@@ -56,6 +58,7 @@ struct Preferences: Codable {
 }
 struct RecordingDraft: Codable {
     var id = UUID()
+    var vehicleID: UUID?
     var source: TripSource
     var startedAt: Date
     var updatedAt: Date
@@ -75,11 +78,14 @@ struct RecordingDraft: Codable {
         updatedAt = point.timestamp
     }
     func trip(endedAt: Date, recovered: Bool = false) -> Trip {
-        Trip(id: id, name: recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : "iPhone GPS drive"), startedAt: startedAt, duration: max(0, endedAt.timeIntervalSince(startedAt)), distanceKM: distanceKM, source: source, isSample: source == .demo, economy: source == .demo ? 5.4 : nil, fuelLitres: source == .demo ? distanceKM * 5.4 / 100 : nil, route: route)
+        Trip(id: id, vehicleID:vehicleID, name: recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : "iPhone GPS drive"), startedAt: startedAt, duration: max(0, endedAt.timeIntervalSince(startedAt)), distanceKM: distanceKM, source: source, isSample: source == .demo, economy: source == .demo ? 5.4 : nil, fuelLitres: source == .demo ? distanceKM * 5.4 / 100 : nil, route: route)
     }
 }
 struct StoredState: Codable {
-    var schemaVersion = 1
+    var schemaVersion = 2
+    var vehicles: [VehicleProfile] = []
+    var selectedVehicleID: UUID?
+    var onboardingCompleted = false
     var trips: [Trip] = []
     var fills: [FuelEntry] = []
     var preferences = Preferences()
@@ -87,6 +93,7 @@ struct StoredState: Codable {
 }
 struct TripArchive: Codable {
     var schemaVersion = 1
+    var vehicles: [VehicleProfile]?
     var trips: [Trip]
     static func decode(_ data: Data) throws -> TripArchive {
         guard data.count <= 20_000_000 else { throw AppFailure("Choose a JSON recording under 20 MB.") }
@@ -94,6 +101,10 @@ struct TripArchive: Codable {
         let archive = try decoder.decode(TripArchive.self, from: data)
         guard archive.schemaVersion == 1, archive.trips.count <= 500 else { throw AppFailure("Unsupported archive version or too many recordings.") }
         guard Set(archive.trips.map(\.id)).count == archive.trips.count else { throw AppFailure("The archive contains duplicate recording IDs.") }
+        if let vehicles = archive.vehicles {
+            guard vehicles.count <= 500, Set(vehicles.map(\.id)).count == vehicles.count else { throw AppFailure("Invalid vehicle list in archive.") }
+            for vehicle in vehicles { _ = try vehicle.validated(requireIdentity:false) }
+        }
         for trip in archive.trips {
             guard !trip.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   trip.name.count <= 200, trip.duration.isFinite, trip.duration >= 0,

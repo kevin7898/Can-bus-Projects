@@ -1,7 +1,7 @@
 name: iOS companion
 on:
   push:
-    branches: [main, 'codex/ios-companion*']
+    branches: [main]
     paths: ['can-connect-ios/**', '.github/workflows/ios.yml']
   pull_request:
     paths: ['can-connect-ios/**', '.github/workflows/ios.yml']
@@ -26,13 +26,13 @@ jobs:
         working-directory: can-connect-ios
         run: |
           set -o pipefail
-          xcodebuild test -project CANConnect.xcodeproj -scheme CANConnect -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath build -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO | tee xcodebuild.log
+          xcodebuild test -parallel-testing-enabled NO -project CANConnect.xcodeproj -scheme CANConnect -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath build -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO | tee xcodebuild.log
       - name: Export native screenshots
-        if: always()
+        if: always() && !cancelled()
         working-directory: can-connect-ios
         run: xcrun xcresulttool export attachments --path TestResults.xcresult --output-path TestAttachments || true
       - name: Preserve test evidence
-        if: always()
+        if: always() && !cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: iOS-test-results
