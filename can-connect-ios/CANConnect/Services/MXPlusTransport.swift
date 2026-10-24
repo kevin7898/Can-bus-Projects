@@ -135,6 +135,8 @@ final class MXPlusStreams: NSObject, AccessoryStreams, @preconcurrency StreamDel
 final class ELMAccessoryChannel {
     private let streams: AccessoryStreams
     private let timeoutNanoseconds: UInt64
+    private let drainOnCancellation: Bool
+    var reusable: Bool { ready && streams.isOpen }
     private var opening: CheckedContinuation<Void,Error>?
     private var waiting: CheckedContinuation<String,Error>?
     private var deadline: Task<Void,Never>?
@@ -142,8 +144,8 @@ final class ELMAccessoryChannel {
     private var buffer = Data()
     private var outgoing = Data()
     private var pendingCommand = ""
-    init(streams: AccessoryStreams, timeoutNanoseconds: UInt64 = 12_000_000_000) {
-        self.streams = streams; self.timeoutNanoseconds = timeoutNanoseconds
+    init(streams: AccessoryStreams, timeoutNanoseconds: UInt64 = 12_000_000_000, drainOnCancellation: Bool = false) {
+        self.streams = streams; self.timeoutNanoseconds = timeoutNanoseconds; self.drainOnCancellation = drainOnCancellation
     }
     func open() async throws {
         try Task.checkCancellation()
@@ -154,7 +156,10 @@ final class ELMAccessoryChannel {
                 opening = continuation; armTimeout(); streams.open()
                 if streams.isOpen { didOpen() }
             }
-        } onCancel: { Task { @MainActor [weak self] in self?.disconnect() } }
+        } onCancel: { Task { @MainActor [weak self] in
+            guard let self, !self.drainOnCancellation else { return }
+            self.disconnect()
+        } }
         try Task.checkCancellation()
     }
     func command(_ text: String) async throws -> String {
@@ -163,12 +168,18 @@ final class ELMAccessoryChannel {
         guard !text.isEmpty, text.count <= 16, text.allSatisfy({$0.isASCII && ($0.isLetter || $0.isNumber)}) else { throw AppFailure("Invalid scanner command.") }
         buffer.removeAll(keepingCapacity:true); pendingCommand = text
         outgoing = Data((text+"\r").utf8)
-        return try await withTaskCancellationHandler {
+        let reply: String = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 waiting = continuation; armTimeout()
                 do { try flushOutput() } catch { fail(error) }
             }
-        } onCancel: { Task { @MainActor [weak self] in self?.disconnect() } }
+        } onCancel: { Task { @MainActor [weak self] in
+            guard let self, !self.drainOnCancellation else { return }
+            self.disconnect()
+        } }
+        // A canceled read drains through its prompt before a new request may start.
+        try Task.checkCancellation()
+        return reply
     }
     private func didOpen() {
         guard let pending = opening, streams.isOpen else { return }
@@ -229,28 +240,64 @@ final class ELMAccessoryChannel {
     func disconnect() { fail(CancellationError()) }
 }
 
+// MFi session ownership is separate from acquisition. Reopening the MX+ iAP data
+// port immediately after cancellation can leave a paired adapter silent. Keep one
+// foreground channel and drain an in-flight reply before restarting identification.
+@MainActor
+private enum MXPlusForegroundSession {
+    static var connectionID: Int?
+    static var channel: ELMAccessoryChannel?
+    static func acquire(_ accessory: EAAccessory) throws -> ELMAccessoryChannel {
+        if connectionID == accessory.connectionID, let channel, channel.reusable { return channel }
+        close()
+        let streams = try MXPlusStreams(accessory:accessory)
+        let created = ELMAccessoryChannel(streams:streams,drainOnCancellation:true)
+        connectionID = accessory.connectionID; channel = created
+        return created
+    }
+    static func discard(_ failed: ELMAccessoryChannel) {
+        if channel === failed { close() }
+    }
+    static func close() {
+        channel?.disconnect(); channel = nil; connectionID = nil
+    }
+}
+
 @MainActor
 final class ELMMXPlusSession: ScannerTransport {
     private let serial: String?
     private var channel: ELMAccessoryChannel?
     private let journal: ScannerJournal?
     init(serial: String?, journal: ScannerJournal? = nil) { self.serial = serial; self.journal = journal }
+    static func closeForegroundSession() { MXPlusForegroundSession.close() }
     func open(host: String, port: UInt16) async throws -> ScannerIdentity {
         disconnect()
-        let stream = try MXPlusStreams(accessory:MXPlusAccessory.select(serial:serial))
-        let connection = ELMAccessoryChannel(streams:stream); channel = connection
         do {
-            journal?.append(command:"SESSION",reply:"Opening Bluetooth streams")
-            try await connection.open()
-            journal?.append(command:"SESSION",reply:"Bluetooth streams opened")
+            let accessory = try MXPlusAccessory.select(serial:serial)
+            let connection = try MXPlusForegroundSession.acquire(accessory); channel = connection
+            if !connection.reusable {
+                journal?.append(command:"SESSION",reply:"Opening Bluetooth streams")
+                try await connection.open()
+            } else { journal?.append(command:"SESSION",reply:"Reusing foreground Bluetooth session") }
             return try await ELMIdentification.read(command:command)
-        } catch { journal?.append(command:"ERROR",reply:error.localizedDescription); disconnect(); throw error }
+        } catch {
+            journal?.append(command:"ERROR",reply:error.localizedDescription)
+            if !(error is CancellationError), let channel { MXPlusForegroundSession.discard(channel) }
+            disconnect(); throw error
+        }
     }
     func command(_ text: String) async throws -> String {
         guard let channel else { throw AppFailure("Connect the OBDLink MX+ first.") }
-        let reply = try await channel.command(text)
-        journal?.append(command:text,reply:reply)
-        return reply
+        do {
+            let reply = try await channel.command(text)
+            journal?.append(command:text,reply:reply)
+            return reply
+        } catch {
+            if !(error is CancellationError) { MXPlusForegroundSession.discard(channel) }
+            throw error
+        }
     }
-    func disconnect() { channel?.disconnect(); channel = nil }
+    // Stop this acquisition while keeping the foreground iAP channel reusable.
+    // App backgrounding and transport errors close the underlying session.
+    func disconnect() { channel = nil }
 }

@@ -67,7 +67,7 @@ final class AppStore: ObservableObject {
         backgroundChanges = NotificationCenter.default.publisher(for:UIApplication.didEnterBackgroundNotification).sink { [weak self] _ in
             guard let self else { return }
             if self.state.draft?.source == .scanner { self.finishRecording() }
-            self.scanner.disconnect(); UIApplication.shared.isIdleTimerDisabled = false
+            self.scanner.disconnect(); ELMMXPlusSession.closeForegroundSession(); UIApplication.shared.isIdleTimerDisabled = false
         }
         gps.onReady = { [weak self] in
             guard let self, self.pendingGPS else { return }

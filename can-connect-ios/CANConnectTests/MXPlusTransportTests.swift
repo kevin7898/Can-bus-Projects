@@ -5,6 +5,7 @@ import XCTest
 private final class FixtureAccessoryStreams: AccessoryStreams {
     var onEvent: ((Stream.Event) -> Void)?
     var isOpen = false
+    var openImmediately = true
     var hasSpace = true
     var hasBytes: Bool { !chunks.isEmpty }
     var closes = 0
@@ -13,7 +14,7 @@ private final class FixtureAccessoryStreams: AccessoryStreams {
     var response: ((String) -> String)?
     var maximumWrite = 2
     private var command = Data()
-    func open() { isOpen = true; onEvent?(.openCompleted) }
+    func open() { if openImmediately { isOpen = true; onEvent?(.openCompleted) } }
     func close() { isOpen = false; closes += 1; onEvent = nil }
     func read() throws -> Data { chunks.removeFirst() }
     func write(_ bytes: Data) throws -> Int {
@@ -110,4 +111,39 @@ final class MXPlusTransportTests: XCTestCase {
         XCTAssertThrowsError(try MacRecording.encode(trip))
     }
 
+}
+
+
+extension MXPlusTransportTests {
+    @MainActor
+    func testForegroundCancellationDrainsReplyBeforeReusingChannel() async throws {
+        let streams=FixtureAccessoryStreams()
+        let channel=ELMAccessoryChannel(streams:streams,drainOnCancellation:true)
+        defer { channel.disconnect() }
+        try await channel.open()
+        let pending=Task { try await channel.command("010C") }
+        await Task.yield();pending.cancel();await Task.yield()
+        XCTAssertEqual(streams.closes,0)
+        streams.inject(Data("410C0D00\r>".utf8))
+        do { _ = try await pending.value;XCTFail("Canceled reading was published") } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertTrue(channel.reusable);XCTAssertEqual(streams.closes,0)
+        streams.response = { _ in "410D00\r>" }
+        let reply=try await channel.command("010D")
+        XCTAssertEqual(OBDDecoder.decode(reply,pid:13)?.signals["speedKph"],0)
+    }
+    @MainActor
+    func testForegroundOpeningCancellationLeavesOpenedChannelReusable() async throws {
+        let streams=FixtureAccessoryStreams();streams.openImmediately=false
+        let channel=ELMAccessoryChannel(streams:streams,drainOnCancellation:true)
+        defer { channel.disconnect() }
+        let opening=Task { try await channel.open() }
+        await Task.yield();opening.cancel();await Task.yield()
+        XCTAssertEqual(streams.closes,0)
+        streams.isOpen=true;streams.onEvent?(.openCompleted)
+        do { try await opening.value;XCTFail("Canceled opening completed") } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertTrue(channel.reusable)
+        streams.response = { _ in "ELM327 FIXTURE\r>" }
+        let reply=try await channel.command("ATI")
+        XCTAssertTrue(reply.contains("ELM327"))
+    }
 }

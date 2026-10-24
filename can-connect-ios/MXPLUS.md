@@ -1,8 +1,8 @@
 # OBDLink MX+ Bluetooth — development integration
 
-Build 6 supports OBDLink MX+ through Apple's External Accessory framework and the `com.obdlink` protocol, using Bluetooth Classic/MFi. Real 2014 Jetta TDI DSG tests verified short recording sessions and Mac transfers with 20 available fields. See [JETTA_2014.md](JETTA_2014.md) for the actual signals and outstanding hardware checks. OBDLink CX (BLE), generic Bluetooth ELM327, USB and raw CAN remain separate unsupported transports.
+Build 7 supports OBDLink MX+ through Apple's External Accessory framework and the `com.obdlink` protocol, using Bluetooth Classic/MFi. Real 2014 Jetta TDI DSG tests verified short recording sessions and Mac transfers with 20 available fields. See [JETTA_2014.md](JETTA_2014.md) for the actual signals and outstanding hardware checks. OBDLink CX (BLE), generic Bluetooth ELM327, USB and raw CAN remain separate unsupported transports.
 
-Cancel/disconnect closes the streams and releases the EASession. Reconnect waits for canceled acquisition work to unwind, including after an explicit Disconnect. Identification begins with ATI and reviewed settings; it does not reset the adapter on every connection. A protected local journal distinguishes startup, command timeout and selection failures without reusing a previous session's diagnostic log.
+Cancel/disconnect stops acquisition and drains an in-flight response through its prompt. Reconnect waits for canceled work to unwind, including after explicit Disconnect, then reuses the foreground EASession. Recreating the MX+ iAP data session while Bluetooth remained paired reproduced a silent connection on the physical adapter. App backgrounding or transport failure closes the underlying session. Identification begins with ATI and reviewed settings; it does not reset the adapter on every connection. A protected local journal distinguishes startup, command timeout and selection failures without reusing a previous session's diagnostic log.
 
 ## Connect on iPhone
 
