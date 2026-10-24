@@ -20,8 +20,9 @@ jobs:
       - name: Select available iPhone simulator
         run: |
           xcodebuild -version
-          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for a in d["devices"].values() for v in a if "iPhone" in v["name"]))')
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,re,sys; d=json.load(sys.stdin)["devices"]; runtimes=sorted((k for k in d if ".iOS-" in k),key=lambda k:tuple(map(int,re.findall(r"\d+",k))),reverse=True); phones=next([v for v in d[k] if "iPhone" in v["name"]] for k in runtimes if any("iPhone" in v["name"] for v in d[k])); print(next((v["udid"] for v in phones if v["name"].endswith(" Pro")),phones[0]["udid"]))')
           echo "DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
+          xcrun simctl bootstatus "$DEVICE_ID" -b
       - name: Build and test native app
         working-directory: can-connect-ios
         run: |

@@ -76,6 +76,30 @@ final class RegenCyclesTests: XCTestCase {
         let later: [(Double,Double)] = [(0,0),(20,0),(23,1),(26,1),(29,0),(32,0)]
         XCTAssertEqual(analyze(trip(later,extra:[sample(0,["rpm":0])])).first?.outcome,.completed)
     }
+    func testTrackingBaselineAndCyclesSurviveStateRoundTrip() throws {
+        var state = StoredState(); state.regenTrackingStartedAt = base
+        state.trips = [trip([(0,0),(3,1),(6,1),(9,0),(12,0)])]
+        for _ in 0..<3 {
+            state = try JSONDecoder().decode(StoredState.self,from:JSONEncoder().encode(state))
+            let since = try XCTUnwrap(state.regenTrackingStartedAt)
+            XCTAssertEqual(since,base)
+            XCTAssertEqual(RegenAnalyzer.history(trips:state.trips,vehicleID:vehicle,since:since).first?.outcome,.completed)
+        }
+    }
+    @MainActor
+    func testRelaunchKeepsTheOriginalTrackingStartAndObservedCycles() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let disk = LocalStore(url:directory.appendingPathComponent("state.json"))
+        var state = StoredState(); state.regenTrackingStartedAt = base
+        state.trips = [trip([(0,0),(3,1),(6,1),(9,0),(12,0)])]
+        try disk.save(state)
+        for _ in 0..<3 {
+            let store = AppStore(disk:disk,scannerAvailable:{_ in false})
+            XCTAssertEqual(store.state.regenTrackingStartedAt,base)
+            XCTAssertEqual(RegenAnalyzer.history(trips:store.state.trips,vehicleID:vehicle,since:try XCTUnwrap(store.state.regenTrackingStartedAt)).count,1)
+        }
+    }
     func testOldStateLoadsWithoutBaseline() throws {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with:JSONEncoder().encode(StoredState())) as? [String:Any])
         object.removeValue(forKey:"regenTrackingStartedAt")

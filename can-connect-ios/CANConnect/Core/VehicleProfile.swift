@@ -69,10 +69,11 @@ struct ScannerIdentity {
 }
 
 extension StoredState {
-    private enum Keys: String, CodingKey { case schemaVersion, trips, fills, preferences, draft, vehicles, selectedVehicleID, onboardingCompleted, scanner, server, transfers }
+    private enum Keys: String, CodingKey { case schemaVersion, regenTrackingStartedAt, trips, fills, preferences, draft, vehicles, selectedVehicleID, onboardingCompleted, scanner, server, transfers }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy:Keys.self)
         schemaVersion = try c.decodeIfPresent(Int.self,forKey:.schemaVersion) ?? 1
+        regenTrackingStartedAt = try c.decodeIfPresent(Date.self,forKey:.regenTrackingStartedAt)
         trips = try c.decodeIfPresent([Trip].self,forKey:.trips) ?? []
         fills = try c.decodeIfPresent([FuelEntry].self,forKey:.fills) ?? []
         preferences = try c.decodeIfPresent(Preferences.self,forKey:.preferences) ?? Preferences()

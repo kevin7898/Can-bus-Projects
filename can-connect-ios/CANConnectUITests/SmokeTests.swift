@@ -2,6 +2,18 @@ import XCTest
 import Network
 
 final class SmokeTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        continueAfterFailure = false
+    }
+    override func tearDown() async throws {
+        // End each test's app while its automation session is still current.
+        // Launching a TCP listener before the next launch must not race cleanup
+        // of the previous app on slower CI simulators.
+        await MainActor.run { XCUIApplication().terminate() }
+        try await super.tearDown()
+    }
+
     @MainActor
     func testRegenerationComparisonIsReachableAndDoesNotCountSampleTrips() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
