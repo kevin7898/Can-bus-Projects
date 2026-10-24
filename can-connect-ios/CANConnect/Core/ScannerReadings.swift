@@ -56,7 +56,7 @@ enum OBDDecoder {
         "dpfOutletKpa":("DPF outlet pressure","kPa"), "dpfRegenActive":("DPF regeneration","state"),
         "dpfRegenType":("DPF active regeneration type","state"), "dpfRegenTrigger":("DPF regeneration trigger","%"),
         "dpfAverageRegenMinutes":("Average regeneration interval","min"), "dpfAverageRegenKM":("Average regeneration distance","km"),
-        "dpfAshML":("DPF ash volume","mL"), "dsgFluidC":("DSG fluid temperature","°C")
+        "dpfAshML":("DPF ash volume","mL"), "dpfSootG":("DPF soot mass","g"), "dsgFluidC":("DSG fluid temperature","°C")
     ]
     static let keys = Set(labels.keys)
     static func signalKeys(pid: Int) -> Set<String> {

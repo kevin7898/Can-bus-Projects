@@ -8,7 +8,7 @@ enum Signal: String, Codable, CaseIterable, Identifiable {
     case rpm, coolant, boost, fuel, economy, outside, voltage
     case fuelRate, boostAbsolute, boostCommanded, intake, oil, load, airflow, fuelLevel
     case egt1, egt2, egt3, egt4, dpfPressure, dpfInlet, dpfOutlet, regenActive, regenType, regenTrigger, regenMinutes, regenKM
-    case ashVolume, dsgTemperature
+    case ashVolume, sootMass, dsgTemperature
     var readingKey: String? {
         switch self {
         case .fuelRate: return "fuelRateLph"
@@ -32,6 +32,7 @@ enum Signal: String, Codable, CaseIterable, Identifiable {
         case .regenMinutes: return "dpfAverageRegenMinutes"
         case .regenKM: return "dpfAverageRegenKM"
         case .ashVolume: return "dpfAshML"
+        case .sootMass: return "dpfSootG"
         case .dsgTemperature: return "dsgFluidC"
         default: return nil
         }

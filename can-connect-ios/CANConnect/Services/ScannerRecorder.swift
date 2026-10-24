@@ -20,7 +20,7 @@ final class ScannerRecorder: ObservableObject {
     init(makeSession: (@MainActor () -> ScannerTransport)? = nil) { self.makeSession = makeSession }
 
     func value(_ key: String, at date: Date) -> Double? {
-        guard connected, let reading = readings[key], (0...10).contains(date.timeIntervalSince(reading.date)) else { return nil }
+        guard connected, let reading = readings[key], (0...VWMeasurementDecoder.freshness(for:key)).contains(date.timeIntervalSince(reading.date)) else { return nil }
         return reading.value
     }
     func connect(settings: ScannerSettings, vehicle: VehicleProfile) {
@@ -97,7 +97,7 @@ final class ScannerRecorder: ObservableObject {
                 var lastReceived = Date()
                 var missing = Set<Int>()
                 let vw = VWMeasuringBlocks { try await self.exchange($0,transport:transport) }
-                var nextEnhanced = Date.distantPast
+                var nextEnhanced: [VWController:Date] = [:]
                 while !Task.isCancelled {
                     for definition in pids where Date() >= (nextRead[definition.pid] ?? .distantPast) {
                         let reply = try await self.exchange(String(format:"01%02X",definition.pid),transport:transport)
@@ -114,16 +114,20 @@ final class ScannerRecorder: ObservableObject {
                         nextRead[definition.pid] = Date().addingTimeInterval(fast ? 0.5 : 3)
                         try await Task.sleep(nanoseconds:25_000_000)
                     }
-                    if !enhancedControllers.isEmpty, Date() >= nextEnhanced {
-                        for key in VWMeasurementDecoder.keys { self.readings.removeValue(forKey:key) }
+                    let due = enhancedControllers.filter { Date() >= (nextEnhanced[$0] ?? .distantPast) }
+                    if !due.isEmpty {
+                        let keys = due.reduce(into:Set<String>()) { $0.formUnion($1 == .engine ? VWMeasurementDecoder.engineKeys : ["dsgFluidC"]) }
                         do {
-                            for sample in try await vw.read(controllers:enhancedControllers) {
+                            let samples = try await vw.read(controllers:due)
+                            for key in keys { self.readings.removeValue(forKey:key) }
+                            for sample in samples {
                                 try Task.checkCancellation()
                                 for (key,value) in sample.signals { self.readings[key] = (value,sample.timestamp) }
                                 lastReceived = sample.timestamp; self.onSample?(sample)
                             }
                         } catch is CancellationError { throw CancellationError() }
                         catch {
+                            for key in keys { self.readings.removeValue(forKey:key) }
                             self.journal?.append(command:"VW",reply:"Enhanced measurements unavailable: \(error.localizedDescription)")
                             enhancedControllers = []
                             // Optional VW measurements must not leave standard reads
@@ -131,7 +135,7 @@ final class ScannerRecorder: ObservableObject {
                             let recovery = try await self.exchange("010C",transport:transport)
                             guard OBDDecoder.decode(recovery,pid:0x0C,ecu:ecu) != nil else { throw error }
                         }
-                        nextEnhanced = Date().addingTimeInterval(5)
+                        for controller in due { nextEnhanced[controller] = Date().addingTimeInterval(controller.pollInterval) }
                     }
                     guard missing.count < pids.count, Date().timeIntervalSince(lastReceived) < 20 else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
                     try await Task.sleep(nanoseconds:50_000_000)

@@ -6,6 +6,7 @@ enum VWController: Int, CaseIterable {
     var obdRequest: String { self == .engine ? "7E0" : "7E1" }
     var obdResponse: String { self == .engine ? "7E8" : "7E9" }
     var calibration: String { self == .engine ? "03L997030M9983" : "02E300062B9430" }
+    var pollInterval: TimeInterval { self == .engine ? 60 : 5 }
     func matchesCalibration(_ reply: String) -> Bool {
         let values = ELMResponses.payloads(reply,ecu:obdResponse).filter {
             $0.count == 19 && $0.starts(with:[0x49,0x04,0x01])
@@ -75,7 +76,9 @@ struct VWMeasurementReply {
 }
 
 enum VWMeasurementDecoder {
-    static let keys: Set<String> = ["dpfAshML","dsgFluidC"]
+    static let engineKeys: Set<String> = ["dpfAshML","dpfSootG"]
+    static let keys: Set<String> = engineKeys.union(["dsgFluidC"])
+    static func freshness(for key: String) -> TimeInterval { engineKeys.contains(key) ? 75 : 10 }
     static func decode(_ response: VWMeasurementReply, controller: VWController, group: Int) -> OBDSample? {
         let p = response.payload
         guard p.count >= 14, (p.count-2)%3 == 0, p[0] == 0x61, Int(p[1]) == group else { return nil }
@@ -92,6 +95,12 @@ enum VWMeasurementDecoder {
         if controller == .engine, group == 108, let (a,b) = field(0,type:0x68) {
             let volume = (b-128)*a/5
             if (0...1000).contains(volume) { signals["dpfAshML"] = volume }
+        }
+        // Reviewed Jetta block 114, sixth typed field. The ECU provides grams;
+        // do not derive soot from pressure or relabel blank block-108 fields.
+        if controller == .engine, group == 114, p.count == 26, let (a,b) = field(5,type:0x7E) {
+            let grams = a*b/10
+            if (0...1000).contains(grams) { signals["dpfSootG"] = grams }
         }
         guard !signals.isEmpty else { return nil }
         return OBDSample(timestamp:response.timestamp,signals:signals,command:String(format:"21%02X",group),

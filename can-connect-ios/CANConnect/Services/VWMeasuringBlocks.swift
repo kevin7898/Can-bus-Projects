@@ -4,7 +4,9 @@ import Foundation
 // Raw CAN is enabled only for the reviewed controller software fingerprints.
 @MainActor
 final class VWMeasuringBlocks {
+    private enum ChannelFailure: Error { case temporarilyUnavailable }
     private let exchange: (String) async throws -> String
+    private let pause: (TimeInterval) async throws -> Void
     private var transmit = 0
     private var receive = 0
     private var transmitSequence: UInt8 = 0
@@ -14,7 +16,10 @@ final class VWMeasuringBlocks {
     private var disabled = Set<VWController>()
     private var transmitGap: TimeInterval = 0
     private var lastSent = Date.distantPast
-    init(exchange: @escaping (String) async throws -> String) { self.exchange = exchange }
+    init(exchange: @escaping (String) async throws -> String,
+         pause: @escaping (TimeInterval) async throws -> Void = { seconds in
+             try await Task.sleep(nanoseconds:UInt64(seconds*1_000_000_000))
+         }) { self.exchange = exchange; self.pause = pause }
 
     private func sendFrame(_ command: String) async throws -> String {
         let remaining = transmitGap-Date().timeIntervalSince(lastSent)
@@ -40,6 +45,10 @@ final class VWMeasuringBlocks {
         // lets VW's setup deadline expire before parameter negotiation completes.
         let setup = try await sendFrame(String(format:"%02XC000100003011",controller.rawValue))
         let replies = VWRawFrame.parse(setup,address:0x200+controller.rawValue)
+        if let frame = replies.first?.data, frame.count == 7, frame[0] == 0, frame[6] == 1,
+           replies.allSatisfy({$0.data == frame}), [UInt8(0xD7),0xD8].contains(frame[1]) {
+            throw ChannelFailure.temporarilyUnavailable
+        }
         guard let frame = replies.first?.data, frame.count == 7, frame[1] == 0xD0,
               replies.allSatisfy({$0.data == frame}), frame[3]&0xF0 == 0, frame[5]&0xF0 == 0,
               frame[6] == 1 else { throw AppFailure("The VW controller did not open a measurement channel.") }
@@ -63,7 +72,7 @@ final class VWMeasuringBlocks {
     }
     private func request(_ payload: [UInt8]) async throws -> VWMeasurementReply {
         guard channelOpen, payload == [0x10,0x89] ||
-                (payload.count == 2 && payload[0] == 0x21 && [19,108,240,241].contains(Int(payload[1]))) else {
+                (payload.count == 2 && payload[0] == 0x21 && [19,108,114].contains(Int(payload[1]))) else {
             throw AppFailure("VW request is outside the read-only measurement allowlist.")
         }
         func hex(_ bytes: [UInt8]) -> String { bytes.map {String(format:"%02X",$0)}.joined() }
@@ -124,10 +133,14 @@ final class VWMeasuringBlocks {
         do {
             for controller in VWController.allCases where controllers.contains(controller) && !disabled.contains(controller) {
                 do {
+                // This ECU rejects TP 2.0 while its ordinary OBD application is
+                // active. Physical tests: immediate/3-second requests returned
+                // D7; a six-second quiet interval repeatedly opened the channel.
+                // The recorder owns this transport, so no OBD poll interleaves.
+                if controller == .engine { try await pause(6) }
+                try Task.checkCancellation()
                 try await open(controller)
-                // On the tested engine, 240/241 return NRC 31. Probe only once
-                // per connection and retain unavailable fields as unavailable.
-                let groups = controller == .engine ? [108,240,241] : [19]
+                let groups = controller == .engine ? [108,114] : [19]
                 for group in groups where !(unsupported[controller] ?? []).contains(group) {
                     let response = try await request([0x21,UInt8(group)])
                     if response.payload == [0x7F,0x21,0x31] {
@@ -137,6 +150,11 @@ final class VWMeasuringBlocks {
                 }
                 try await closeChannel()
                 } catch is CancellationError { throw CancellationError() }
+                catch ChannelFailure.temporarilyUnavailable {
+                    // D7/D8 do not mean unsupported. Retry at the next scheduled
+                    // slow poll rather than disabling ash/soot for the whole trip.
+                    try await restore()
+                }
                 catch {
                     disabled.insert(controller)
                     try await restore()

@@ -66,6 +66,46 @@ final class VWDiagnosticsTests: XCTestCase {
         let dsg = VWMeasurementReply(payload:[0x61,19,0x1A,3,83,0x25,0,0,0x25,0,0,0x25,0,0],raw:"SYNTHETIC DSG fixture",requestHeader:"760",responseHeader:"300",timestamp:Date())
         XCTAssertEqual(VWMeasurementDecoder.decode(dsg,controller:.dsg,group:19)?.signals,["dsgFluidC":80])
     }
+    func testBlock114SootRequiresCorrectControllerFieldTypeAndCompletePayload() throws {
+        let blank: [UInt8] = [0x25,0,0]
+        let fields = Array(repeating:blank,count:5).flatMap{$0} + [0x7E,2,43] + blank + blank
+        var response = VWMeasurementReply(payload:[0x61,114]+fields,raw:"SYNTHETIC block 114",requestHeader:"740",responseHeader:"300",timestamp:Date(timeIntervalSince1970:1700000000.25))
+        let sample = try XCTUnwrap(VWMeasurementDecoder.decode(response,controller:.engine,group:114))
+        XCTAssertEqual(sample.signals,["dpfSootG":8.6]); XCTAssertTrue(sample.isValid)
+        XCTAssertNil(VWMeasurementDecoder.decode(response,controller:.dsg,group:114))
+        XCTAssertEqual(try TripArchive.decode(TripArchive(trips:[Trip(name:"Synthetic soot",startedAt:response.timestamp,duration:1,distanceKM:0,source:.scanner,isSample:true,samples:[sample])]).encoded()).trips.first?.samples?.first,sample)
+        response.payload.removeLast()
+        XCTAssertNil(VWMeasurementDecoder.decode(response,controller:.engine,group:114))
+        response.payload = [0x61,114]+Array(repeating:blank,count:8).flatMap{$0}
+        XCTAssertNil(VWMeasurementDecoder.decode(response,controller:.engine,group:114),"Blank is not zero soot")
+        response.payload = [0x7F,0x21,0x31]
+        XCTAssertNil(VWMeasurementDecoder.decode(response,controller:.engine,group:114))
+        XCTAssertEqual(VWMeasurementDecoder.freshness(for:"rpm"),10)
+        XCTAssertGreaterThan(VWMeasurementDecoder.freshness(for:"dpfSootG"),VWController.engine.pollInterval+6)
+    }
+    @MainActor
+    func testEngineQuietWindowTransientRejectionRetryAndCancellation() async throws {
+        let fixture = VWProtocolFixture(); var pauses: [TimeInterval] = []
+        let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ seconds in pauses.append(seconds) })
+        fixture.rejectEngine = true
+        let unavailable = try await reader.read(controllers:[.engine])
+        XCTAssertTrue(unavailable.isEmpty); XCTAssertEqual(pauses,[6])
+        fixture.rejectEngine = false
+        let recovered = try await reader.read(controllers:[.engine])
+        XCTAssertTrue(recovered.contains{$0.signals["dpfSootG"] == 8.6})
+        XCTAssertEqual(pauses,[6,6],"D7 must not disable the engine for the entire trip")
+        _ = try await reader.read(controllers:[.dsg]); XCTAssertEqual(pauses,[6,6],"DSG needs no engine quiet window")
+        let canceledFixture = VWProtocolFixture(); var waiting = false
+        let canceled = VWMeasuringBlocks(exchange:canceledFixture.command,pause:{ _ in
+            waiting = true; try await Task.sleep(nanoseconds:5_000_000_000)
+        })
+        let task = Task { try await canceled.read(controllers:[.engine]) }
+        while !waiting { await Task.yield() }; task.cancel()
+        do { _ = try await task.value; XCTFail("Cancellation must stop before channel setup") }
+        catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertFalse(canceledFixture.commands.contains("01C000100003011"))
+        XCTAssertEqual(Array(canceledFixture.commands.suffix(VWMeasuringBlocks.restoreCommands.count)),VWMeasuringBlocks.restoreCommands)
+    }
     func testVWRecordingAndWirePreserveValuesAndNegotiatedCANIdentity() throws {
         let sample = OBDSample(timestamp:Date(timeIntervalSince1970:1700000000.25),signals:["dsgFluidC":80],command:"2113",reply:"SYNTHETIC VW CAN frames",requestHeader:"760",responseHeader:"300")
         var draft = RecordingDraft(source:.scanner,startedAt:sample.timestamp,updatedAt:sample.timestamp,scannerTransport:.obdLinkMXPlus)
@@ -79,25 +119,25 @@ final class VWDiagnosticsTests: XCTestCase {
     }
     @MainActor
     func testTwoControllersUnsupportedBlocksAndStandardAdapterRestoration() async throws {
-        let fixture = VWProtocolFixture(); let reader = VWMeasuringBlocks(exchange:fixture.command)
+        let fixture = VWProtocolFixture(); let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in })
         let first = try await reader.read(controllers:[.engine,.dsg])
-        XCTAssertEqual(first.count,2)
+        XCTAssertEqual(first.count,3)
         XCTAssertEqual(first.first?.signals,["dpfAshML":13]);XCTAssertEqual(first.last?.signals,["dsgFluidC":80])
         XCTAssertEqual(Array(fixture.commands.suffix(VWMeasuringBlocks.restoreCommands.count)),VWMeasuringBlocks.restoreCommands)
         _ = try await reader.read(controllers:[.engine,.dsg])
-        XCTAssertEqual(fixture.groupRequests.filter{$0==240}.count,1)
-        XCTAssertEqual(fixture.groupRequests.filter{$0==241}.count,1)
+        XCTAssertEqual(fixture.groupRequests.filter{$0==240}.count,0)
+        XCTAssertEqual(fixture.groupRequests.filter{$0==241}.count,0)
         XCTAssertEqual(fixture.groupRequests.filter{$0==19}.count,2)
         XCTAssertFalse(fixture.commands.contains{$0.hasPrefix("27") || $0.hasPrefix("2E") || $0 == "04"})
     }
     @MainActor
     func testUnavailableEngineDoesNotBlockDSGAndCancellationRestoresCAN() async throws {
         let fixture = VWProtocolFixture();fixture.rejectEngine = true
-        let reader = VWMeasuringBlocks(exchange:fixture.command)
+        let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in })
         let samples = try await reader.read(controllers:[.engine,.dsg])
         XCTAssertEqual(samples.count,1);XCTAssertEqual(samples.first?.signals,["dsgFluidC":80])
         let cancellation = VWProtocolFixture();cancellation.pauseSetup = true
-        let canceled = VWMeasuringBlocks(exchange:cancellation.command)
+        let canceled = VWMeasuringBlocks(exchange:cancellation.command,pause:{ _ in })
         let task = Task { try await canceled.read(controllers:[.engine]) }
         while !cancellation.paused { await Task.yield() }
         task.cancel()
@@ -137,6 +177,7 @@ private final class VWProtocolFixture {
         else {
             let group=Int(bytes[4]);groupRequests.append(group)
             if group==108 {payload=[0x61,108,0x68,5,141,0x25,0,0,0x25,0,0,0x25,0,0]}
+            else if group==114 {payload=[0x61,114]+Array(repeating:[UInt8(0x25),0,0],count:5).flatMap{$0}+[0x7E,2,43,0x25,0,0,0x25,0,0]}
             else if group==19 {payload=[0x61,19,0x1A,0,80,0x25,0,0,0x25,0,0,0x25,0,0]}
             else {payload=[0x7F,0x21,0x31]}
         }
