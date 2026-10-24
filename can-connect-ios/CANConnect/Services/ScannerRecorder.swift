@@ -17,7 +17,15 @@ final class ScannerRecorder: ObservableObject {
     private var session: ScannerTransport?
     private var journal: ScannerJournal?
     private let makeSession: (@MainActor () -> ScannerTransport)?
-    init(makeSession: (@MainActor () -> ScannerTransport)? = nil) { self.makeSession = makeSession }
+    private let measurementClock: () -> Date
+    private let measurementPause: (TimeInterval) async throws -> Void
+    init(makeSession: (@MainActor () -> ScannerTransport)? = nil,
+         measurementClock: @escaping () -> Date = Date.init,
+         measurementPause: @escaping (TimeInterval) async throws -> Void = { seconds in
+             try await Task.sleep(nanoseconds:UInt64(seconds*1_000_000_000))
+         }) {
+        self.makeSession = makeSession; self.measurementClock = measurementClock; self.measurementPause = measurementPause
+    }
 
     func value(_ key: String, at date: Date) -> Double? {
         guard connected, let reading = readings[key], (0...max(OBDDecoder.freshness(for:key),VWMeasurementDecoder.freshness(for:key))).contains(date.timeIntervalSince(reading.date)) else { return nil }
@@ -99,7 +107,9 @@ final class ScannerRecorder: ObservableObject {
                 let responseTimeout = max(20,(pids.map { OBDDecoder.pollInterval(pid:$0.pid) }.min() ?? 3)+15)
                 var lastReceived = Date()
                 var missing = Set<Int>()
-                let vw = VWMeasuringBlocks { try await self.exchange($0,transport:transport) }
+                let vw = VWMeasuringBlocks(exchange:{ try await self.exchange($0,transport:transport) },
+                    pause:self.measurementPause,clock:self.measurementClock,
+                    report:{ self.journal?.append(command:"VW",reply:$0) })
                 var nextEnhanced: [VWController:Date] = [:]
                 while !Task.isCancelled {
                     for definition in pids where Date() >= (nextRead[definition.pid] ?? .distantPast) {
@@ -116,7 +126,7 @@ final class ScannerRecorder: ObservableObject {
                         nextRead[definition.pid] = Date().addingTimeInterval(OBDDecoder.pollInterval(pid:definition.pid))
                         try await Task.sleep(nanoseconds:25_000_000)
                     }
-                    let due = enhancedControllers.filter { Date() >= (nextEnhanced[$0] ?? .distantPast) }
+                    let due = enhancedControllers.filter { self.measurementClock() >= (nextEnhanced[$0] ?? .distantPast) }
                     if !due.isEmpty {
                         let keys = due.reduce(into:Set<String>()) { $0.formUnion($1 == .engine ? VWMeasurementDecoder.engineKeys : ["dsgFluidC"]) }
                         do {
@@ -131,13 +141,16 @@ final class ScannerRecorder: ObservableObject {
                         catch {
                             for key in keys { self.readings.removeValue(forKey:key) }
                             self.journal?.append(command:"VW",reply:"Enhanced measurements unavailable: \(error.localizedDescription)")
-                            enhancedControllers = []
-                            // Optional VW measurements must not leave standard reads
-                            // silently using raw-CAN settings after a failed cleanup.
+                            // A cleanup error does not permanently disable enhanced
+                            // polling. Re-establish and verify ordinary OBD first.
+                            for setting in VWMeasuringBlocks.restoreCommands {
+                                let reply = try await self.exchange(setting,transport:transport)
+                                guard reply.trimmingCharacters(in:.whitespacesAndNewlines).uppercased() == "OK" else { throw error }
+                            }
                             let recovery = try await self.exchange("010C",transport:transport)
                             guard OBDDecoder.decode(recovery,pid:0x0C,ecu:ecu) != nil else { throw error }
                         }
-                        for controller in due { nextEnhanced[controller] = Date().addingTimeInterval(controller.pollInterval) }
+                        for controller in due { nextEnhanced[controller] = self.measurementClock().addingTimeInterval(controller.pollInterval) }
                     }
                     guard missing.count < pids.count, Date().timeIntervalSince(lastReceived) < responseTimeout else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
                     try await Task.sleep(nanoseconds:50_000_000)

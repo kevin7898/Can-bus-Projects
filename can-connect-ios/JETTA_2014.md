@@ -72,3 +72,19 @@ Synthetic transport checks cover immediate slow readings, repeated fast RPM with
 ## Build 14: combined soot card
 
 At the user's request, the existing soot-mass card also shows the ECU's `dpfRegenTrigger` under the label **% full**. Grams and percentage remain separately sourced; the picker and accessibility label identify the percentage as the ECU regeneration trigger. There is no inferred soot-capacity denominator and no display clamp. The currently verified Mode 01 field itself encodes only 0–100%; a physically meaningful value above 100% would require a separately verified reference threshold. Each reading retains its own freshness window and unavailable state. Card dimensions, default choices and surrounding layout stay unchanged.
+
+## Build 23: recover enhanced readings within the same trip
+
+A real drive retained ordinary OBD and DSG samples after engine ash/soot stopped. The exact historical failure is unavailable, but inspection found two permanent-disable paths: most TP 2.0 errors disabled that controller until the scanner was recreated, and outer measurement/cleanup errors disabled all enhanced controllers. Both paths now retry without requiring Finish, a new trip or a new Bluetooth connection when ordinary OBD remains healthy.
+
+Controller failures use bounded exponential backoff: engine starts at 60 seconds, DSG at 30 seconds, doubling to a maximum of five minutes. A successful batch clears that controller's failure escalation. D7/D8, missing/malformed setup, lost channels and acknowledgment/assembly failures use the same recoverable path. Healthy controllers continue. Each retry still uses the reviewed software fingerprint, read-only group allowlist and six-second engine quiet interval.
+
+An explicit `7F2131` group rejection clears that value and defers that group for five minutes rather than permanently marking it unsupported. It does not suppress another group's valid reading. Blank or undecodable replies likewise remain unavailable with delayed retry. Groups 240/241 remain outside normal polling. No stale values or zero placeholders are inserted into recordings, and successful values retain their receipt timestamps and raw CAN frames.
+
+Standard engine OBD settings are restored between batches and failures. If batch cleanup itself fails, the scanner explicitly restores all normal settings and verifies a real RPM reply before continuing. If that also fails, normal scanner-disconnect handling protects the current trip; unsafe raw-CAN state is never treated as successful recovery. This change leaves normal healthy polling intervals, cards, soot percentage and trip boundaries unchanged.
+
+A separate bounded local `scanner-events.json` retains 256 recovery/error/session events across scanner reconnects. Routine raw exchanges still use the 512-entry diagnostics file. Both remain in private app storage and are excluded from recordings/transfers and Git. This makes the next physical dropout diagnosable after routine polling has overwritten its raw trace.
+
+Synthetic tests cover repeated bounded failures, successful recovery/reset, explicit group rejection and delayed re-probe, partial ash before soot channel loss, DSG independence, cancellation/restoration, event-log retention and a full scanner/AppStore trip that loses enhanced cleanup, continues RPM, then records fresh ash/soot with the same trip ID and one transport open. Physical long-drive recovery on the Jetta/MX+ still needs verification; software tests do not establish the original on-car failure cause.
+
+Build-23 local validation: 96 unit tests passed, one hardware-only test skipped; the signed iPhone build succeeded. The app was installed and launched with all 32 saved recordings, profiles, transfers, server settings and regeneration baseline unchanged. The design was not edited. GitHub CI and physical recovery acceptance are tracked separately in PR #7.

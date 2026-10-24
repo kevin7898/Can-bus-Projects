@@ -18,13 +18,30 @@ final class ScannerJournal {
     private struct Exchange: Codable { var timestamp: Date; var command: String; var reply: String }
     private var entries: [Exchange] = []
     private let url: URL?
-    init() {
-        url = try? FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
-            .appendingPathComponent("CANConnect/scanner-diagnostics.json")
+    private let eventsURL: URL?
+    private var events: [Exchange] = []
+    init(directory: URL? = nil) {
+        let root = directory ?? (try? FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
+            .appendingPathComponent("CANConnect"))
+        url = root?.appendingPathComponent("scanner-diagnostics.json")
+        eventsURL = root?.appendingPathComponent("scanner-events.json")
+        if let eventsURL, let data = try? Data(contentsOf:eventsURL),
+           let saved = try? JSONDecoder().decode([Exchange].self,from:data) {
+            events = Array(saved.suffix(256))
+        }
         append(command:"SESSION",reply:"Preparing scanner connection")
     }
     func append(command: String, reply: String) {
-        entries.append(Exchange(timestamp:Date(),command:command,reply:reply))
+        let entry = Exchange(timestamp:Date(),command:command,reply:reply)
+        entries.append(entry)
+        if ["SESSION","VW","ERROR"].contains(command) {
+            events.append(entry)
+            if events.count > 256 { events.removeFirst(events.count-256) }
+            if let eventsURL, let data = try? JSONEncoder().encode(events) {
+                try? FileManager.default.createDirectory(at:eventsURL.deletingLastPathComponent(),withIntermediateDirectories:true)
+                try? data.write(to:eventsURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+            }
+        }
         if entries.count > 512 { entries.removeFirst(entries.count-512) }
         guard let url, let data = try? JSONEncoder().encode(entries) else { return }
         try? FileManager.default.createDirectory(at:url.deletingLastPathComponent(),withIntermediateDirectories:true)

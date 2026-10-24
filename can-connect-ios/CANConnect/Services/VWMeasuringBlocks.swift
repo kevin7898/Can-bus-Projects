@@ -12,14 +12,34 @@ final class VWMeasuringBlocks {
     private var transmitSequence: UInt8 = 0
     private var assembler = VWMessageAssembler()
     private var channelOpen = false
-    private var unsupported: [VWController:Set<Int>] = [:]
-    private var disabled = Set<VWController>()
+    private struct Retry {
+        var failures: Int
+        var after: Date
+    }
+    private var controllerRetries: [VWController:Retry] = [:]
+    private var groupRetries: [VWController:[Int:Retry]] = [:]
+    private let clock: () -> Date
+    private let report: (String) -> Void
     private var transmitGap: TimeInterval = 0
     private var lastSent = Date.distantPast
     init(exchange: @escaping (String) async throws -> String,
          pause: @escaping (TimeInterval) async throws -> Void = { seconds in
              try await Task.sleep(nanoseconds:UInt64(seconds*1_000_000_000))
-         }) { self.exchange = exchange; self.pause = pause }
+         }, clock: @escaping () -> Date = Date.init,
+         report: @escaping (String) -> Void = { _ in }) {
+        self.exchange = exchange; self.pause = pause; self.clock = clock; self.report = report
+    }
+    private func retry(after previous: Retry?, minimum: TimeInterval) -> Retry {
+        let failures = min((previous?.failures ?? 0)+1,5)
+        return Retry(failures:failures,after:clock().addingTimeInterval(min(300,minimum*pow(2,Double(failures-1)))))
+    }
+    private func deferGroup(_ group: Int, controller: VWController, rejected: Bool) {
+        // A negative response describes this request, not permanent support.
+        // Retry explicit rejection slowly; ordinary malformed/blank data sooner.
+        let next = retry(after:groupRetries[controller]?[group],minimum:rejected ? 300 : max(30,controller.pollInterval))
+        groupRetries[controller,default:[:]][group] = next
+        report("Controller \(controller.rawValue) block \(group) \(rejected ? "rejected" : "unavailable"); retry in \(Int(next.after.timeIntervalSince(clock())))s")
+    }
 
     private func sendFrame(_ command: String) async throws -> String {
         let remaining = transmitGap-Date().timeIntervalSince(lastSent)
@@ -131,32 +151,43 @@ final class VWMeasuringBlocks {
     func read(controllers: Set<VWController>) async throws -> [OBDSample] {
         var samples: [OBDSample] = []
         do {
-            for controller in VWController.allCases where controllers.contains(controller) && !disabled.contains(controller) {
+            for controller in VWController.allCases where controllers.contains(controller) {
+                guard clock() >= (controllerRetries[controller]?.after ?? .distantPast) else { continue }
+                let groups = (controller == .engine ? [108,114] : [19]).filter {
+                    clock() >= (groupRetries[controller]?[$0]?.after ?? .distantPast)
+                }
+                guard !groups.isEmpty else { continue }
                 do {
-                // This ECU rejects TP 2.0 while its ordinary OBD application is
-                // active. Physical tests: immediate/3-second requests returned
-                // D7; a six-second quiet interval repeatedly opened the channel.
-                // The recorder owns this transport, so no OBD poll interleaves.
-                if controller == .engine { try await pause(6) }
-                try Task.checkCancellation()
-                try await open(controller)
-                let groups = controller == .engine ? [108,114] : [19]
-                for group in groups where !(unsupported[controller] ?? []).contains(group) {
-                    let response = try await request([0x21,UInt8(group)])
-                    if response.payload == [0x7F,0x21,0x31] {
-                        unsupported[controller,default:[]].insert(group); continue
+                    // The engine needs a quiet interval before TP 2.0 setup.
+                    // This single owner prevents interleaved ordinary OBD polls.
+                    if controller == .engine { try await pause(6) }
+                    try Task.checkCancellation()
+                    try await open(controller)
+                    for group in groups {
+                        let response = try await request([0x21,UInt8(group)])
+                        if response.payload == [0x7F,0x21,0x31] {
+                            deferGroup(group,controller:controller,rejected:true)
+                            continue
+                        }
+                        if let sample = VWMeasurementDecoder.decode(response,controller:controller,group:group) {
+                            samples.append(sample)
+                            if groupRetries[controller]?.removeValue(forKey:group) != nil {
+                                report("Controller \(controller.rawValue) block \(group) recovered")
+                            }
+                        } else { deferGroup(group,controller:controller,rejected:false) }
                     }
-                    if let sample = VWMeasurementDecoder.decode(response,controller:controller,group:group) { samples.append(sample) }
-                }
-                try await closeChannel()
+                    try await closeChannel()
+                    if controllerRetries.removeValue(forKey:controller) != nil {
+                        report("Controller \(controller.rawValue) measurement channel recovered")
+                    }
                 } catch is CancellationError { throw CancellationError() }
-                catch ChannelFailure.temporarilyUnavailable {
-                    // D7/D8 do not mean unsupported. Retry at the next scheduled
-                    // slow poll rather than disabling ash/soot for the whole trip.
-                    try await restore()
-                }
                 catch {
-                    disabled.insert(controller)
+                    let next = retry(after:controllerRetries[controller],minimum:max(30,controller.pollInterval))
+                    controllerRetries[controller] = next
+                    let reason = error is ChannelFailure ? "temporarily unavailable" : error.localizedDescription
+                    report("Controller \(controller.rawValue) \(reason); retry in \(Int(next.after.timeIntervalSince(clock())))s")
+                    // Only continue standard/other-controller reads after raw
+                    // CAN cleanup succeeds. Never disable a controller forever.
                     try await restore()
                 }
             }

@@ -85,12 +85,12 @@ final class VWDiagnosticsTests: XCTestCase {
     }
     @MainActor
     func testEngineQuietWindowTransientRejectionRetryAndCancellation() async throws {
-        let fixture = VWProtocolFixture(); var pauses: [TimeInterval] = []
-        let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ seconds in pauses.append(seconds) })
+        let fixture = VWProtocolFixture(); var pauses: [TimeInterval] = []; var clock = Date()
+        let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ seconds in pauses.append(seconds) },clock:{ clock })
         fixture.rejectEngine = true
         let unavailable = try await reader.read(controllers:[.engine])
         XCTAssertTrue(unavailable.isEmpty); XCTAssertEqual(pauses,[6])
-        fixture.rejectEngine = false
+        fixture.rejectEngine = false; clock = clock.addingTimeInterval(61)
         let recovered = try await reader.read(controllers:[.engine])
         XCTAssertTrue(recovered.contains{$0.signals["dpfSootG"] == 8.6})
         XCTAssertEqual(pauses,[6,6],"D7 must not disable the engine for the entire trip")
@@ -105,6 +105,123 @@ final class VWDiagnosticsTests: XCTestCase {
         catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
         XCTAssertFalse(canceledFixture.commands.contains("01C000100003011"))
         XCTAssertEqual(Array(canceledFixture.commands.suffix(VWMeasuringBlocks.restoreCommands.count)),VWMeasuringBlocks.restoreCommands)
+    }
+    @MainActor
+    func testMalformedChannelRecoversWithBoundedBackoffAndDSGContinues() async throws {
+        let fixture = VWProtocolFixture(); var clock = Date(); var reports: [String] = []
+        let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in },clock:{ clock },report:{ reports.append($0) })
+        fixture.badEngineSetup = true
+        for delay in [60.0,120.0,240.0,300.0,300.0] {
+            let values = try await reader.read(controllers:[.engine,.dsg])
+            XCTAssertEqual(values.map(\.signals),[["dsgFluidC":80]])
+            let attempts = fixture.commands.filter { $0 == "01C000100003011" }.count
+            clock = clock.addingTimeInterval(delay-1)
+            _ = try await reader.read(controllers:[.engine])
+            XCTAssertEqual(fixture.commands.filter { $0 == "01C000100003011" }.count,attempts)
+            clock = clock.addingTimeInterval(1)
+        }
+        fixture.badEngineSetup = false
+        let recovered = try await reader.read(controllers:[.engine])
+        XCTAssertEqual(recovered.count,2)
+        XCTAssertTrue(reports.contains { $0.contains("channel recovered") })
+        XCTAssertEqual(Array(fixture.commands.suffix(VWMeasuringBlocks.restoreCommands.count)),VWMeasuringBlocks.restoreCommands)
+        // Success resets the retry escalation for a later transient failure.
+        fixture.badEngineSetup = true
+        _ = try await reader.read(controllers:[.engine])
+        clock = clock.addingTimeInterval(60); fixture.badEngineSetup = false
+        let again = try await reader.read(controllers:[.engine])
+        XCTAssertEqual(again.count,2)
+    }
+    @MainActor
+    func testRejectedGroupIsUnavailableAndRetriesWithoutSuppressingOtherReadings() async throws {
+        let fixture = VWProtocolFixture(); var clock = Date()
+        let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in },clock:{ clock })
+        let good = try await reader.read(controllers:[.engine]); XCTAssertEqual(good.count,2)
+        fixture.rejectedGroups = [108]
+        let rejected = try await reader.read(controllers:[.engine])
+        XCTAssertEqual(rejected.map(\.signals),[["dpfSootG":8.6]])
+        let attempts = fixture.groupRequests.filter { $0 == 108 }.count
+        clock = clock.addingTimeInterval(60)
+        let cooldown = try await reader.read(controllers:[.engine,.dsg])
+        XCTAssertEqual(cooldown.count,2)
+        XCTAssertEqual(fixture.groupRequests.filter { $0 == 108 }.count,attempts)
+        fixture.rejectedGroups = []; clock = clock.addingTimeInterval(240)
+        let recovered = try await reader.read(controllers:[.engine])
+        XCTAssertEqual(recovered.count,2)
+        XCTAssertEqual(fixture.groupRequests.filter { $0 == 108 }.count,attempts+1)
+    }
+    @MainActor
+    func testLostChannelPreservesPartialAshAndRecoversSootOnNextAttempt() async throws {
+        let fixture = VWProtocolFixture(); var clock = Date()
+        let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in },clock:{ clock })
+        fixture.disconnectGroup = 114
+        let partial = try await reader.read(controllers:[.engine,.dsg])
+        XCTAssertEqual(partial.map(\.signals),[["dpfAshML":13],["dsgFluidC":80]])
+        fixture.disconnectGroup = nil; clock = clock.addingTimeInterval(60)
+        let recovered = try await reader.read(controllers:[.engine])
+        XCTAssertEqual(recovered.count,2)
+    }
+    @MainActor
+    func testRecorderRetriesAfterCleanupFailureAndResumesAshSootInSameTrip() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let transport = VWScannerFixture(); var clock = Date()
+        let scanner = ScannerRecorder(makeSession:{ transport },measurementClock:{ clock },measurementPause:{ _ in })
+        let store = AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),scanner:scanner,gps:GPSFixture(),scannerAvailable:{ _ in false })
+        var vehicle = VehicleProfile(); vehicle.make = "Volkswagen"; vehicle.model = "Jetta"
+        vehicle.year = 2014; vehicle.engine = "TDI"; vehicle.transmission = "DSG"
+        try store.saveVehicle(vehicle)
+        let savedCount = store.state.trips.count
+        try store.connectScanner(settings:ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:"SYNTHETIC"))
+        defer { store.disconnectScanner() }
+        func waitFor(_ condition: @escaping () -> Bool) async {
+            let check = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in condition() },object:nil)
+            await fulfillment(of:[check],timeout:5)
+        }
+        await waitFor { store.state.draft?.samples?.contains { $0.signals["dpfSootG"] != nil } == true }
+        let id = try XCTUnwrap(store.state.draft?.id)
+        XCTAssertEqual(scanner.value("dpfAshML",at:Date()),13)
+        transport.raw.badEngineSetup = true; transport.raw.restoreFailures = 2
+        clock = clock.addingTimeInterval(61)
+        await waitFor { transport.raw.restoreFailures == 0 && scanner.value("dpfSootG",at:Date()) == nil }
+        XCTAssertTrue(scanner.connected); XCTAssertTrue(store.recording)
+        XCTAssertEqual(store.state.draft?.id,id); XCTAssertEqual(store.state.trips.count,savedCount)
+        let count = store.state.draft?.samples?.count ?? 0
+        await waitFor { (store.state.draft?.samples?.count ?? 0) > count }
+        XCTAssertNotNil(scanner.value("rpm",at:Date()),"Ordinary polling survives enhanced cleanup recovery")
+        transport.raw.badEngineSetup = false; clock = clock.addingTimeInterval(61)
+        await waitFor { (store.state.draft?.samples?.filter { $0.signals["dpfSootG"] != nil }.count ?? 0) >= 2 }
+        XCTAssertEqual(scanner.value("dpfAshML",at:Date()),13)
+        XCTAssertEqual(scanner.value("dpfSootG",at:Date()),8.6)
+        XCTAssertEqual(store.state.draft?.id,id); XCTAssertEqual(transport.opens,1)
+        store.finishRecording()
+        let saved = try XCTUnwrap(store.state.trips.first)
+        XCTAssertEqual(saved.id,id)
+        XCTAssertEqual(saved.samples?.filter { $0.signals["dpfAshML"] != nil }.count,2)
+        XCTAssertEqual(saved.samples?.filter { $0.signals["dpfSootG"] != nil }.count,2)
+        let restored = try XCTUnwrap(TripArchive.decode(store.archive([saved]).encoded()).trips.first?.samples)
+        XCTAssertEqual(restored.count,saved.samples?.count)
+        for (actual,original) in zip(restored,saved.samples ?? []) {
+            XCTAssertEqual(actual.signals,original.signals); XCTAssertEqual(actual.reply,original.reply)
+            XCTAssertEqual(actual.command,original.command); XCTAssertEqual(actual.requestHeader,original.requestHeader)
+            XCTAssertEqual(actual.responseHeader,original.responseHeader)
+            XCTAssertEqual(actual.timestamp.timeIntervalSince(original.timestamp),0,accuracy:0.001)
+        }
+    }
+    @MainActor
+    func testRecoveryEventsSurviveRoutinePollingAndReconnect() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let journal = ScannerJournal(directory:root)
+        journal.append(command:"VW",reply:"SYNTHETIC recovery event")
+        for _ in 0..<520 { journal.append(command:"010C",reply:"SYNTHETIC RPM") }
+        _ = ScannerJournal(directory:root)
+        let events = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("scanner-events.json"))) as? [[String:Any]])
+        XCTAssertTrue(events.contains { $0["reply"] as? String == "SYNTHETIC recovery event" })
+        XCTAssertFalse(events.contains { $0["command"] as? String == "010C" })
+        for _ in 0..<260 { journal.append(command:"VW",reply:"SYNTHETIC bounded event") }
+        let bounded = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("scanner-events.json"))) as? [[String:Any]])
+        XCTAssertEqual(bounded.count,256)
     }
     func testVWRecordingAndWirePreserveValuesAndNegotiatedCANIdentity() throws {
         let sample = OBDSample(timestamp:Date(timeIntervalSince1970:1700000000.25),signals:["dsgFluidC":80],command:"2113",reply:"SYNTHETIC VW CAN frames",requestHeader:"760",responseHeader:"300")
@@ -152,15 +269,21 @@ private final class VWProtocolFixture {
     var commands: [String] = []
     var groupRequests: [Int] = []
     var rejectEngine = false
+    var badEngineSetup = false
+    var rejectedGroups = Set<Int>()
+    var disconnectGroup: Int?
+    var restoreFailures = 0
     var pauseSetup = false
     var paused = false
     private var controller = 1
     private var sequence: UInt8 = 0
     func command(_ text: String) async throws -> String {
         commands.append(text)
+        if text == "ATSP6", restoreFailures > 0 { restoreFailures -= 1; return "?" }
         if text.hasPrefix("AT") { return "OK" }
         if text.hasSuffix("C000100003011") {
             controller = text.hasPrefix("01") ? 1:2; sequence = 0
+            if controller == 1 && badEngineSetup { return "MALFORMED SYNTHETIC SETUP" }
             if pauseSetup { paused = true;try await Task.sleep(nanoseconds:5_000_000_000) }
             return String(format:"%03X 00 %02X 00 03 %02X 07 01",0x200+controller,(rejectEngine && controller==1) ? 0xD7:0xD0,controller==1 ? 0x40:0x60)
         }
@@ -176,7 +299,9 @@ private final class VWProtocolFixture {
         if bytes[3] == 0x10 { payload = [0x50,0x89] }
         else {
             let group=Int(bytes[4]);groupRequests.append(group)
-            if group==108 {payload=[0x61,108,0x68,5,141,0x25,0,0,0x25,0,0,0x25,0,0]}
+            if disconnectGroup == group { return "300 A8" }
+            if rejectedGroups.contains(group) { payload = [0x7F,0x21,0x31] }
+            else if group==108 {payload=[0x61,108,0x68,5,141,0x25,0,0,0x25,0,0,0x25,0,0]}
             else if group==114 {payload=[0x61,114]+Array(repeating:[UInt8(0x25),0,0],count:5).flatMap{$0}+[0x7E,2,43,0x25,0,0,0x25,0,0]}
             else if group==19 {payload=[0x61,19,0x1A,0,80,0x25,0,0,0x25,0,0,0x25,0,0]}
             else {payload=[0x7F,0x21,0x31]}
@@ -190,4 +315,30 @@ private final class VWProtocolFixture {
         }
         return frames.joined(separator:"\r")
     }
+}
+
+@MainActor
+private final class VWScannerFixture: ScannerTransport {
+    let raw = VWProtocolFixture()
+    var opens = 0
+    private var header = "7E8"
+    func open(host: String, port: UInt16) async throws -> ScannerIdentity {
+        opens += 1
+        return ScannerIdentity(vin:nil,adapter:"SYNTHETIC VW",vehicleProtocol:"ISO 15765-4 CAN",supportedPIDs:[12])
+    }
+    func command(_ command: String) async throws -> String {
+        if command == "ATSH7E0" { header = "7E8" }
+        if command == "ATSH7E1" { header = "7E9" }
+        if command == "0100" { return "7E8 06 41 00 00 10 00 00" }
+        if command == "010C" { return "7E8 04 41 0C 0D 00" }
+        if command == "0904" {
+            let text = header == "7E8" ? "03L997030M  9983" : "02E300062B  9430"
+            let p: [UInt8] = [0x49,0x04,1]+Array(text.utf8)
+            return ["\(header) 10 13 " + p.prefix(6).map{String(format:"%02X",$0)}.joined(separator:" "),
+                    "\(header) 21 " + p.dropFirst(6).prefix(7).map{String(format:"%02X",$0)}.joined(separator:" "),
+                    "\(header) 22 " + p.dropFirst(13).map{String(format:"%02X",$0)}.joined(separator:" ")].joined(separator:"\r")
+        }
+        return try await raw.command(command)
+    }
+    func disconnect() {}
 }
