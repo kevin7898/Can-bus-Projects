@@ -49,7 +49,7 @@ struct ScannerConnectionView: View {
             } catch { failure = error.localizedDescription }
         }.disabled(store.recording || store.pendingGPS)
         if store.scanner.connected || store.scanner.connecting {
-            AppButton(title:"Disconnect scanner",secondary:true) { store.scanner.disconnect() }.disabled(store.recording)
+            AppButton(title:"Disconnect scanner",secondary:true) { store.disconnectScanner() }.disabled(store.recording)
         }
         InfoNote(text:"Keep the app visible for scanner recordings. Leaving the app saves the recording and disconnects the scanner. GPS recording can continue with the phone locked.")
     }.onAppear {

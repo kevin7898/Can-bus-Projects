@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Combine
 import UIKit
+import ExternalAccessory
 
 @MainActor
 final class AppStore: ObservableObject {
@@ -26,13 +27,26 @@ final class AppStore: ObservableObject {
     @Published var transferring = false
     private var scannerChanges: AnyCancellable?
     private var backgroundChanges: AnyCancellable?
+    private var lifecycleChanges: [AnyCancellable] = []
+    private let scannerAvailable: @MainActor (ScannerSettings) -> Bool
+    private var automaticConnectionSuppressed = false
+    private var automaticRecordingSuppressed = false
+    private var accessoryWasAvailable = false
+    private var reconnectFailures = 0
+    private var nextReconnect = Date.distantPast
+    private var lastCheckpoint = Date.distantPast
+    private let activity: RecordingActivityManaging
     private let disk: LocalStore
     private var ticker: AnyCancellable?
     private var gpsChanges: AnyCancellable?
     private var toastTask: Task<Void, Never>?
     private var canWrite = true
-    init(disk: LocalStore = LocalStore(), scanner: ScannerRecorder? = nil) {
+    init(disk: LocalStore = LocalStore(), scanner: ScannerRecorder? = nil,
+         activity: RecordingActivityManaging? = nil,
+         scannerAvailable: @escaping @MainActor (ScannerSettings) -> Bool = { (try? MXPlusAccessory.select(serial:$0.accessorySerial)) != nil }) {
+        self.activity = activity ?? RecordingLiveActivity()
         self.disk = disk
+        self.scannerAvailable = scannerAvailable
         self.scanner = scanner ?? ScannerRecorder()
         do {
             state = try disk.load() ?? SampleData.state()
@@ -45,29 +59,59 @@ final class AppStore: ObservableObject {
             state = StoredState(); canWrite = false
             self.error = "Could not open saved data. The original file is preserved. \(error.localizedDescription)"
         }
+        updateLiveActivity()
         source = activeVehicle?.isSample == true ? .demo : .phoneGPS
+        self.scanner.onConnected = { [weak self] in
+            guard let self else { return }
+            self.automaticRecordingSuppressed = false
+            self.reconnectFailures = 0; self.nextReconnect = .distantPast
+        }
         self.scanner.onSample = { [weak self] sample in
-            guard let self, self.state.draft?.source == .scanner else { return }
+            guard let self else { return }
+            // Start only after identity validation and a decoded response. A paired
+            // adapter with the ignition off must not create empty recordings.
+            if !self.recording, !self.pendingGPS, !self.automaticRecordingSuppressed,
+               self.canWrite, self.scanner.connected, self.activeVehicle?.isSample == false,
+               self.scanner.vehicleID == self.state.selectedVehicleID {
+                self.source = .scanner
+                self.state.draft = RecordingDraft(vehicleID:self.state.selectedVehicleID, source:.scanner,
+                    startedAt:sample.timestamp, updatedAt:sample.timestamp,
+                    scannerTransport:(self.activeVehicle?.scannerConnection ?? self.state.scanner).kind)
+                self.lastCheckpoint = .distantPast
+            }
+            guard self.state.draft?.source == .scanner else { return }
             self.state.draft?.accept(sample)
+            self.checkpoint(at:Date())
             if (self.state.draft?.samples?.count ?? 0) >= 100_000 {
                 self.finishRecording()
-                if self.recording { self.scanner.disconnect(); self.error = "Recording reached the 100,000-response limit. Free storage and retry Finish to save the draft." }
+                if self.recording { self.disconnectScanner(); self.error = "Recording reached the 100,000-response limit. Free storage and retry Finish to save the draft." }
                 else { self.error = "Recording saved at the 100,000-response limit. Start a new recording to continue." }
             }
         }
         self.scanner.onDisconnect = { [weak self] message in
             guard let self else { return }
             if self.state.draft?.source == .scanner {
-                self.finishRecording()
-                if self.recording { return } // Preserve the actionable disk-write error and unsaved draft.
+                // Genuine vehicle loss ends the trip at its last actual response.
+                self.finishRecording(endedAt:self.state.draft?.updatedAt)
+                if self.recording { return } // Preserve an unsaved draft and its disk error.
             }
             self.error = message
+            self.reconnectFailures = min(self.reconnectFailures + 1, 6)
+            self.nextReconnect = Date().addingTimeInterval(min(60, pow(2, Double(self.reconnectFailures))))
         }
         scannerChanges = self.scanner.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         backgroundChanges = NotificationCenter.default.publisher(for:UIApplication.didEnterBackgroundNotification).sink { [weak self] _ in
-            guard let self else { return }
-            if self.state.draft?.source == .scanner { self.finishRecording() }
-            self.scanner.disconnect(); ELMMXPlusSession.closeForegroundSession(); UIApplication.shared.isIdleTimerDisabled = false
+            // ExternalAccessory owns background execution for the MX+. Closing
+            // its streams here used to terminate every trip on an app switch.
+            self?.checkpoint(at:Date(), force:true)
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+        EAAccessoryManager.shared().registerForLocalNotifications()
+        for name in [UIApplication.didBecomeActiveNotification, .EAAccessoryDidConnect, .EAAccessoryDidDisconnect] {
+            lifecycleChanges.append(NotificationCenter.default.publisher(for:name).sink { [weak self] _ in
+                self?.reconcileScannerConnection(at:Date())
+                self?.updateLiveActivity()
+            })
         }
         gps.onReady = { [weak self] in
             guard let self, self.pendingGPS else { return }
@@ -86,6 +130,7 @@ final class AppStore: ObservableObject {
             self.error = message
         }
         gpsChanges = gps.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        Task { [weak self] in self?.reconcileScannerConnection(at:Date()) }
         ticker = Timer.publish(every:1, on:.main, in:.common).autoconnect().sink { [weak self] date in self?.tick(date) }
     }
     var recording: Bool { state.draft != nil }
@@ -120,9 +165,43 @@ final class AppStore: ObservableObject {
             state.draft?.distanceKM = elapsed * 78 / 3600
             state.draft?.updatedAt = date
         }
-        if recording && Int(elapsed) % 5 == 0 {
-            state.draft?.updatedAt = date; save()
+        checkpoint(at:date)
+        reconcileScannerConnection(at:date)
+    }
+    private func checkpoint(at date: Date, force: Bool = false) {
+        guard recording, force || date.timeIntervalSince(lastCheckpoint) >= 5 else { return }
+        save(); lastCheckpoint = date
+        updateLiveActivity()
+    }
+    private func updateLiveActivity() {
+        activity.sync(state.draft.map { RecordingActivitySnapshot(draft:$0,scannerConnected:scanner.connected) },
+                      foreground:UIApplication.shared.applicationState == .active)
+    }
+    // No background keep-alive trick: retries run while iOS schedules the app or
+    // delivers accessory events. Force-quitting the app cannot be overridden.
+    func reconcileScannerConnection(at date: Date) {
+        guard canWrite, let vehicle = activeVehicle, !vehicle.isSample,
+              let settings = vehicle.scannerConnection, settings.kind == .obdLinkMXPlus else { return }
+        let available = scannerAvailable(settings)
+        if accessoryWasAvailable && !available {
+            automaticConnectionSuppressed = false
+            nextReconnect = .distantPast; reconnectFailures = 0
         }
+        accessoryWasAvailable = available
+        guard available, !automaticConnectionSuppressed, !scanner.connected, !scanner.connecting,
+              !recording, !pendingGPS, date >= nextReconnect else { return }
+        source = .scanner
+        scanner.connect(settings:settings,vehicle:vehicle)
+    }
+    func disconnectScanner() {
+        automaticConnectionSuppressed = true
+        automaticRecordingSuppressed = true
+        scanner.disconnect()
+    }
+    private func resetScannerAutomation() {
+        scanner.disconnect()
+        automaticConnectionSuppressed = false; automaticRecordingSuppressed = false
+        accessoryWasAvailable = false; reconnectFailures = 0; nextReconnect = .distantPast
     }
     func startRecording() {
         guard canWrite, !recording, !pendingGPS else { return }
@@ -138,9 +217,10 @@ final class AppStore: ObservableObject {
         else { state.draft = RecordingDraft(vehicleID:state.selectedVehicleID, source:.demo, startedAt:now, updatedAt:now); save() }
     }
     func cancelGPS() { pendingGPS = false; gps.stop() }
-    func finishRecording() {
+    func finishRecording(endedAt requestedEnd: Date? = nil) {
         guard var draft = state.draft else { return }
-        let endedAt = Date()
+        if draft.source == .scanner { automaticRecordingSuppressed = true }
+        let endedAt = requestedEnd ?? Date()
         if draft.source == .demo {
             draft.distanceKM = max(0, endedAt.timeIntervalSince(draft.startedAt)) * 78 / 3600
             draft.route = SampleData.route(date:draft.startedAt)
@@ -150,14 +230,14 @@ final class AppStore: ObservableObject {
         next.draft = nil
         do {
             try disk.save(next)
-            gps.stop(); UIApplication.shared.isIdleTimerDisabled = false; state = next; notify("Recording saved on this iPhone")
+            gps.stop(); UIApplication.shared.isIdleTimerDisabled = false; state = next; updateLiveActivity(); notify("Recording saved on this iPhone")
         } catch { self.error = "Could not save the recording. Keep the app open and retry Finish. \(error.localizedDescription)" }
     }
     func signal(_ slot: String) -> Signal { dashboard.signals[slot] ?? .rpm }
     func setSignal(_ signal: Signal, slot: String) { dashboard.signals[slot] = signal; save() }
     func save() {
         guard canWrite else { return }
-        do { try disk.save(state) }
+        do { try disk.save(state); updateLiveActivity() }
         catch { self.error = "Could not save on this iPhone: \(error.localizedDescription)" }
     }
     func addFill(litres: Double, cost: Double, odometer: Double, full: Bool, date: Date) throws {
@@ -215,7 +295,7 @@ final class AppStore: ObservableObject {
         guard state.vehicles.contains(where:{$0.id == id}) else { throw AppFailure("Vehicle not found.") }
         var next = state; next.selectedVehicleID = id; next.onboardingCompleted = true
         try disk.save(next); state = next; tripPage = 0
-        scanner.disconnect(); source = activeVehicle?.isSample == true ? .demo : .phoneGPS
+        resetScannerAutomation(); source = activeVehicle?.isSample == true ? .demo : .phoneGPS
     }
     func saveVehicle(_ vehicle: VehicleProfile) throws {
         guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before setting up a vehicle.") }
@@ -228,7 +308,7 @@ final class AppStore: ObservableObject {
         next.selectedVehicleID = value.id; next.onboardingCompleted = true
         if let connection = value.scannerConnection { next.scanner = connection }
         try disk.save(next); state = next; tripPage = 0; vehicleSetupPresented = false
-        scanner.disconnect(); source = .phoneGPS
+        resetScannerAutomation(); source = .phoneGPS
         notify("Vehicle ready: \(value.title)")
     }
     func useSampleVehicle() throws {
@@ -238,7 +318,7 @@ final class AppStore: ObservableObject {
         else { let sample = VehicleProfile.sample; next.vehicles.append(sample); next.selectedVehicleID = sample.id }
         next.onboardingCompleted = true
         try disk.save(next); state = next; vehicleSetupPresented = false
-        scanner.disconnect(); source = .demo
+        resetScannerAutomation(); source = .demo
     }
     func reading(_ key: String) -> Double? { source == .scanner ? scanner.value(key,at:Date()) : nil }
     func signalText(_ signal: Signal) -> String {
@@ -275,6 +355,8 @@ final class AppStore: ObservableObject {
         var next = state; next.scanner = settings
         if let i = next.vehicles.firstIndex(where:{$0.id == vehicle.id}) { next.vehicles[i].scannerConnection = settings }
         try disk.save(next); state = next
+        automaticConnectionSuppressed = false; automaticRecordingSuppressed = false
+        reconnectFailures = 0; nextReconnect = .distantPast
         source = .scanner; scanner.connect(settings:settings,vehicle:vehicle)
     }
     func configureServer(address: String, token: String) async throws {

@@ -242,9 +242,9 @@ final class ELMAccessoryChannel {
 
 // MFi session ownership is separate from acquisition. Reopening the MX+ iAP data
 // port immediately after cancellation can leave a paired adapter silent. Keep one
-// foreground channel and drain an in-flight reply before restarting identification.
+// accessory channel and drain an in-flight reply before restarting identification.
 @MainActor
-private enum MXPlusForegroundSession {
+private enum MXPlusSharedSession {
     static var connectionID: Int?
     static var channel: ELMAccessoryChannel?
     static func acquire(_ accessory: EAAccessory) throws -> ELMAccessoryChannel {
@@ -268,21 +268,24 @@ final class ELMMXPlusSession: ScannerTransport {
     private let serial: String?
     private var channel: ELMAccessoryChannel?
     private let journal: ScannerJournal?
-    init(serial: String?, journal: ScannerJournal? = nil) { self.serial = serial; self.journal = journal }
-    static func closeForegroundSession() { MXPlusForegroundSession.close() }
+    private let restoreCANDefaults: Bool
+    init(serial: String?, journal: ScannerJournal? = nil, restoreCANDefaults: Bool = false) {
+        self.serial = serial; self.journal = journal; self.restoreCANDefaults = restoreCANDefaults
+    }
+    static func closeForegroundSession() { MXPlusSharedSession.close() }
     func open(host: String, port: UInt16) async throws -> ScannerIdentity {
         disconnect()
         do {
             let accessory = try MXPlusAccessory.select(serial:serial)
-            let connection = try MXPlusForegroundSession.acquire(accessory); channel = connection
+            let connection = try MXPlusSharedSession.acquire(accessory); channel = connection
             if !connection.reusable {
                 journal?.append(command:"SESSION",reply:"Opening Bluetooth streams")
                 try await connection.open()
-            } else { journal?.append(command:"SESSION",reply:"Reusing foreground Bluetooth session") }
-            return try await ELMIdentification.read(command:command)
+            } else { journal?.append(command:"SESSION",reply:"Reusing Bluetooth session") }
+            return try await ELMIdentification.read(restoreCANDefaults:restoreCANDefaults,command:command)
         } catch {
             journal?.append(command:"ERROR",reply:error.localizedDescription)
-            if !(error is CancellationError), let channel { MXPlusForegroundSession.discard(channel) }
+            if !(error is CancellationError), let channel { MXPlusSharedSession.discard(channel) }
             disconnect(); throw error
         }
     }
@@ -293,11 +296,11 @@ final class ELMMXPlusSession: ScannerTransport {
             journal?.append(command:text,reply:reply)
             return reply
         } catch {
-            if !(error is CancellationError) { MXPlusForegroundSession.discard(channel) }
+            if !(error is CancellationError) { MXPlusSharedSession.discard(channel) }
             throw error
         }
     }
-    // Stop this acquisition while keeping the foreground iAP channel reusable.
-    // App backgrounding and transport errors close the underlying session.
+    // Stop this acquisition while keeping the iAP channel reusable.
+    // Transport errors close the underlying session; app switching preserves it.
     func disconnect() { channel = nil }
 }

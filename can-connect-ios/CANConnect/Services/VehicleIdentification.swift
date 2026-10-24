@@ -50,9 +50,11 @@ protocol ScannerTransport: AnyObject {
 // The same reviewed identity and read-only configuration for every transport.
 @MainActor
 enum ELMIdentification {
-    static func read(command: (String) async throws -> String) async throws -> ScannerIdentity {
+    static func read(restoreCANDefaults: Bool = false, command: (String) async throws -> String) async throws -> ScannerIdentity {
         let adapter = try await command("ATI")
-        for setting in ["ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0"] {
+        let settings = ["ATE0","ATL0","ATS1","ATH0","ATCAF1"]
+            + (restoreCANDefaults ? ["ATCFC1","ATAT1","ATST32","ATSH7DF","ATCRA"] : []) + ["ATSP0"]
+        for setting in settings {
             let response = try await command(setting)
             guard response.uppercased().contains("OK") else { throw AppFailure("The adapter rejected configuration \(setting). Check ELM327 compatibility.") }
         }

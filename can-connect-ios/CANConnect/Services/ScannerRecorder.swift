@@ -8,6 +8,7 @@ final class ScannerRecorder: ObservableObject {
     @Published private(set) var status = "Not connected"
     @Published private(set) var readings: [String: (value: Double, date: Date)] = [:]
     private(set) var vehicleID: UUID?
+    var onConnected: (() -> Void)?
     var onSample: ((OBDSample) -> Void)?
     var onDisconnect: ((String) -> Void)?
     private var work: Task<Void,Never>?
@@ -28,7 +29,7 @@ final class ScannerRecorder: ObservableObject {
         let transport: ScannerTransport
         if let makeSession { transport = makeSession() }
         else if settings.kind == .wifi { transport = ELMWiFiSession() }
-        else { transport = ELMMXPlusSession(serial:settings.accessorySerial,journal:journal) }
+        else { transport = ELMMXPlusSession(serial:settings.accessorySerial,journal:journal,restoreCANDefaults:Jetta2014Profile.matches(vehicle)) }
         session = transport
         connecting = true; status = "Identifying vehicle…"
         work = Task { [weak self] in
@@ -47,6 +48,7 @@ final class ScannerRecorder: ObservableObject {
                 let jetta = Jetta2014Profile.matches(vehicle)
                 let ecu: String? = jetta ? "7E8" : nil
                 var supported = identity.supportedPIDs
+                var enhancedControllers = Set<VWController>()
                 if jetta {
                     guard identity.vehicleProtocol.uppercased().contains("CAN"), !identity.vehicleProtocol.contains("29") else {
                         throw AppFailure("The 2014 TDI profile requires the vehicle's 11-bit CAN protocol.")
@@ -66,14 +68,28 @@ final class ScannerRecorder: ObservableObject {
                             supported += ELMIdentityParser.supportedPIDs(anonymous,base:base)
                         }
                     }
+                    if settings.kind == .obdLinkMXPlus {
+                        for controller in VWController.allCases {
+                            for setting in ["ATSH\(controller.obdRequest)","ATCRA\(controller.obdResponse)"] {
+                                let reply = try await self.exchange(setting,transport:transport)
+                                guard reply.contains("OK") else { throw AppFailure("Could not select the VW controller for identification.") }
+                            }
+                            let calibration = try await self.exchange("0904",transport:transport)
+                            if controller.matchesCalibration(calibration) { enhancedControllers.insert(controller) }
+                        }
+                        for setting in ["ATSH7E0","ATCRA7E8"] { _ = try await self.exchange(setting,transport:transport) }
+                    }
                 }
                 let pids = OBDDecoder.definitions.filter { supported.contains($0.pid) }
                 guard !pids.isEmpty else { throw AppFailure("The vehicle reported no supported dashboard PIDs.") }
                 self.vehicleID = vehicle.id; self.connected = true; self.connecting = false
                 self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals"
+                self.onConnected?()
                 var nextRead: [Int:Date] = [:]
                 var lastReceived = Date()
                 var missing = Set<Int>()
+                let vw = VWMeasuringBlocks { try await self.exchange($0,transport:transport) }
+                var nextEnhanced = Date.distantPast
                 while !Task.isCancelled {
                     for definition in pids where Date() >= (nextRead[definition.pid] ?? .distantPast) {
                         let reply = try await self.exchange(String(format:"01%02X",definition.pid),transport:transport)
@@ -89,6 +105,25 @@ final class ScannerRecorder: ObservableObject {
                         let fast = [0x0C,0x0D,0x5E,0x70,0x78,0x7A,0x04,0x10].contains(definition.pid)
                         nextRead[definition.pid] = Date().addingTimeInterval(fast ? 0.5 : 3)
                         try await Task.sleep(nanoseconds:25_000_000)
+                    }
+                    if !enhancedControllers.isEmpty, Date() >= nextEnhanced {
+                        for key in VWMeasurementDecoder.keys { self.readings.removeValue(forKey:key) }
+                        do {
+                            for sample in try await vw.read(controllers:enhancedControllers) {
+                                try Task.checkCancellation()
+                                for (key,value) in sample.signals { self.readings[key] = (value,sample.timestamp) }
+                                lastReceived = sample.timestamp; self.onSample?(sample)
+                            }
+                        } catch is CancellationError { throw CancellationError() }
+                        catch {
+                            self.journal?.append(command:"VW",reply:"Enhanced measurements unavailable: \(error.localizedDescription)")
+                            enhancedControllers = []
+                            // Optional VW measurements must not leave standard reads
+                            // silently using raw-CAN settings after a failed cleanup.
+                            let recovery = try await self.exchange("010C",transport:transport)
+                            guard OBDDecoder.decode(recovery,pid:0x0C,ecu:ecu) != nil else { throw error }
+                        }
+                        nextEnhanced = Date().addingTimeInterval(5)
                     }
                     guard missing.count < pids.count, Date().timeIntervalSince(lastReceived) < 20 else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
                     try await Task.sleep(nanoseconds:50_000_000)
@@ -107,8 +142,15 @@ final class ScannerRecorder: ObservableObject {
         return reply
     }
     func disconnect() {
-        if let work { work.cancel(); pendingTeardown = work }
-        work = nil; session?.disconnect(); session = nil
+        if let work {
+            work.cancel()
+            if let transport = session as? ELMMXPlusSession {
+                // Keep the logical channel alive until TP 2.0 cancellation has
+                // restored ordinary OBD settings. A reconnect awaits this task.
+                pendingTeardown = Task { await work.value; transport.disconnect() }
+            } else { session?.disconnect(); pendingTeardown = work }
+        } else { session?.disconnect() }
+        work = nil; session = nil
         connected = false; connecting = false; vehicleID = nil; readings = [:]; status = "Not connected"; journal = nil
     }
 }

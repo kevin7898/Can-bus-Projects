@@ -12,7 +12,10 @@ struct CANConnectApp: App {
             _store = StateObject(wrappedValue:testStore)
         } else { _store = StateObject(wrappedValue:AppStore()) }
     }
-    var body: some Scene { WindowGroup { RootView().environmentObject(store).preferredColorScheme(.dark).tint(Palette.blue) } }
+    var body: some Scene { WindowGroup { RootView().environmentObject(store).preferredColorScheme(.dark).tint(Palette.blue)
+        .onOpenURL { url in
+            if url.scheme == "canconnect", url.host == "recording" { store.selectedTab = .live }
+        } } }
 }
 enum AppTab: String, CaseIterable, Identifiable {
     case overview, trips, live, vehicle, connect

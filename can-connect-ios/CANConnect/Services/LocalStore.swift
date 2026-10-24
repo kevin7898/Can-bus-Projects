@@ -15,6 +15,6 @@ struct LocalStore {
     func save(_ state: StoredState) throws {
         try FileManager.default.createDirectory(at:url.deletingLastPathComponent(), withIntermediateDirectories:true)
         let data = try JSONEncoder().encode(state)
-        try data.write(to:url, options:[.atomic, .completeFileProtectionUnlessOpen])
+        try data.write(to:url, options:[.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 }

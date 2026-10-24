@@ -89,7 +89,7 @@ final class SmokeTests: XCTestCase {
         app.buttons["Connect selected vehicle"].tap()
         XCTAssertTrue(app.staticTexts["WI-FI OBD · VEHICLE SPEED"].waitForExistence(timeout:10))
         XCTAssertTrue(app.staticTexts["60"].waitForExistence(timeout:5))
-        app.buttons["Start scanner recording"].tap()
+        // A validated scanner response starts recording without an extra tap.
         XCTAssertTrue(app.buttons["Finish & save recording"].waitForExistence(timeout:3))
         app.buttons["Engine"].tap()
         XCTAssertTrue(app.staticTexts["1726"].waitForExistence(timeout:5))
