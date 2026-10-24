@@ -24,7 +24,8 @@ with tempfile.TemporaryDirectory() as directory:
   assert call('/v1/vehicles',auth=False)[0]==401
   vehicle={'id':str(uuid.uuid4()),'name':'Synthetic API vehicle','year':'2026','make':'Test','model':'Fixture','vin':'','notes':''}
   assert call('/v1/vehicles',vehicle)[0]==201
-  recording={'schemaVersion':1,'vehicleID':vehicle['id'],'name':'Synthetic upload','source':'API integration fixture','samples':[{'timestamp':'2026-10-23T12:00:00.125Z','latitude':49.1,'longitude':-123.9,'signals':{'speedKph':60}},{'timestamp':'2026-10-23T12:00:01.125Z','latitude':49.1001,'longitude':-123.9,'signals':{'speedKph':61}}]}
+  recording={'schemaVersion':1,'vehicleID':vehicle['id'],'name':'Synthetic upload','source':'OBDLink MX+ · Bluetooth','samples':[{'timestamp':'2026-10-23T12:00:00.125Z','latitude':49.1,'longitude':-123.9,'accuracy':5,'gpsSpeedMps':10},{'timestamp':'2026-10-23T12:00:01.125Z','latitude':49.1001,'longitude':-123.9,'accuracy':5,'gpsSpeedMps':11}]}
+  recording['samples'] += [{'timestamp':'2026-10-23T12:00:00.125Z','signals':{'speedKph':60,'rpm':832}},{'timestamp':'2026-10-23T12:00:01.125Z','signals':{'speedKph':61,'rpm':840}}]
   status,receipt=call('/v1/recordings',recording);assert status==202
   for _ in range(80):
    status,processed=call('/v1/receipts/'+receipt['id'])
@@ -35,10 +36,14 @@ with tempfile.TemporaryDirectory() as directory:
   status,duplicate=call('/v1/recordings',recording);assert status==200 and duplicate['id']==receipt['id']
   status,trips=call('/v1/trips');assert len(trips['trips'])==1
   _,trip=call('/v1/trips/'+trips['trips'][0]['id']);assert trip['samples'][0]['signals']['speedKph']==60
+  coordinates=[s for s in trip['samples'] if s.get('latitude') is not None]
+  assert [(s['latitude'],s['longitude']) for s in coordinates]==[(49.1,-123.9),(49.1001,-123.9)]
+  assert [s['signals']['rpm'] for s in trip['samples'] if 'rpm' in s['signals']]==[832,840]
   assert call('/v1/recordings',dict(recording,vehicleID=str(uuid.uuid4())))[0]==422
   manifest=json.loads((pathlib.Path(directory)/'library.json').read_text());assert len(manifest['receipts'])==1
   assert len(list((pathlib.Path(directory)/'Originals').iterdir()))==1
-  print('API integration passed: auth, vehicle setup, upload, processing receipt, byte deduplication, trip retrieval, vehicle validation, durable original.')
+  original=next((pathlib.Path(directory)/'Originals').iterdir()); assert json.loads(original.read_text())==recording
+  print('API integration passed: mixed GPS/OBD route and exact original preserved, auth, vehicle setup, upload, processing receipt, byte deduplication, trip retrieval, vehicle validation, durable original.')
  finally:
   p.terminate()
   try:p.wait(timeout=5)

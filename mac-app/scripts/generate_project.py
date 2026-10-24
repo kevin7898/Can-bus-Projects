@@ -12,14 +12,17 @@ refs=[];builds=[]
 for f in files:
  p=str(f.relative_to(root));r=obj('file:'+p,'{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = '+q(p)+'; sourceTree = SOURCE_ROOT; }');refs.append(r)
  builds.append(obj('build:'+p,'{isa = PBXBuildFile; fileRef = '+r+'; }'))
+iconPath='../branding/driveline/DriveLine.icon'
+iconRef=obj('icon','{isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = '+q(iconPath)+'; sourceTree = SOURCE_ROOT; }');refs.append(iconRef)
+iconBuild=obj('icon-build','{isa = PBXBuildFile; fileRef = '+iconRef+'; }')
 product=obj('product','{isa = PBXFileReference; explicitFileType = wrapper.application; path = CANConnect.app; sourceTree = BUILT_PRODUCTS_DIR; }')
 products=obj('products','{isa = PBXGroup; children = ('+product+',); name = Products; sourceTree = "<group>"; }')
 main=obj('group','{isa = PBXGroup; children = ('+','.join(refs+[products])+',); sourceTree = "<group>"; }')
 sources=obj('sources','{isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ('+','.join(builds)+',); runOnlyForDeploymentPostprocessing = 0; }')
 frameworks=obj('frameworks','{isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; }')
-resources=obj('resources','{isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; }')
+resources=obj('resources','{isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ('+iconBuild+',); runOnlyForDeploymentPostprocessing = 0; }')
 common='MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES;'
-target_common=common+' PRODUCT_NAME = CANConnect; PRODUCT_BUNDLE_IDENTIFIER = ca.canconnect.mac; INFOPLIST_FILE = Info.plist; GENERATE_INFOPLIST_FILE = NO; CODE_SIGN_STYLE = Manual; CODE_SIGN_IDENTITY = "-"; ENABLE_HARDENED_RUNTIME = NO; ENABLE_APP_SANDBOX = NO; SWIFT_EMIT_LOC_STRINGS = YES; OTHER_LDFLAGS = ("$(inherited)", "-lsqlite3"); LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");'
+target_common=common+' ASSETCATALOG_COMPILER_APPICON_NAME = DriveLine; PRODUCT_NAME = CANConnect; PRODUCT_BUNDLE_IDENTIFIER = ca.canconnect.mac; INFOPLIST_FILE = Info.plist; GENERATE_INFOPLIST_FILE = NO; CODE_SIGN_STYLE = Manual; CODE_SIGN_IDENTITY = "-"; ENABLE_HARDENED_RUNTIME = NO; ENABLE_APP_SANDBOX = NO; SWIFT_EMIT_LOC_STRINGS = YES; OTHER_LDFLAGS = ("$(inherited)", "-lsqlite3"); LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");'
 for owner,settings in [('project',common),('target',target_common)]:
  cs=[]
  for config in ['Debug','Release']:

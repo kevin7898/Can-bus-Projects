@@ -1,0 +1,107 @@
+{
+  "groups": [
+    {
+      "name": "Markings",
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.15
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      },
+      "layers": [
+        {
+          "name": "Markings",
+          "image-name": "Markings.svg",
+          "glass": false,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "extended-gray:1.00000,1.00000"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Circuit",
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.15
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      },
+      "layers": [
+        {
+          "name": "Circuit",
+          "image-name": "Circuit.svg",
+          "glass": true,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "extended-gray:1.00000,1.00000"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Road",
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.15
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      },
+      "layers": [
+        {
+          "name": "Road",
+          "image-name": "Road.svg",
+          "glass": true,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "extended-gray:0.55000,1.00000"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  },
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:0.02500,0.10000,0.24000,1.00000",
+          "srgb:0.02500,0.04500,0.07500,1.00000"
+        ]
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "srgb:0.02500,0.04500,0.07500,1.00000"
+      }
+    }
+  ]
+}

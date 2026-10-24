@@ -2,6 +2,10 @@ import Foundation
 
 public enum Signal: String, Codable, CaseIterable, Identifiable {
     case speedKph, rpm, coolantC, boostKpa, mapKpa, barometricKpa, fuelRateLph, fuelPercent, voltage, intakeC, oilC, engineLoad
+    case mafGps, outsideC, boostAbsoluteKpa, boostCommandedKpa, boostBAbsoluteKpa, boostBCommandedKpa
+    case egt1C, egt2C, egt3C, egt4C, dpfDifferentialKpa, dpfInletKpa, dpfOutletKpa
+    case dpfRegenActive, dpfRegenType, dpfRegenTrigger, dpfAverageRegenMinutes, dpfAverageRegenKM
+    case dpfAshML, dpfSootG, dsgFluidC
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -17,18 +21,46 @@ public enum Signal: String, Codable, CaseIterable, Identifiable {
         case .intakeC: return "Intake temperature"
         case .oilC: return "Oil temperature"
         case .engineLoad: return "Engine load"
+        case .mafGps: return "Mass airflow"
+        case .outsideC: return "Outside temperature"
+        case .boostAbsoluteKpa: return "Boost pressure A"
+        case .boostCommandedKpa: return "Commanded boost A"
+        case .boostBAbsoluteKpa: return "Boost pressure B"
+        case .boostBCommandedKpa: return "Commanded boost B"
+        case .egt1C: return "Exhaust temperature 1"
+        case .egt2C: return "Exhaust temperature 2"
+        case .egt3C: return "Exhaust temperature 3"
+        case .egt4C: return "Exhaust temperature 4"
+        case .dpfDifferentialKpa: return "DPF differential pressure"
+        case .dpfInletKpa: return "DPF inlet pressure"
+        case .dpfOutletKpa: return "DPF outlet pressure"
+        case .dpfRegenActive: return "DPF regeneration"
+        case .dpfRegenType: return "DPF active regeneration type"
+        case .dpfRegenTrigger: return "DPF regeneration trigger"
+        case .dpfAverageRegenMinutes: return "Average regeneration interval"
+        case .dpfAverageRegenKM: return "Average regeneration distance"
+        case .dpfAshML: return "DPF ash volume"
+        case .dpfSootG: return "DPF soot mass"
+        case .dsgFluidC: return "DSG fluid temperature"
         }
     }
     public var unit: String {
         switch self {
         case .speedKph: return "km/h"
         case .rpm: return "rpm"
-        case .coolantC, .intakeC, .oilC: return "°C"
+        case .coolantC, .intakeC, .oilC, .outsideC, .egt1C, .egt2C, .egt3C, .egt4C, .dsgFluidC: return "°C"
         case .boostKpa: return "kPa gauge"
-        case .mapKpa, .barometricKpa: return "kPa absolute"
+        case .mapKpa, .barometricKpa, .boostAbsoluteKpa, .boostCommandedKpa, .boostBAbsoluteKpa, .boostBCommandedKpa: return "kPa absolute"
         case .fuelRateLph: return "L/h"
-        case .fuelPercent, .engineLoad: return "%"
+        case .fuelPercent, .engineLoad, .dpfRegenTrigger: return "%"
         case .voltage: return "V"
+        case .mafGps: return "g/s"
+        case .dpfDifferentialKpa, .dpfInletKpa, .dpfOutletKpa: return "kPa"
+        case .dpfRegenActive, .dpfRegenType: return "state"
+        case .dpfAverageRegenMinutes: return "min"
+        case .dpfAverageRegenKM: return "km"
+        case .dpfAshML: return "mL"
+        case .dpfSootG: return "g"
         }
     }
 }

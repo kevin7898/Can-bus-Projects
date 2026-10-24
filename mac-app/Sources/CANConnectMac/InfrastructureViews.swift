@@ -10,7 +10,7 @@ struct GarageView:View {
     var body:some View {
         VStack(alignment:.leading,spacing:14) {
             HStack { Text("Vehicle profiles are independent. Import recordings into the selected profile.").font(.system(size:12)).foregroundStyle(Theme.muted);Spacer();Button("Add vehicle",systemImage:"plus") { adding = true } }
-            if store.state.vehicles.isEmpty { EmptyPanel(title:"Welcome to CAN / CONNECT",message:"Add your first vehicle, then import a recording. The garage supports cars, bikes, and trucks.") }
+            if store.state.vehicles.isEmpty { EmptyPanel(title:"Welcome to DriveLine",message:"Add your first vehicle, then import a recording. The garage supports cars, bikes, and trucks.") }
             LazyVGrid(columns:[GridItem(.adaptive(minimum:270))],spacing:14) {
                 ForEach(store.state.vehicles) { vehicle in
                     Panel(title:vehicle.name,icon:store.state.selectedVehicleID==vehicle.id ? "checkmark.circle.fill":"car") {
