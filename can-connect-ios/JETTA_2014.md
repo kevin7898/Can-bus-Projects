@@ -88,3 +88,9 @@ A separate bounded local `scanner-events.json` retains 256 recovery/error/sessio
 Synthetic tests cover repeated bounded failures, successful recovery/reset, explicit group rejection and delayed re-probe, partial ash before soot channel loss, DSG independence, cancellation/restoration, event-log retention and a full scanner/AppStore trip that loses enhanced cleanup, continues RPM, then records fresh ash/soot with the same trip ID and one transport open. Physical long-drive recovery on the Jetta/MX+ still needs verification; software tests do not establish the original on-car failure cause.
 
 Build-23 local validation: 96 unit tests passed, one hardware-only test skipped; the signed iPhone build succeeded. The app was installed and launched with all 32 saved recordings, profiles, transfers, server settings and regeneration baseline unchanged. The design was not edited. GitHub CI and physical recovery acceptance are tracked separately in PR #7.
+
+### Build 24: clock-independent scheduling
+
+Controller/group retry deadlines, standard/enhanced polling intervals, response timeout detection and TP 2.0 transmit spacing now use Swift `ContinuousClock`. Calendar changes cannot extend or skip those waits. The continuous clock advances during sleep; it is used only for in-process scheduling, never persisted as a recording timestamp. Samples still retain their actual calendar receipt dates. This change does not rewrite recorded timestamps or change the persisted trip/GPS boundary rules.
+
+Regression fixtures move calendar time backward and forward while elapsed time advances normally. They verify exact controller/group retry boundaries, continued RPM and enhanced polling without another connection, and preservation of the changed sample dates. Existing same-trip recovery coverage remains. Physical recovery on the Jetta/MX+ remains an acceptance check.

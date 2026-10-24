@@ -17,14 +17,17 @@ final class ScannerRecorder: ObservableObject {
     private var session: ScannerTransport?
     private var journal: ScannerJournal?
     private let makeSession: (@MainActor () -> ScannerTransport)?
-    private let measurementClock: () -> Date
+    // Scheduling uses elapsed time; recording timestamps remain calendar dates.
+    private let pollClock: () -> ContinuousClock.Instant
+    private let sampleDate: () -> Date
     private let measurementPause: (TimeInterval) async throws -> Void
     init(makeSession: (@MainActor () -> ScannerTransport)? = nil,
-         measurementClock: @escaping () -> Date = Date.init,
+         pollClock: @escaping () -> ContinuousClock.Instant = { .now },
+         sampleDate: @escaping () -> Date = Date.init,
          measurementPause: @escaping (TimeInterval) async throws -> Void = { seconds in
              try await Task.sleep(nanoseconds:UInt64(seconds*1_000_000_000))
          }) {
-        self.makeSession = makeSession; self.measurementClock = measurementClock; self.measurementPause = measurementPause
+        self.makeSession = makeSession; self.pollClock = pollClock; self.sampleDate = sampleDate; self.measurementPause = measurementPause
     }
 
     func value(_ key: String, at date: Date) -> Double? {
@@ -101,32 +104,32 @@ final class ScannerRecorder: ObservableObject {
                 self.vehicleID = vehicle.id; self.connected = true; self.connecting = false
                 self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals"
                 self.onConnected?()
-                var nextRead: [Int:Date] = [:]
+                var nextRead: [Int:ContinuousClock.Instant] = [:]
                 // A generic ECU exposing only slow PIDs must not time out before
                 // its next scheduled response. RPM-capable ECUs retain 20 seconds.
                 let responseTimeout = max(20,(pids.map { OBDDecoder.pollInterval(pid:$0.pid) }.min() ?? 3)+15)
-                var lastReceived = Date()
+                var lastReceived = self.pollClock()
                 var missing = Set<Int>()
                 let vw = VWMeasuringBlocks(exchange:{ try await self.exchange($0,transport:transport) },
-                    pause:self.measurementPause,clock:self.measurementClock,
+                    pause:self.measurementPause,clock:self.pollClock,sampleDate:self.sampleDate,
                     report:{ self.journal?.append(command:"VW",reply:$0) })
-                var nextEnhanced: [VWController:Date] = [:]
+                var nextEnhanced: [VWController:ContinuousClock.Instant] = [:]
                 while !Task.isCancelled {
-                    for definition in pids where Date() >= (nextRead[definition.pid] ?? .distantPast) {
+                    for definition in pids where nextRead[definition.pid].map({ self.pollClock() >= $0 }) ?? true {
                         let reply = try await self.exchange(String(format:"01%02X",definition.pid),transport:transport)
                         try Task.checkCancellation()
-                        let sample = OBDDecoder.decode(reply,pid:definition.pid,ecu:ecu)
+                        let sample = OBDDecoder.decode(reply,pid:definition.pid,at:self.sampleDate(),ecu:ecu)
                         let keys = OBDDecoder.signalKeys(pid:definition.pid)
                         for key in keys where sample?.signals[key] == nil { self.readings.removeValue(forKey:key) }
                         if sample == nil { missing.insert(definition.pid) } else { missing.remove(definition.pid) }
                         if let sample {
                             for (key,value) in sample.signals { self.readings[key] = (value,sample.timestamp) }
-                            lastReceived = sample.timestamp; self.onSample?(sample)
+                            lastReceived = self.pollClock(); self.onSample?(sample)
                         }
-                        nextRead[definition.pid] = Date().addingTimeInterval(OBDDecoder.pollInterval(pid:definition.pid))
+                        nextRead[definition.pid] = self.pollClock().advanced(by:.seconds(OBDDecoder.pollInterval(pid:definition.pid)))
                         try await Task.sleep(nanoseconds:25_000_000)
                     }
-                    let due = enhancedControllers.filter { self.measurementClock() >= (nextEnhanced[$0] ?? .distantPast) }
+                    let due = enhancedControllers.filter { nextEnhanced[$0].map { self.pollClock() >= $0 } ?? true }
                     if !due.isEmpty {
                         let keys = due.reduce(into:Set<String>()) { $0.formUnion($1 == .engine ? VWMeasurementDecoder.engineKeys : ["dsgFluidC"]) }
                         do {
@@ -135,7 +138,7 @@ final class ScannerRecorder: ObservableObject {
                             for sample in samples {
                                 try Task.checkCancellation()
                                 for (key,value) in sample.signals { self.readings[key] = (value,sample.timestamp) }
-                                lastReceived = sample.timestamp; self.onSample?(sample)
+                                lastReceived = self.pollClock(); self.onSample?(sample)
                             }
                         } catch is CancellationError { throw CancellationError() }
                         catch {
@@ -150,9 +153,9 @@ final class ScannerRecorder: ObservableObject {
                             let recovery = try await self.exchange("010C",transport:transport)
                             guard OBDDecoder.decode(recovery,pid:0x0C,ecu:ecu) != nil else { throw error }
                         }
-                        for controller in due { nextEnhanced[controller] = self.measurementClock().addingTimeInterval(controller.pollInterval) }
+                        for controller in due { nextEnhanced[controller] = self.pollClock().advanced(by:.seconds(controller.pollInterval)) }
                     }
-                    guard missing.count < pids.count, Date().timeIntervalSince(lastReceived) < responseTimeout else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
+                    guard missing.count < pids.count, lastReceived.duration(to:self.pollClock()) < .seconds(responseTimeout) else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
                     try await Task.sleep(nanoseconds:50_000_000)
                 }
             } catch is CancellationError {} catch {

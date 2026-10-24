@@ -54,3 +54,7 @@ struct CustomizeSummary: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View { NavigationStack { List { Section("Drag to reorder your summary") { ForEach(store.dashboard.summaryOrder,id:\.self) { key in Text(key == "week" ? "Week summary" : key == "fuel" ? "Fuel & range" : "Latest drive") }.onMove { from,to in store.dashboard.summaryOrder.move(fromOffsets:from,toOffset:to); store.save() } } }.environment(\.editMode,.constant(.active)).scrollContentBackground(.hidden).background(Palette.background).navigationTitle("Customize").navigationBarTitleDisplayMode(.inline).toolbar { Button("Done") { dismiss() } } }.preferredColorScheme(.dark) }
 }
+
+#if DEBUG
+#Preview("Overview · Sample data") { DriveLineCanvas(tab:.overview) }
+#endif

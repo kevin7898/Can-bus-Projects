@@ -69,3 +69,7 @@ struct TripDetailView: View {
         .confirmationDialog("Delete this recording from this iPhone?",isPresented:$delete,titleVisibility:.visible) { Button("Delete recording",role:.destructive) { store.removeTrip(trip.id); dismiss() } }
     }
 }
+
+#if DEBUG
+#Preview("Trips · Sample data") { DriveLineCanvas(tab:.trips) }
+#endif

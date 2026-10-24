@@ -115,3 +115,7 @@ struct FuelHistory: View {
         ForEach(store.vehicleFills.sorted { $0.date > $1.date }) { entry in VStack(alignment:.leading,spacing:8) { Text(entry.date.formatted(date:.abbreviated,time:.shortened)).captionStyle(); Text("\(entry.litres.text()) L · $\(entry.costCAD.text(2)) CAD"); Text("\(entry.odometerKM.text(0)) km · \(entry.full ? "Full" : "Partial")\(entry.isSample ? " · Sample" : "")").captionStyle() }.frame(maxWidth:.infinity,alignment:.leading).card() }
     } }
 }
+
+#if DEBUG
+#Preview("Vehicle · Sample data") { DriveLineCanvas(tab:.vehicle) }
+#endif

@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 struct RootView: View {
     @EnvironmentObject private var store: AppStore
@@ -59,3 +60,68 @@ func importRecording(_ result: Result<URL, Error>, store: AppStore) {
         try store.importTrips(Data(contentsOf:url))
     } catch { store.error = error.localizedDescription }
 }
+
+#if DEBUG
+/// Canvas-only sample data and services, isolated from recordings and hardware.
+@MainActor
+struct DriveLineCanvas: View {
+    @StateObject private var store: AppStore
+
+    init(tab: AppTab = .overview) {
+        _store = StateObject(wrappedValue:Self.makeStore(tab:tab))
+    }
+
+    static func makeStore(tab: AppTab = .overview) -> AppStore {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DriveLinePreviews/\(UUID().uuidString)/state.json")
+        let store = AppStore(disk:LocalStore(url:url),
+                             scanner:ScannerRecorder(makeSession:{ CanvasScanner() }),
+                             activity:CanvasActivity(), gps:CanvasGPS(),
+                             scannerAvailable:{ _ in false })
+        store.state.onboardingCompleted = true
+        store.selectedTab = tab
+        return store
+    }
+
+    var body: some View {
+        RootView().environmentObject(store)
+            .preferredColorScheme(.dark).tint(Palette.blue)
+    }
+}
+
+@MainActor
+private final class CanvasGPS: GPSRecording {
+    let objectWillChange = ObservableObjectPublisher()
+    var speedKMH: Double? { nil }
+    var lastFix: Date? { nil }
+    var status: String { "Canvas sample data · GPS disabled" }
+    var onPoint: ((RoutePoint) -> Void)?
+    var onReady: (() -> Void)?
+    var onFailure: ((String) -> Void)?
+    func requestAutomaticAuthorization() {}
+    func start() { onFailure?("GPS recording is available in the app on iPhone.") }
+    func stop() {}
+}
+
+@MainActor
+private final class CanvasActivity: RecordingActivityManaging {
+    func sync(_ snapshot: RecordingActivitySnapshot?, foreground: Bool) {}
+}
+
+@MainActor
+private final class CanvasScanner: ScannerTransport {
+    func open(host: String, port: UInt16) async throws -> ScannerIdentity {
+        throw AppFailure("Scanner connections are disabled in Canvas previews.")
+    }
+    func command(_ text: String) async throws -> String {
+        throw AppFailure("Scanner connections are disabled in Canvas previews.")
+    }
+    func disconnect() {}
+}
+
+#Preview("Overview · Sample data") { DriveLineCanvas() }
+#Preview("Trips · Sample data") { DriveLineCanvas(tab:.trips) }
+#Preview("Live · Sample data") { DriveLineCanvas(tab:.live) }
+#Preview("Vehicle · Sample data") { DriveLineCanvas(tab:.vehicle) }
+#Preview("Connect · Sample data") { DriveLineCanvas(tab:.connect) }
+#endif

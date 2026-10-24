@@ -14,37 +14,40 @@ final class VWMeasuringBlocks {
     private var channelOpen = false
     private struct Retry {
         var failures: Int
-        var after: Date
+        var after: ContinuousClock.Instant
     }
     private var controllerRetries: [VWController:Retry] = [:]
     private var groupRetries: [VWController:[Int:Retry]] = [:]
-    private let clock: () -> Date
+    private let clock: () -> ContinuousClock.Instant
+    private let sampleDate: () -> Date
     private let report: (String) -> Void
     private var transmitGap: TimeInterval = 0
-    private var lastSent = Date.distantPast
+    private var lastSent: ContinuousClock.Instant?
     init(exchange: @escaping (String) async throws -> String,
          pause: @escaping (TimeInterval) async throws -> Void = { seconds in
              try await Task.sleep(nanoseconds:UInt64(seconds*1_000_000_000))
-         }, clock: @escaping () -> Date = Date.init,
+         }, clock: @escaping () -> ContinuousClock.Instant = { .now },
+         sampleDate: @escaping () -> Date = Date.init,
          report: @escaping (String) -> Void = { _ in }) {
-        self.exchange = exchange; self.pause = pause; self.clock = clock; self.report = report
+        self.exchange = exchange; self.pause = pause; self.clock = clock; self.sampleDate = sampleDate; self.report = report
     }
     private func retry(after previous: Retry?, minimum: TimeInterval) -> Retry {
         let failures = min((previous?.failures ?? 0)+1,5)
-        return Retry(failures:failures,after:clock().addingTimeInterval(min(300,minimum*pow(2,Double(failures-1)))))
+        return Retry(failures:failures,after:clock().advanced(by:.seconds(min(300,minimum*pow(2,Double(failures-1))))))
     }
     private func deferGroup(_ group: Int, controller: VWController, rejected: Bool) {
         // A negative response describes this request, not permanent support.
         // Retry explicit rejection slowly; ordinary malformed/blank data sooner.
         let next = retry(after:groupRetries[controller]?[group],minimum:rejected ? 300 : max(30,controller.pollInterval))
         groupRetries[controller,default:[:]][group] = next
-        report("Controller \(controller.rawValue) block \(group) \(rejected ? "rejected" : "unavailable"); retry in \(Int(next.after.timeIntervalSince(clock())))s")
+        report("Controller \(controller.rawValue) block \(group) \(rejected ? "rejected" : "unavailable"); retry in \(max(0,clock().duration(to:next.after).components.seconds))s")
     }
 
     private func sendFrame(_ command: String) async throws -> String {
-        let remaining = transmitGap-Date().timeIntervalSince(lastSent)
-        if remaining > 0 { try await Task.sleep(nanoseconds:UInt64(remaining*1_000_000_000)) }
-        lastSent = Date()
+        if let lastSent {
+            try await Task.sleep(until:lastSent.advanced(by:.seconds(transmitGap)),clock:.continuous)
+        }
+        lastSent = .now
         return try await exchange(command)
     }
 
@@ -131,7 +134,7 @@ final class VWMeasuringBlocks {
             if let completed {
                 guard acknowledged else { throw AppFailure("VW response arrived without request acknowledgment.") }
                 return VWMeasurementReply(payload:completed,raw:raw.joined(separator:"\r"),
-                    requestHeader:String(format:"%03X",transmit),responseHeader:String(format:"%03X",receive),timestamp:Date())
+                    requestHeader:String(format:"%03X",transmit),responseHeader:String(format:"%03X",receive),timestamp:sampleDate())
             }
         }
         throw AppFailure("VW measurement response did not complete in time.")
@@ -152,9 +155,9 @@ final class VWMeasuringBlocks {
         var samples: [OBDSample] = []
         do {
             for controller in VWController.allCases where controllers.contains(controller) {
-                guard clock() >= (controllerRetries[controller]?.after ?? .distantPast) else { continue }
+                guard controllerRetries[controller].map({ clock() >= $0.after }) ?? true else { continue }
                 let groups = (controller == .engine ? [108,114] : [19]).filter {
-                    clock() >= (groupRetries[controller]?[$0]?.after ?? .distantPast)
+                    groupRetries[controller]?[$0].map { clock() >= $0.after } ?? true
                 }
                 guard !groups.isEmpty else { continue }
                 do {
@@ -185,7 +188,7 @@ final class VWMeasuringBlocks {
                     let next = retry(after:controllerRetries[controller],minimum:max(30,controller.pollInterval))
                     controllerRetries[controller] = next
                     let reason = error is ChannelFailure ? "temporarily unavailable" : error.localizedDescription
-                    report("Controller \(controller.rawValue) \(reason); retry in \(Int(next.after.timeIntervalSince(clock())))s")
+                    report("Controller \(controller.rawValue) \(reason); retry in \(max(0,clock().duration(to:next.after).components.seconds))s")
                     // Only continue standard/other-controller reads after raw
                     // CAN cleanup succeeds. Never disable a controller forever.
                     try await restore()

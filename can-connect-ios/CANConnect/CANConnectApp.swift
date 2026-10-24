@@ -4,6 +4,12 @@ import SwiftUI
 struct CANConnectApp: App {
     @StateObject private var store: AppStore
     init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
+            _store = StateObject(wrappedValue:DriveLineCanvas.makeStore())
+            return
+        }
+        #endif
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("can-connect-ui-tests/state.json")
             try? FileManager.default.removeItem(at:url.deletingLastPathComponent())

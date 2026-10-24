@@ -2,6 +2,14 @@
 
 Native SwiftUI iPhone app in the approved graphite/blue design, with five fixed tabs, pages within tabs, independent reading cards, and a fixed recording control. Open **CANConnect.xcodeproj**, select **CANConnect**, and Run in Xcode. Minimum iOS: 17.0; no package dependencies. Choose a development team for installation on a physical phone.
 
+## Local Xcode and GitHub workflow
+
+Xcode and the desktop coding assistant edit the same local checkout. Use `codex/ios-companion` and `can-connect-ios/CANConnect.xcodeproj`; edits are immediately shared on disk, while GitHub changes only after a commit is pushed. Let one assistant/person edit a given checkout at a time. Use Xcode for Canvas, simulator/device debugging and visual review, then run relevant tests before committing and pushing to the existing pull request. CI validates the pushed commit; physical scanner/GPS behavior still needs a vehicle test.
+
+Before starting, check `git status` and fetch the branch. If the working tree is clean and the local branch has no divergent commits, `git pull --ff-only origin codex/ios-companion` brings down remote changes. Preserve unfinished edits before integrating remote work; do not force-reset the checkout or switch branches over local changes. Review and stage only intended files, commit, then push `codex/ios-companion`. Keep private recordings, credentials and generated build directories outside commits.
+
+Open RootView, OverviewView, TripsView, LiveView, VehicleView or ConnectView and select **Editor → Canvas** for an interactive preview. Restart the canvas if paused. RootView offers all five starting tabs. Debug-only preview stores use separate temporary sample data, disabled GPS/scanner services and no Live Activities; they never load the personal recording library. Changes to the real view code appear in the preview without changing the approved design. Previews do not verify Bluetooth, GPS or Mac delivery.
+
 ## Use your vehicle
 
 First launch opens vehicle setup. Enter details manually, explicitly look up a VIN using NHTSA, or read VIN/protocol/supported PIDs through a Wi-Fi ELM327 adapter, then review and save. VIN lookup sends the VIN to NHTSA only after your action. Manual setup works offline. Scanner setup remembers its address and port. The vehicle menu manages separate profiles, trips, fuel entries and dashboard preferences. Switching profiles is blocked during recording; a scanner connection is cleared when switching vehicles.

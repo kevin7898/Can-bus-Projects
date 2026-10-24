@@ -85,12 +85,12 @@ final class VWDiagnosticsTests: XCTestCase {
     }
     @MainActor
     func testEngineQuietWindowTransientRejectionRetryAndCancellation() async throws {
-        let fixture = VWProtocolFixture(); var pauses: [TimeInterval] = []; var clock = Date()
+        let fixture = VWProtocolFixture(); var pauses: [TimeInterval] = []; var clock = ContinuousClock.now
         let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ seconds in pauses.append(seconds) },clock:{ clock })
         fixture.rejectEngine = true
         let unavailable = try await reader.read(controllers:[.engine])
         XCTAssertTrue(unavailable.isEmpty); XCTAssertEqual(pauses,[6])
-        fixture.rejectEngine = false; clock = clock.addingTimeInterval(61)
+        fixture.rejectEngine = false; clock = clock.advanced(by:.seconds(61))
         let recovered = try await reader.read(controllers:[.engine])
         XCTAssertTrue(recovered.contains{$0.signals["dpfSootG"] == 8.6})
         XCTAssertEqual(pauses,[6,6],"D7 must not disable the engine for the entire trip")
@@ -108,17 +108,17 @@ final class VWDiagnosticsTests: XCTestCase {
     }
     @MainActor
     func testMalformedChannelRecoversWithBoundedBackoffAndDSGContinues() async throws {
-        let fixture = VWProtocolFixture(); var clock = Date(); var reports: [String] = []
+        let fixture = VWProtocolFixture(); var clock = ContinuousClock.now; var reports: [String] = []
         let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in },clock:{ clock },report:{ reports.append($0) })
         fixture.badEngineSetup = true
         for delay in [60.0,120.0,240.0,300.0,300.0] {
             let values = try await reader.read(controllers:[.engine,.dsg])
             XCTAssertEqual(values.map(\.signals),[["dsgFluidC":80]])
             let attempts = fixture.commands.filter { $0 == "01C000100003011" }.count
-            clock = clock.addingTimeInterval(delay-1)
+            clock = clock.advanced(by:.seconds(delay-1))
             _ = try await reader.read(controllers:[.engine])
             XCTAssertEqual(fixture.commands.filter { $0 == "01C000100003011" }.count,attempts)
-            clock = clock.addingTimeInterval(1)
+            clock = clock.advanced(by:.seconds(1))
         }
         fixture.badEngineSetup = false
         let recovered = try await reader.read(controllers:[.engine])
@@ -128,45 +128,107 @@ final class VWDiagnosticsTests: XCTestCase {
         // Success resets the retry escalation for a later transient failure.
         fixture.badEngineSetup = true
         _ = try await reader.read(controllers:[.engine])
-        clock = clock.addingTimeInterval(60); fixture.badEngineSetup = false
+        clock = clock.advanced(by:.seconds(60)); fixture.badEngineSetup = false
         let again = try await reader.read(controllers:[.engine])
         XCTAssertEqual(again.count,2)
     }
     @MainActor
     func testRejectedGroupIsUnavailableAndRetriesWithoutSuppressingOtherReadings() async throws {
-        let fixture = VWProtocolFixture(); var clock = Date()
+        let fixture = VWProtocolFixture(); var clock = ContinuousClock.now
         let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in },clock:{ clock })
         let good = try await reader.read(controllers:[.engine]); XCTAssertEqual(good.count,2)
         fixture.rejectedGroups = [108]
         let rejected = try await reader.read(controllers:[.engine])
         XCTAssertEqual(rejected.map(\.signals),[["dpfSootG":8.6]])
         let attempts = fixture.groupRequests.filter { $0 == 108 }.count
-        clock = clock.addingTimeInterval(60)
+        clock = clock.advanced(by:.seconds(60))
         let cooldown = try await reader.read(controllers:[.engine,.dsg])
         XCTAssertEqual(cooldown.count,2)
         XCTAssertEqual(fixture.groupRequests.filter { $0 == 108 }.count,attempts)
-        fixture.rejectedGroups = []; clock = clock.addingTimeInterval(240)
+        fixture.rejectedGroups = []; clock = clock.advanced(by:.seconds(240))
         let recovered = try await reader.read(controllers:[.engine])
         XCTAssertEqual(recovered.count,2)
         XCTAssertEqual(fixture.groupRequests.filter { $0 == 108 }.count,attempts+1)
     }
     @MainActor
     func testLostChannelPreservesPartialAshAndRecoversSootOnNextAttempt() async throws {
-        let fixture = VWProtocolFixture(); var clock = Date()
+        let fixture = VWProtocolFixture(); var clock = ContinuousClock.now
         let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in },clock:{ clock })
         fixture.disconnectGroup = 114
         let partial = try await reader.read(controllers:[.engine,.dsg])
         XCTAssertEqual(partial.map(\.signals),[["dpfAshML":13],["dsgFluidC":80]])
-        fixture.disconnectGroup = nil; clock = clock.addingTimeInterval(60)
+        fixture.disconnectGroup = nil; clock = clock.advanced(by:.seconds(60))
         let recovered = try await reader.read(controllers:[.engine])
         XCTAssertEqual(recovered.count,2)
+    }
+    @MainActor
+    func testControllerAndGroupRetriesIgnoreCalendarClockChanges() async throws {
+        let fixture = VWProtocolFixture()
+        var elapsed = ContinuousClock.now
+        var calendar = Date(timeIntervalSince1970:1_700_000_000)
+        let reader = VWMeasuringBlocks(exchange:fixture.command,pause:{ _ in },
+            clock:{ elapsed },sampleDate:{ calendar })
+        fixture.badEngineSetup = true
+        let failed = try await reader.read(controllers:[.engine])
+        XCTAssertTrue(failed.isEmpty)
+        fixture.badEngineSetup = false
+        calendar = calendar.addingTimeInterval(-86_400)
+        elapsed = elapsed.advanced(by:.seconds(59))
+        let early = try await reader.read(controllers:[.engine])
+        XCTAssertTrue(early.isEmpty)
+        elapsed = elapsed.advanced(by:.seconds(1))
+        let recovered = try await reader.read(controllers:[.engine])
+        XCTAssertEqual(recovered.count,2)
+        XCTAssertTrue(recovered.allSatisfy { $0.timestamp == calendar })
+
+        fixture.rejectedGroups = [108]
+        _ = try await reader.read(controllers:[.engine])
+        fixture.rejectedGroups = []
+        calendar = calendar.addingTimeInterval(172_800)
+        elapsed = elapsed.advanced(by:.seconds(299))
+        let waiting = try await reader.read(controllers:[.engine])
+        XCTAssertEqual(waiting.map(\.signals),[["dpfSootG":8.6]],"A forward calendar jump must not bypass ash backoff")
+        elapsed = elapsed.advanced(by:.seconds(1))
+        let ash = try await reader.read(controllers:[.engine])
+        XCTAssertEqual(ash.count,2)
+        XCTAssertTrue(ash.allSatisfy { $0.timestamp == calendar },"Preserve actual sample dates independently of retry timing")
+    }
+    @MainActor
+    func testRecorderPollingContinuesAcrossBackwardAndForwardCalendarChanges() async throws {
+        let transport = VWScannerFixture()
+        var elapsed = ContinuousClock.now
+        var calendar = Date(timeIntervalSince1970:1_700_000_000)
+        var samples: [OBDSample] = []
+        let scanner = ScannerRecorder(makeSession:{ transport },pollClock:{ elapsed },
+            sampleDate:{ calendar },measurementPause:{ _ in })
+        scanner.onSample = { samples.append($0) }
+        var vehicle = VehicleProfile(); vehicle.make = "Volkswagen"; vehicle.model = "Jetta"
+        vehicle.year = 2014; vehicle.engine = "TDI"; vehicle.transmission = "DSG"
+        scanner.connect(settings:ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:"SYNTHETIC"),vehicle:vehicle)
+        defer { scanner.disconnect() }
+        func waitFor(_ condition: @escaping () -> Bool) async {
+            let check = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in condition() },object:nil)
+            await fulfillment(of:[check],timeout:5)
+        }
+        await waitFor { samples.contains { $0.signals["dpfSootG"] != nil } }
+        let initialAshCount = samples.filter { $0.signals["dpfAshML"] != nil }.count
+        calendar = calendar.addingTimeInterval(-86_400)
+        elapsed = elapsed.advanced(by:.seconds(1))
+        await waitFor { samples.contains { $0.signals["rpm"] != nil && $0.timestamp == calendar } }
+        XCTAssertEqual(samples.filter { $0.signals["dpfAshML"] != nil }.count,initialAshCount)
+        calendar = calendar.addingTimeInterval(172_800)
+        elapsed = elapsed.advanced(by:.seconds(59))
+        await waitFor { samples.contains { $0.signals["dpfSootG"] != nil && $0.timestamp == calendar } }
+        XCTAssertTrue(scanner.connected,"Calendar jumps must neither stall polls nor cause false response timeouts")
+        XCTAssertEqual(transport.opens,1)
+        XCTAssertEqual(samples.filter { $0.signals["dpfAshML"] != nil }.count,initialAshCount+1)
     }
     @MainActor
     func testRecorderRetriesAfterCleanupFailureAndResumesAshSootInSameTrip() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
-        let transport = VWScannerFixture(); var clock = Date()
-        let scanner = ScannerRecorder(makeSession:{ transport },measurementClock:{ clock },measurementPause:{ _ in })
+        let transport = VWScannerFixture(); var clock = ContinuousClock.now
+        let scanner = ScannerRecorder(makeSession:{ transport },pollClock:{ clock },measurementPause:{ _ in })
         let store = AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),scanner:scanner,gps:GPSFixture(),scannerAvailable:{ _ in false })
         var vehicle = VehicleProfile(); vehicle.make = "Volkswagen"; vehicle.model = "Jetta"
         vehicle.year = 2014; vehicle.engine = "TDI"; vehicle.transmission = "DSG"
@@ -182,14 +244,15 @@ final class VWDiagnosticsTests: XCTestCase {
         let id = try XCTUnwrap(store.state.draft?.id)
         XCTAssertEqual(scanner.value("dpfAshML",at:Date()),13)
         transport.raw.badEngineSetup = true; transport.raw.restoreFailures = 2
-        clock = clock.addingTimeInterval(61)
+        clock = clock.advanced(by:.seconds(61))
         await waitFor { transport.raw.restoreFailures == 0 && scanner.value("dpfSootG",at:Date()) == nil }
         XCTAssertTrue(scanner.connected); XCTAssertTrue(store.recording)
         XCTAssertEqual(store.state.draft?.id,id); XCTAssertEqual(store.state.trips.count,savedCount)
         let count = store.state.draft?.samples?.count ?? 0
+        clock = clock.advanced(by:.seconds(1))
         await waitFor { (store.state.draft?.samples?.count ?? 0) > count }
         XCTAssertNotNil(scanner.value("rpm",at:Date()),"Ordinary polling survives enhanced cleanup recovery")
-        transport.raw.badEngineSetup = false; clock = clock.addingTimeInterval(61)
+        transport.raw.badEngineSetup = false; clock = clock.advanced(by:.seconds(61))
         await waitFor { (store.state.draft?.samples?.filter { $0.signals["dpfSootG"] != nil }.count ?? 0) >= 2 }
         XCTAssertEqual(scanner.value("dpfAshML",at:Date()),13)
         XCTAssertEqual(scanner.value("dpfSootG",at:Date()),8.6)

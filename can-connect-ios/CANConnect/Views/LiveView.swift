@@ -87,3 +87,7 @@ struct SignalPicker: View {
         InfoNote(text:"This changes only the card you selected.")
     } }
 }
+
+#if DEBUG
+#Preview("Live · Sample data") { DriveLineCanvas(tab:.live) }
+#endif

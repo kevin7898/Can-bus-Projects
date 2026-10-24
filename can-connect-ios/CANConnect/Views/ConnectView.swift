@@ -68,3 +68,7 @@ struct SettingsView: View {
         Link("View project on GitHub",destination:URL(string:"https://github.com/kevin7898/Can-bus-Projects")!).font(.system(size:13))
     }.sheet(isPresented:$garage) { GarageView() }.confirmationDialog("Remove sample trips and fill-ups?",isPresented:$removeSamples,titleVisibility:.visible) { Button("Remove samples",role:.destructive) { store.removeSamples() } } }
 }
+
+#if DEBUG
+#Preview("Connect · Sample data") { DriveLineCanvas(tab:.connect) }
+#endif
