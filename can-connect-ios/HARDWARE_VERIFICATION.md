@@ -1,6 +1,6 @@
 # Hardware acceptance — outstanding
 
-The simulator, loopback scanner fixture, unsigned device build and native Mac integration exercise software behavior. They do not prove real vehicle or iPhone acceptance. Build 2 (1.0.0) was development-signed, installed and launched on the connected iPhone on October 23, 2026. Existing trips, fills, vehicle IDs and selection were checked before/after the update and preserved; a local pre-update backup was retained outside Git. This confirms installation/startup only. GPS, scanner, vehicle and phone-to-Mac LAN acceptance are still outstanding.
+The simulator, loopback scanner fixture, unsigned device build and native Mac integration exercise software behavior. They do not prove real vehicle or iPhone acceptance. Build 2 (1.0.0) was development-signed, installed and launched on the connected iPhone on October 23, 2026. Existing trips, fills, vehicle IDs and selection were checked before/after the update and preserved; a local pre-update backup was retained outside Git. A physical-device UI test also passed manual make/model entry, keyboard dismissal, saving and switching back to the sample profile, using isolated test data. This confirms installation/startup and that onboarding path; it does not validate real telemetry. GPS, scanner, vehicle and phone-to-Mac LAN acceptance are still outstanding.
 
 Use a parked vehicle for initial checks. Keep personal VINs, routes and pairing tokens outside Git and public issue logs.
 

@@ -35,12 +35,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(manual.waitForExistence(timeout:10)); manual.tap()
         await enter("Honda",in:app.textFields["vehicle.make"],app:app)
         await enter("CB500X",in:app.textFields["vehicle.model"],app:app)
-        let save = app.buttons["onboarding.save"]
-        for _ in 0..<6 {
-            if save.isHittable { break }
-            app.scrollViews["onboarding.form"].swipeUp()
-        }
-        XCTAssertTrue(save.waitForExistence(timeout:5)); save.tap()
+        await saveVehicle(in:app)
         await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["Choose vehicle"].waitForExistence(timeout:5))
         app.buttons["Vehicle"].tap()
@@ -64,9 +59,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["onboarding.manual"].waitForExistence(timeout:10)); app.buttons["onboarding.manual"].tap()
         await enter("Test",in:app.textFields["vehicle.make"],app:app)
         await enter("Synthetic ECU",in:app.textFields["vehicle.model"],app:app)
-        let save = app.buttons["onboarding.save"]
-        for _ in 0..<6 { if save.isHittable { break }; app.scrollViews["onboarding.form"].swipeUp() }
-        save.tap()
+        await saveVehicle(in:app)
         await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["Connect"].waitForExistence(timeout:5)); app.buttons["Connect"].tap()
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","CAN recorder")).firstMatch.tap()
@@ -94,6 +87,22 @@ final class SmokeTests: XCTestCase {
         field.typeText(text)
         let entered = XCTNSPredicateExpectation(predicate:NSPredicate(format:"value == %@",text),object:field)
         await fulfillment(of:[entered],timeout:5)
+    }
+    @MainActor
+    private func saveVehicle(in app: XCUIApplication) async {
+        // Return dismisses native and third-party keyboards before reaching Save.
+        app.textFields["vehicle.model"].typeText("\n")
+        let save = app.buttons["onboarding.save"]
+        XCTAssertTrue(save.waitForExistence(timeout:5))
+        let form = app.scrollViews["onboarding.form"]
+        for _ in 0..<6 {
+            // Some device keyboards report offscreen buttons as hittable.
+            let visible = form.frame.intersection(app.frame.insetBy(dx:0,dy:20))
+            if save.isHittable && visible.contains(CGPoint(x:save.frame.midX,y:save.frame.midY)) { break }
+            form.swipeUp()
+        }
+        XCTAssertTrue(app.frame.insetBy(dx:0,dy:20).contains(CGPoint(x:save.frame.midX,y:save.frame.midY)))
+        save.tap()
     }
     @MainActor
     private func waitForOnboardingToDismiss(_ app: XCUIApplication) async {
