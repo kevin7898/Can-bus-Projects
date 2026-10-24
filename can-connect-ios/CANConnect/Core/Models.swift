@@ -112,6 +112,7 @@ struct RecordingDraft: Codable {
     var route: [RoutePoint] = []
     var samples: [OBDSample]? = nil
     var scannerTransport: ScannerConnectionKind? = nil
+    var scannerReconnectDeadline: Date? = nil
     mutating func accept(_ point: RoutePoint) {
         guard point.isValid, point.accuracy <= 50, point.timestamp >= startedAt else { return }
         if let last = route.last {

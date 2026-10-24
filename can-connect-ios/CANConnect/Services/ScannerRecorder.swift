@@ -48,9 +48,9 @@ final class ScannerRecorder: ObservableObject {
                     needsUserCorrection = true
                     throw AppFailure("Choose a real vehicle before connecting a scanner.")
                 }
-                if let expected = vehicle.vin, let detected = identity.vin, expected != detected {
+                if let expected = vehicle.vin, !expected.isEmpty, expected != identity.vin {
                     needsUserCorrection = true
-                    throw AppFailure("The scanner VIN differs from the selected vehicle. Add or choose the correct vehicle before recording.")
+                    throw AppFailure("The scanner VIN differs from the selected vehicle or could not be verified. Add or choose the correct vehicle before recording.")
                 }
                 let jetta = Jetta2014Profile.matches(vehicle)
                 let ecu: String? = jetta ? "7E8" : nil

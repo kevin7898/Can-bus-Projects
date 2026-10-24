@@ -165,3 +165,37 @@ extension RecordingDraft {
 extension Trip {
     func recordedValue(_ key: String) -> Double? { samples?.last(where:{$0.signals[key] != nil})?.signals[key] }
 }
+
+// Only real ECU responses drive automatic trip boundaries. Missing replies,
+// GPS motion and accessory availability are never engine-off evidence.
+struct ScannerTripBoundary {
+    static let reconnectGrace: TimeInterval = 120
+    private var stoppedSince: Date?
+    private var lastZero: Date?
+    private var speed: (value: Double, date: Date)?
+
+    static func engineRunning(_ sample: OBDSample) -> Bool {
+        sample.isValid && (sample.signals["rpm"] ?? 0) >= 400
+    }
+    mutating func reset() { self = ScannerTripBoundary() }
+    mutating func engineOff(after sample: OBDSample) -> Bool {
+        guard sample.isValid else { return false }
+        if let value = sample.signals["speedKph"] {
+            speed = (value,sample.timestamp)
+            if value > 0 { stoppedSince = nil; lastZero = nil }
+        }
+        guard let rpm = sample.signals["rpm"] else { return false }
+        guard rpm == 0, let speed, speed.value == 0,
+              (0...15).contains(sample.timestamp.timeIntervalSince(speed.date)) else {
+            stoppedSince = nil; lastZero = nil; return false
+        }
+        if let previous = lastZero {
+            let interval = sample.timestamp.timeIntervalSince(previous)
+            guard interval > 0 else { return false }
+            if interval > 15 { stoppedSince = nil }
+        }
+        if stoppedSince == nil { stoppedSince = sample.timestamp }
+        lastZero = sample.timestamp
+        return sample.timestamp.timeIntervalSince(stoppedSince!) >= 3
+    }
+}

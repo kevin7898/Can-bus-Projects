@@ -6,6 +6,7 @@ import UIKit
 private final class LifecycleTransport: ScannerTransport {
     var available = true
     var noData = false
+    var rpmReply = "410C0D00"
     var opens = 0
     var disconnects = 0
     var vin: String?
@@ -16,7 +17,7 @@ private final class LifecycleTransport: ScannerTransport {
     }
     func command(_ text: String) async throws -> String {
         guard available else { throw AppFailure("Synthetic connection loss") }
-        return noData ? "NO DATA" : "410C0D00"
+        return noData ? "NO DATA" : rpmReply
     }
     func disconnect() { disconnects += 1 }
 }
@@ -88,27 +89,35 @@ final class ScannerLifecycleTests: XCTestCase {
         store.finishRecording()
     }
     @MainActor
-    func testLossSavesThenBackoffReconnectStartsANewTripAndManualCancelStaysCancelled() async throws {
+    func testLossKeepsGPSAndBackoffReconnectResumesSameTripAndManualCancelStaysCancelled() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let disk = LocalStore(url:root.appendingPathComponent("state.json")); _ = try savedVehicle(disk)
         let transport = LifecycleTransport(); var accessory = true
         let scanner = ScannerRecorder(makeSession:{transport})
-        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:GPSFixture(),scannerAvailable:{ _ in accessory })
+        let gps = GPSFixture()
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:gps,scannerAvailable:{ _ in accessory })
         defer { store.disconnectScanner() }
         await until("first recording") { store.recording }
         let firstID = store.state.draft?.id
         transport.available = false
-        await until("loss saves recording") { !store.recording && !scanner.connected }
-        XCTAssertEqual(store.state.trips.first?.id,firstID)
+        await until("scanner disconnected") { !scanner.connected }
+        XCTAssertTrue(store.recording); XCTAssertTrue(store.state.trips.isEmpty)
+        XCTAssertEqual(gps.stops,0)
+        let sampleCount = store.state.draft?.samples?.count ?? 0
+        let point = RoutePoint(latitude:49,longitude:-124,timestamp:Date(),accuracy:5,speed:10)
+        gps.onPoint?(point)
+        XCTAssertEqual(store.state.draft?.route,[point])
         XCTAssertNil(store.error,"Ignition loss must save quietly without a popup")
         let attempts = transport.opens
         store.reconcileScannerConnection(at:Date())
         XCTAssertEqual(transport.opens,attempts,"Do not spin on failed connections")
         transport.available = true
         store.reconcileScannerConnection(at:Date().addingTimeInterval(61))
-        await until("automatic reconnect") { store.recording }
-        XCTAssertNotEqual(store.state.draft?.id,firstID)
+        await until("automatic reconnect") { scanner.connected && (store.state.draft?.samples?.count ?? 0) > sampleCount }
+        XCTAssertEqual(store.state.draft?.id,firstID)
+        XCTAssertEqual(gps.starts,1); XCTAssertEqual(gps.stops,0)
+        XCTAssertEqual(store.state.draft?.route,[point])
         store.finishRecording(); store.disconnectScanner()
         let afterCancel = transport.opens
         for _ in 0..<5 { store.reconcileScannerConnection(at:Date().addingTimeInterval(300)) }
@@ -192,6 +201,7 @@ final class ScannerLifecycleTests: XCTestCase {
         try Data("SYNTHETIC write failure".utf8).write(to:root)
         transport.available = false
         await until("scanner disconnect") { !scanner.connected }
+        store.finishRecording()
         XCTAssertTrue(store.recording); XCTAssertEqual(store.state.draft?.id,id)
         XCTAssertTrue(store.error?.contains("Could not save the recording") == true)
         let attempts = transport.opens
@@ -200,6 +210,144 @@ final class ScannerLifecycleTests: XCTestCase {
         try FileManager.default.removeItem(at:root)
         store.finishRecording()
         XCTAssertFalse(store.recording); XCTAssertEqual(try disk.load()?.trips.first?.id,id)
+    }
+    @MainActor
+    func testIgnitionOnlyCannotStartAndConfirmedEngineOffEndsWithoutRestarting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let disk = LocalStore(url:root.appendingPathComponent("state.json")); _ = try savedVehicle(disk)
+        let transport = LifecycleTransport(); transport.rpmReply = "410C0000"
+        let scanner = ScannerRecorder(makeSession:{transport}), gps = GPSFixture()
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:gps,scannerAvailable:{ _ in true })
+        defer { store.disconnectScanner() }
+        await until("ignition only connected") { scanner.connected }
+        try await Task.sleep(nanoseconds:600_000_000)
+        XCTAssertFalse(store.recording); XCTAssertEqual(gps.starts,0)
+        transport.rpmReply = "410C0D00"
+        await until("running engine starts trip") { store.recording }
+        let first = try XCTUnwrap(store.state.draft?.id), t = Date()
+        // Fresh stationary speed and successive genuine zero RPM responses.
+        transport.rpmReply = "410C0000"
+        scanner.onSample?(OBDSample(timestamp:t,signals:["speedKph":0],command:"010D",reply:"410D00"))
+        scanner.onSample?(OBDSample(timestamp:t,signals:["rpm":0],command:"010C",reply:"410C0000"))
+        XCTAssertTrue(store.recording)
+        scanner.onSample?(OBDSample(timestamp:t.addingTimeInterval(3),signals:["rpm":0],command:"010C",reply:"410C0000"))
+        XCTAssertFalse(store.recording); XCTAssertEqual(store.state.trips.first?.id,first)
+        XCTAssertEqual(gps.stops,1)
+        try await Task.sleep(nanoseconds:600_000_000)
+        XCTAssertFalse(store.recording,"Ignition on with engine off must not make another trip")
+        transport.rpmReply = "410C0D00"
+        await until("next engine start") { store.recording }
+        XCTAssertNotEqual(store.state.draft?.id,first)
+    }
+    @MainActor
+    func testExpiredGapDropsUnconfirmedWalkingAndDoesNotStartFromGPS() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let disk = LocalStore(url:root.appendingPathComponent("state.json")); _ = try savedVehicle(disk)
+        let transport = LifecycleTransport(), scanner = ScannerRecorder(makeSession:{transport}), gps = GPSFixture()
+        var available = true
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:gps,scannerAvailable:{ _ in available })
+        defer { store.disconnectScanner() }
+        await until("recording") { store.recording }
+        transport.available = false; available = false
+        await until("lost scanner") { !scanner.connected }
+        let draft = try XCTUnwrap(store.state.draft), end = try XCTUnwrap(draft.samples?.last?.timestamp)
+        let walk = RoutePoint(latitude:49,longitude:-124,timestamp:end.addingTimeInterval(30),accuracy:5,speed:1)
+        gps.onPoint?(walk)
+        XCTAssertEqual(store.state.draft?.route,[walk])
+        store.tick(end.addingTimeInterval(121))
+        XCTAssertFalse(store.recording); XCTAssertEqual(gps.stops,1)
+        let saved = try XCTUnwrap(store.state.trips.first)
+        XCTAssertEqual(saved.id,draft.id); XCTAssertTrue(saved.route.isEmpty)
+        XCTAssertEqual(saved.duration,end.timeIntervalSince(draft.startedAt),accuracy:0.001)
+        gps.onPoint?(walk); store.tick(end.addingTimeInterval(300))
+        XCTAssertFalse(store.recording); XCTAssertEqual(store.state.trips.count,1)
+        transport.available = true; available = true
+        store.reconcileScannerConnection(at:Date().addingTimeInterval(300))
+        await until("fresh engine starts separate trip after expired gap") { store.recording }
+        XCTAssertNotEqual(store.state.draft?.id,draft.id)
+    }
+    @MainActor
+    func testUnboundAdapterAndUnknownVINCannotAutomaticallyRecord() async throws {
+        for unknownVIN in [true,false] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at:root) }
+            let disk = LocalStore(url:root.appendingPathComponent("state.json"))
+            var vehicle = try savedVehicle(disk,settings:ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:unknownVIN ? "FIXTURE" : nil))
+            vehicle.vin = "1D4GP00R55B123456"
+            var state = try XCTUnwrap(disk.load()); state.vehicles = [vehicle]; try disk.save(state)
+            let transport = LifecycleTransport(), scanner = ScannerRecorder(makeSession:{transport}), gps = GPSFixture()
+            let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:gps,scannerAvailable:{ _ in true })
+            defer { store.disconnectScanner() }
+            if unknownVIN { await until("VIN unavailable") { transport.opens > 0 && !scanner.connecting } }
+            else { try await Task.sleep(nanoseconds:100_000_000); XCTAssertEqual(transport.opens,0) }
+            XCTAssertFalse(store.recording); XCTAssertEqual(gps.starts,0)
+        }
+    }
+    @MainActor
+    func testFailedReconnectDoesNotExtendGapAndWrongVehicleCannotAppend() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let disk = LocalStore(url:root.appendingPathComponent("state.json")); var vehicle = try savedVehicle(disk)
+        vehicle.vin = "1D4GP00R55B123456"
+        var state = try XCTUnwrap(disk.load()); state.vehicles = [vehicle]; try disk.save(state)
+        let transport = LifecycleTransport(); transport.vin = vehicle.vin
+        let scanner = ScannerRecorder(makeSession:{transport}), gps = GPSFixture()
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:gps,scannerAvailable:{ _ in true })
+        defer { store.disconnectScanner() }
+        await until("first trip") { store.recording }
+        transport.available = false
+        await until("lost ECU") { !scanner.connected }
+        let before = try XCTUnwrap(store.state.draft), deadline = try XCTUnwrap(before.scannerReconnectDeadline)
+        transport.available = true; transport.vin = "1D4GP00R55B123457"
+        store.reconcileScannerConnection(at:Date().addingTimeInterval(61))
+        await until("wrong vehicle rejected") { transport.opens > 1 && !scanner.connecting }
+        XCTAssertFalse(scanner.connected)
+        XCTAssertEqual(store.state.draft?.id,before.id)
+        XCTAssertEqual(store.state.draft?.samples,before.samples)
+        XCTAssertEqual(store.state.draft?.scannerReconnectDeadline,deadline)
+        store.tick(deadline.addingTimeInterval(1))
+        XCTAssertFalse(store.recording); XCTAssertEqual(store.state.trips.first?.id,before.id)
+    }
+    @MainActor
+    func testRecoveryAfterDisconnectExcludesUnconfirmedRouteAndDoesNotStartGPS() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let disk = LocalStore(url:root.appendingPathComponent("state.json")); _ = try savedVehicle(disk)
+        let t = Date().addingTimeInterval(-300)
+        var state = try XCTUnwrap(disk.load())
+        var draft = RecordingDraft(vehicleID:state.selectedVehicleID,source:.scanner,startedAt:t,updatedAt:t)
+        draft.accept(OBDSample(timestamp:t,signals:["rpm":800],command:"010C",reply:"SYNTHETIC"))
+        draft.scannerReconnectDeadline = t.addingTimeInterval(120)
+        draft.accept(RoutePoint(latitude:49,longitude:-124,timestamp:t.addingTimeInterval(60),accuracy:5,speed:1))
+        state.draft = draft; try disk.save(state)
+        let gps = GPSFixture()
+        let store = AppStore(disk:disk,activity:ActivitySpy(),gps:gps,scannerAvailable:{ _ in false })
+        XCTAssertFalse(store.recording); XCTAssertEqual(gps.starts,0)
+        XCTAssertEqual(store.state.trips.first?.id,draft.id)
+        XCTAssertTrue(store.state.trips.first?.route.isEmpty == true)
+        XCTAssertEqual(store.state.trips.first?.duration,0)
+    }
+    func testEngineOffNeedsRepeatedFreshZeroRPMAndStoppedVehicle() {
+        let t = Date(timeIntervalSince1970:1700000000)
+        func sample(_ seconds: Double, _ signals: [String:Double]) -> OBDSample {
+            OBDSample(timestamp:t.addingTimeInterval(seconds),signals:signals,command:"010C",reply:"SYNTHETIC")
+        }
+        var boundary = ScannerTripBoundary()
+        XCTAssertFalse(boundary.engineOff(after:sample(0,["rpm":0])))
+        XCTAssertFalse(boundary.engineOff(after:sample(1,["speedKph":0])))
+        XCTAssertFalse(boundary.engineOff(after:sample(2,["rpm":0])))
+        XCTAssertFalse(boundary.engineOff(after:sample(3,["rpm":800])))
+        XCTAssertFalse(boundary.engineOff(after:sample(4,["rpm":0])))
+        XCTAssertFalse(boundary.engineOff(after:sample(5,["speedKph":20])))
+        XCTAssertFalse(boundary.engineOff(after:sample(8,["rpm":0])))
+        boundary.reset()
+        XCTAssertFalse(boundary.engineOff(after:sample(9,["speedKph":0,"rpm":0])))
+        XCTAssertFalse(boundary.engineOff(after:sample(30,["speedKph":0,"rpm":0])))
+        XCTAssertTrue(boundary.engineOff(after:sample(33,["rpm":0])))
+        XCTAssertFalse(ScannerTripBoundary.engineRunning(sample(0,["speedKph":30])))
+        XCTAssertFalse(ScannerTripBoundary.engineRunning(sample(0,["rpm":0])))
     }
     func testLiveActivitySnapshotUsesOnlyRealCountsAndElapsedTime() {
         let date = Date(timeIntervalSince1970:1700000000)

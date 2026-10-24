@@ -35,6 +35,14 @@ final class AppStore: ObservableObject {
     private var reconnectFailures = 0
     private var nextReconnect = Date.distantPast
     private var lastCheckpoint = Date.distantPast
+    private var scannerBoundary = ScannerTripBoundary()
+    private var scannerGapDeadline: Date? {
+        get { state.draft?.scannerReconnectDeadline }
+        set { state.draft?.scannerReconnectDeadline = newValue }
+    }
+    private var pendingRecordingEnd: Date?
+    private var awaitingEngineRestart = false
+    private var recordingSaveFailed = false
     private let activity: RecordingActivityManaging
     private let disk: LocalStore
     private var ticker: AnyCancellable?
@@ -52,8 +60,10 @@ final class AppStore: ObservableObject {
         do {
             state = try disk.load() ?? SampleData.state()
             if state.regenTrackingStartedAt == nil { state.regenTrackingStartedAt = Date() }
-            if let draft = state.draft {
-                if !state.trips.contains(where: { $0.id == draft.id }) { state.trips.insert(draft.trip(endedAt:draft.updatedAt, recovered:true), at:0) }
+            if var draft = state.draft {
+                let end = draft.scannerReconnectDeadline == nil ? draft.updatedAt : (draft.samples?.last?.timestamp ?? draft.startedAt)
+                draft.route.removeAll { $0.timestamp > end }
+                if !state.trips.contains(where: { $0.id == draft.id }) { state.trips.insert(draft.trip(endedAt:end, recovered:true), at:0) }
                 state.draft = nil
             }
             try disk.save(state)
@@ -65,25 +75,40 @@ final class AppStore: ObservableObject {
         source = activeVehicle?.isSample == true ? .demo : .phoneGPS
         self.scanner.onConnected = { [weak self] in
             guard let self else { return }
-            self.automaticRecordingSuppressed = false
+            if !self.awaitingEngineRestart { self.automaticRecordingSuppressed = false }
+            self.scannerBoundary.reset()
             self.reconnectFailures = 0; self.nextReconnect = .distantPast
         }
         self.scanner.onSample = { [weak self] sample in
-            guard let self else { return }
+            guard let self, sample.isValid else { return }
+            self.expireScannerGap(at:sample.timestamp)
+            if self.awaitingEngineRestart, ScannerTripBoundary.engineRunning(sample) {
+                self.awaitingEngineRestart = false
+                self.automaticRecordingSuppressed = false
+            }
             // Start only after identity validation and a decoded response. A paired
             // adapter with the ignition off must not create empty recordings.
             if !self.recording, !self.pendingGPS, !self.automaticRecordingSuppressed,
                self.canWrite, self.scanner.connected, self.activeVehicle?.isSample == false,
-               self.scanner.vehicleID == self.state.selectedVehicleID {
+               self.scanner.vehicleID == self.state.selectedVehicleID, ScannerTripBoundary.engineRunning(sample) {
                 self.source = .scanner
                 self.state.draft = RecordingDraft(vehicleID:self.state.selectedVehicleID, source:.scanner,
                     startedAt:sample.timestamp, updatedAt:sample.timestamp,
                     scannerTransport:(self.activeVehicle?.scannerConnection ?? self.state.scanner).kind)
                 self.lastCheckpoint = .distantPast
+                self.scannerGapDeadline = nil; self.scannerBoundary.reset()
                 self.gps.start()
             }
-            guard self.state.draft?.source == .scanner else { return }
+            guard self.state.draft?.source == .scanner,
+                  self.state.draft?.vehicleID == self.scanner.vehicleID,
+                  !self.recordingSaveFailed else { return }
+            self.scannerGapDeadline = nil
             self.state.draft?.accept(sample)
+            if self.scannerBoundary.engineOff(after:sample) {
+                self.finishRecording(endedAt:sample.timestamp)
+                self.awaitingEngineRestart = true
+                return
+            }
             self.checkpoint(at:Date())
             if (self.state.draft?.samples?.count ?? 0) >= 100_000 {
                 self.finishRecording()
@@ -93,10 +118,15 @@ final class AppStore: ObservableObject {
         }
         self.scanner.onDisconnect = { [weak self] message in
             guard let self else { return }
+            self.scannerBoundary.reset()
             if self.state.draft?.source == .scanner {
-                // Genuine vehicle loss ends the trip at its last actual observation.
-                self.finishRecording(endedAt:self.state.draft?.updatedAt)
-                if self.recording { return } // Preserve an unsaved draft and its disk error.
+                // Keep GPS and the draft alive through a temporary transport loss.
+                // Repeated failed opens must not extend the same grace period.
+                if self.scannerGapDeadline == nil {
+                    let last = self.state.draft?.samples?.last?.timestamp ?? Date()
+                    self.scannerGapDeadline = last.addingTimeInterval(ScannerTripBoundary.reconnectGrace)
+                }
+                self.checkpoint(at:Date(),force:true)
             }
             if self.scanner.failureRequiresAttention { self.error = message }
             self.reconnectFailures = min(self.reconnectFailures + 1, 6)
@@ -123,7 +153,9 @@ final class AppStore: ObservableObject {
             self.save()
         }
         self.gps.onPoint = { [weak self] point in
-            guard let self, let source = self.state.draft?.source, source != .demo else { return }
+            guard let self else { return }
+            self.expireScannerGap(at:Date())
+            guard let source = self.state.draft?.source, source != .demo, !self.recordingSaveFailed else { return }
             self.state.draft?.accept(point)
             self.checkpoint(at:Date())
         }
@@ -169,6 +201,7 @@ final class AppStore: ObservableObject {
         return distance > 0 ? measured.reduce(0) { $0 + $1.distanceKM * ($1.economy ?? 0) } / distance : nil
     }
     func tick(_ date: Date) {
+        expireScannerGap(at:date)
         // Keep setup forms and native menus stable while idle. Live freshness and
         // recording timers still update every second; history refreshes each minute.
         if recording || pendingGPS || selectedTab == .live || abs(date.timeIntervalSince(now)) >= 60 { now = date }
@@ -191,8 +224,10 @@ final class AppStore: ObservableObject {
     // No background keep-alive trick: retries run while iOS schedules the app or
     // delivers accessory events. Force-quitting the app cannot be overridden.
     func reconcileScannerConnection(at date: Date) {
-        guard canWrite, let vehicle = activeVehicle, !vehicle.isSample,
-              let settings = vehicle.scannerConnection, settings.kind == .obdLinkMXPlus else { return }
+        expireScannerGap(at:date)
+        guard !recordingSaveFailed, canWrite, let vehicle = activeVehicle, !vehicle.isSample,
+              let settings = vehicle.scannerConnection, settings.kind == .obdLinkMXPlus,
+              settings.accessorySerial?.isEmpty == false else { return }
         let available = scannerAvailable(settings)
         if accessoryWasAvailable && !available {
             automaticConnectionSuppressed = false
@@ -200,16 +235,29 @@ final class AppStore: ObservableObject {
         }
         accessoryWasAvailable = available
         guard available, !automaticConnectionSuppressed, !scanner.connected, !scanner.connecting,
-              !recording, !pendingGPS, date >= nextReconnect else { return }
+              (!recording || (state.draft?.source == .scanner && state.draft?.vehicleID == vehicle.id && scannerGapDeadline != nil)),
+              !pendingGPS, date >= nextReconnect else { return }
         source = .scanner
         scanner.connect(settings:settings,vehicle:vehicle)
     }
+    private func expireScannerGap(at date: Date) {
+        guard let deadline = scannerGapDeadline, date >= deadline,
+              state.draft?.source == .scanner, !recordingSaveFailed else { return }
+        // Until the ECU returns, route points are provisional. An expired gap
+        // must not append a walk or a ride in another vehicle to this trip.
+        let end = state.draft?.samples?.last?.timestamp ?? state.draft!.startedAt
+        finishRecording(endedAt:end)
+        if !recording { awaitingEngineRestart = true }
+    }
     func disconnectScanner() {
+        if state.draft?.source == .scanner { finishRecording() }
+        awaitingEngineRestart = false
         automaticConnectionSuppressed = true
         automaticRecordingSuppressed = true
         scanner.disconnect()
     }
     private func resetScannerAutomation() {
+        scannerGapDeadline = nil; scannerBoundary.reset(); awaitingEngineRestart = false
         scanner.disconnect()
         automaticConnectionSuppressed = false; automaticRecordingSuppressed = false
         accessoryWasAvailable = false; reconnectFailures = 0; nextReconnect = .distantPast
@@ -232,7 +280,14 @@ final class AppStore: ObservableObject {
     func finishRecording(endedAt requestedEnd: Date? = nil) {
         guard var draft = state.draft else { return }
         if draft.source == .scanner { automaticRecordingSuppressed = true }
-        let endedAt = requestedEnd ?? Date()
+        let endedAt = pendingRecordingEnd ?? requestedEnd ?? Date()
+        pendingRecordingEnd = endedAt
+        // An explicit ECU boundary may precede the latest GPS callback.
+        if requestedEnd != nil || recordingSaveFailed {
+            draft.route.removeAll { $0.timestamp > endedAt }
+            draft.samples?.removeAll { $0.timestamp > endedAt }
+            draft.updatedAt = endedAt
+        }
         if draft.source == .demo {
             draft.distanceKM = max(0, endedAt.timeIntervalSince(draft.startedAt)) * 78 / 3600
             draft.route = SampleData.route(date:draft.startedAt)
@@ -242,8 +297,9 @@ final class AppStore: ObservableObject {
         next.draft = nil
         do {
             try disk.save(next)
-            gps.stop(); UIApplication.shared.isIdleTimerDisabled = false; state = next; updateLiveActivity(); notify("Recording saved on this iPhone")
-        } catch { self.error = "Could not save the recording. Keep the app open and retry Finish. \(error.localizedDescription)" }
+            gps.stop(); scannerGapDeadline = nil; scannerBoundary.reset(); recordingSaveFailed = false; pendingRecordingEnd = nil
+            UIApplication.shared.isIdleTimerDisabled = false; state = next; updateLiveActivity(); notify("Recording saved on this iPhone")
+        } catch { recordingSaveFailed = true; gps.stop(); scanner.disconnect(); self.error = "Could not save the recording. Keep the app open and retry Finish. \(error.localizedDescription)" }
     }
     func signal(_ slot: String) -> Signal { dashboard.signals[slot] ?? .rpm }
     func setSignal(_ signal: Signal, slot: String) { dashboard.signals[slot] = signal; save() }

@@ -77,7 +77,7 @@ final class ScannerTests: XCTestCase {
         XCTAssertEqual(fixture.commandCount,0); XCTAssertFalse(scanner.connected)
     }
     @MainActor
-    func testRecordingCheckpointsAndLossOfVehicleSavesRealSamples() async throws {
+    func testRecordingCheckpointsAndExpiredVehicleLossSavesRealSamples() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let fixture = FixtureScanner(); let scanner = ScannerRecorder(makeSession:{fixture})
@@ -93,8 +93,10 @@ final class ScannerTests: XCTestCase {
         store.tick(Date().addingTimeInterval(5))
         XCTAssertGreaterThan(try XCTUnwrap(disk.load()?.draft?.samples?.count),0)
         fixture.noData = true
-        let stopped = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in !store.recording },object:nil)
+        let stopped = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in !scanner.connected },object:nil)
         await fulfillment(of:[stopped],timeout:6)
+        XCTAssertTrue(store.recording,"A transport loss keeps the trip during its reconnect grace")
+        store.tick(Date().addingTimeInterval(121))
         XCTAssertFalse(store.recording)
         let trip = try XCTUnwrap(store.sortedTrips.first)
         XCTAssertEqual(trip.source,.scanner); XCTAssertFalse(trip.isSample)
