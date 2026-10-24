@@ -5,7 +5,7 @@ public enum Signal: String, Codable, CaseIterable, Identifiable {
     case mafGps, outsideC, boostAbsoluteKpa, boostCommandedKpa, boostBAbsoluteKpa, boostBCommandedKpa
     case egt1C, egt2C, egt3C, egt4C, dpfDifferentialKpa, dpfInletKpa, dpfOutletKpa
     case dpfRegenActive, dpfRegenType, dpfRegenTrigger, dpfAverageRegenMinutes, dpfAverageRegenKM
-    case dpfAshML, dsgFluidC
+    case dpfAshML, dpfSootG, dsgFluidC
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -40,6 +40,7 @@ public enum Signal: String, Codable, CaseIterable, Identifiable {
         case .dpfAverageRegenMinutes: return "Average regeneration interval"
         case .dpfAverageRegenKM: return "Average regeneration distance"
         case .dpfAshML: return "DPF ash volume"
+        case .dpfSootG: return "DPF soot mass"
         case .dsgFluidC: return "DSG fluid temperature"
         }
     }
@@ -59,6 +60,7 @@ public enum Signal: String, Codable, CaseIterable, Identifiable {
         case .dpfAverageRegenMinutes: return "min"
         case .dpfAverageRegenKM: return "km"
         case .dpfAshML: return "mL"
+        case .dpfSootG: return "g"
         }
     }
 }

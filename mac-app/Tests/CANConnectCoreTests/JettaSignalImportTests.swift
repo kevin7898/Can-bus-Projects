@@ -6,7 +6,7 @@ final class JettaSignalImportTests: XCTestCase {
         let fields: [String:Double] = ["rpm":831.5,"outsideC":10,"mafGps":7.19,"boostAbsoluteKpa":100.5,"boostCommandedKpa":101.2,
             "egt1C":170.4,"egt2C":144.4,"egt3C":135.6,"egt4C":120.1,"dpfDifferentialKpa":-0.01,
             "dpfRegenActive":0,"dpfRegenType":0,"dpfRegenTrigger":43.13725490196079,"dpfAverageRegenKM":205,
-            "dpfAshML":13,"dsgFluidC":80]
+            "dpfAshML":13,"dpfSootG":8.6,"dsgFluidC":80]
         let timestamp = 1700000000.123
         let payload = try JSONSerialization.data(withJSONObject:["schemaVersion":1,"source":"OBDLink MX+ · Bluetooth","samples":[["timestamp":timestamp,"signals":fields,"command":"0178","reply":"SYNTHETIC FIXTURE","obdResponseHeader":"7E8"]]])
         let vehicle=UUID(),receipt=UUID()
