@@ -20,7 +20,7 @@ final class ScannerRecorder: ObservableObject {
     init(makeSession: (@MainActor () -> ScannerTransport)? = nil) { self.makeSession = makeSession }
 
     func value(_ key: String, at date: Date) -> Double? {
-        guard connected, let reading = readings[key], (0...VWMeasurementDecoder.freshness(for:key)).contains(date.timeIntervalSince(reading.date)) else { return nil }
+        guard connected, let reading = readings[key], (0...max(OBDDecoder.freshness(for:key),VWMeasurementDecoder.freshness(for:key))).contains(date.timeIntervalSince(reading.date)) else { return nil }
         return reading.value
     }
     func connect(settings: ScannerSettings, vehicle: VehicleProfile) {
@@ -94,6 +94,9 @@ final class ScannerRecorder: ObservableObject {
                 self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals"
                 self.onConnected?()
                 var nextRead: [Int:Date] = [:]
+                // A generic ECU exposing only slow PIDs must not time out before
+                // its next scheduled response. RPM-capable ECUs retain 20 seconds.
+                let responseTimeout = max(20,(pids.map { OBDDecoder.pollInterval(pid:$0.pid) }.min() ?? 3)+15)
                 var lastReceived = Date()
                 var missing = Set<Int>()
                 let vw = VWMeasuringBlocks { try await self.exchange($0,transport:transport) }
@@ -110,8 +113,7 @@ final class ScannerRecorder: ObservableObject {
                             for (key,value) in sample.signals { self.readings[key] = (value,sample.timestamp) }
                             lastReceived = sample.timestamp; self.onSample?(sample)
                         }
-                        let fast = [0x0C,0x0D,0x5E,0x70,0x78,0x7A,0x04,0x10].contains(definition.pid)
-                        nextRead[definition.pid] = Date().addingTimeInterval(fast ? 0.5 : 3)
+                        nextRead[definition.pid] = Date().addingTimeInterval(OBDDecoder.pollInterval(pid:definition.pid))
                         try await Task.sleep(nanoseconds:25_000_000)
                     }
                     let due = enhancedControllers.filter { Date() >= (nextEnhanced[$0] ?? .distantPast) }
@@ -137,7 +139,7 @@ final class ScannerRecorder: ObservableObject {
                         }
                         for controller in due { nextEnhanced[controller] = Date().addingTimeInterval(controller.pollInterval) }
                     }
-                    guard missing.count < pids.count, Date().timeIntervalSince(lastReceived) < 20 else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
+                    guard missing.count < pids.count, Date().timeIntervalSince(lastReceived) < responseTimeout else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
                     try await Task.sleep(nanoseconds:50_000_000)
                 }
             } catch is CancellationError {} catch {

@@ -60,3 +60,11 @@ Physical probe values were 39 mL ash and 11.1 g soot; these are private acceptan
 Signal-reference facts: [2013 Jetta TDI display](https://github.com/seishuku/teensycanbusdisplay/tree/e6df5a54c18a8ede47ad4dcdc2f86aab48bff339), `main.c` selects block 72 hex/index 5 for soot and `vwtpkwp2k.c` identifies typed grams. No transport implementation was copied.
 
 The installed standalone build 11 subsequently recorded four consecutive normal polling cycles at 39 mL ash and 11.1 g soot, alongside actual engine RPM and DSG temperature in the same active recording. The cycles were roughly 67–70 seconds apart, including protocol switching and other work. All 20 pre-update saved trips were retained. Background/lock continuity with this new quiet interval and trusted-tool accuracy remain to be verified.
+
+## Build 13: polling by rate of change
+
+Ash and soot retain their 60-second post-completion schedule. Ambient temperature and barometric pressure now use 60 seconds; tank fuel level uses 30 seconds. Each is read immediately on connection, and its display freshness includes 15 seconds of scheduling/protocol-switch allowance. Disconnect or a missing response clears the value; recordings contain only actual received samples. RPM, speed, fuel rate, engine load, airflow, boost, DPF differential pressure and exhaust temperatures keep their faster schedule; regeneration status/trigger remains on the three-second schedule.
+
+Soot mass in grams, ECU regeneration trigger in percent, and ash volume in mL remain distinct. No calibrated soot-mass denominator or ash capacity has been verified for this ECU software, so the app does not label either as physical DPF fullness or remaining filter life. General VW training describes load-dependent regeneration and separate soot models, but is not a verified threshold for this calibration: [VW SSP 826803](https://www.vaglinks.com/docs/ssp/VWUSA.COM_SSP_826803_2.0L_TDI.pdf). A future derived percentage must identify its reference threshold and keep the raw grams.
+
+Synthetic transport checks cover immediate slow readings, repeated fast RPM without repeated slow queries, expiration, disconnect clearing and absence of fabricated recording samples. The new cadence still needs a timed on-car check. Layout, default cards and styling are unchanged.

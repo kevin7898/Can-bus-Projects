@@ -127,3 +127,53 @@ extension JettaReadingsTests {
         XCTAssertFalse(transport.commands.contains {$0.hasPrefix("22")},"Unsupported VW candidates must not be queried on every connection")
     }
 }
+
+@MainActor
+private final class SlowReadingsFixture: ScannerTransport {
+    var commands: [String] = []
+    func open(host: String, port: UInt16) async throws -> ScannerIdentity {
+        ScannerIdentity(vin:nil,adapter:"SYNTHETIC",vehicleProtocol:"ISO 15765-4 CAN 11/500",supportedPIDs:[0x0C,0x46,0x33,0x2F])
+    }
+    func command(_ text: String) async throws -> String {
+        commands.append(text)
+        switch text {
+        case "010C": return "410C0D00"
+        case "0146": return "41463C"
+        case "0133": return "413364"
+        case "012F": return "412F80"
+        default: return "OK"
+        }
+    }
+    func disconnect() {}
+}
+extension JettaReadingsTests {
+    @MainActor
+    func testSlowReadingsRemainVisibleWithoutRepeatedPollingOrSyntheticSamples() async throws {
+        let fixture = SlowReadingsFixture(); let scanner = ScannerRecorder(makeSession:{fixture})
+        let ready = expectation(description:"all slow readings plus repeated RPM")
+        var samples: [OBDSample] = []
+        scanner.onSample = { sample in
+            samples.append(sample)
+            if samples.filter({$0.signals["rpm"] != nil}).count == 3 { ready.fulfill() }
+        }
+        scanner.connect(settings:ScannerSettings(host:"fixture"),vehicle:VehicleProfile())
+        await fulfillment(of:[ready],timeout:5)
+        scanner.onSample = nil
+        for (key,command,limit) in [("outsideC","0146",75.0),("barometricKpa","0133",75.0),("fuelPercent","012F",45.0)] {
+            let sample = try XCTUnwrap(samples.first(where:{$0.signals[key] != nil}))
+            XCTAssertEqual(fixture.commands.filter{$0 == command}.count,1)
+            XCTAssertEqual(samples.filter{$0.signals[key] != nil}.count,1)
+            XCTAssertEqual(scanner.value(key,at:sample.timestamp.addingTimeInterval(limit-1)),sample.signals[key])
+            XCTAssertNil(scanner.value(key,at:sample.timestamp.addingTimeInterval(limit+1)))
+        }
+        XCTAssertEqual(OBDDecoder.pollInterval(pid:0x46),60)
+        XCTAssertEqual(OBDDecoder.pollInterval(pid:0x33),60)
+        XCTAssertEqual(OBDDecoder.pollInterval(pid:0x2F),30)
+        XCTAssertEqual(OBDDecoder.pollInterval(pid:0x7A),0.5)
+        XCTAssertEqual(OBDDecoder.pollInterval(pid:0x8B),3)
+        XCTAssertEqual(VWController.engine.pollInterval,60)
+        XCTAssertEqual(OBDDecoder.freshness(for:"rpm"),10)
+        scanner.disconnect()
+        XCTAssertNil(scanner.value("outsideC",at:Date()))
+    }
+}

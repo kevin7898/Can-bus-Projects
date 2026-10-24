@@ -58,6 +58,22 @@ enum OBDDecoder {
         "dpfAverageRegenMinutes":("Average regeneration interval","min"), "dpfAverageRegenKM":("Average regeneration distance","km"),
         "dpfAshML":("DPF ash volume","mL"), "dpfSootG":("DPF soot mass","g"), "dsgFluidC":("DSG fluid temperature","°C")
     ]
+    // Slow environmental/tank values do not need to compete with live engine
+    // readings. All PIDs still run immediately on a new connection.
+    static func pollInterval(pid: Int) -> TimeInterval {
+        switch pid {
+        case 0x46,0x33: return 60
+        case 0x2F: return 30
+        case 0x0C,0x0D,0x5E,0x70,0x78,0x7A,0x04,0x10: return 0.5
+        default: return 3
+        }
+    }
+    static func freshness(for key: String) -> TimeInterval {
+        guard let definition = definitions.first(where:{signalKeys(pid:$0.pid).contains(key)}) else { return 10 }
+        let interval = pollInterval(pid:definition.pid)
+        // Include the periodic VW quiet interval and protocol-switching time.
+        return interval >= 30 ? interval+15 : 10
+    }
     static let keys = Set(labels.keys)
     static func signalKeys(pid: Int) -> Set<String> {
         switch pid {
