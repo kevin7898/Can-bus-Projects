@@ -321,6 +321,9 @@ final class AppStore: ObservableObject {
         resetScannerAutomation(); source = .demo
     }
     func reading(_ key: String) -> Double? { source == .scanner ? scanner.value(key,at:Date()) : nil }
+    // User-facing fullness is the ECU's normalized regeneration trigger, not a
+    // guessed grams-to-capacity conversion. Retain the actual value, no UI clamp.
+    var sootFullnessText: String { reading("dpfRegenTrigger")?.text(0) ?? "—" }
     func signalText(_ signal: Signal) -> String {
         if source == .demo { return signal.sample }
         switch signal {

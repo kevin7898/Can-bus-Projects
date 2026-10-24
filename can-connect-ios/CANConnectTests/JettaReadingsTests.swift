@@ -110,6 +110,25 @@ private final class TargetedJettaFixture: ScannerTransport {
 
 extension JettaReadingsTests {
     @MainActor
+    func testCombinedSootCardUsesECUPercentIndependentlyOfGrams() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let fixture = TargetedJettaFixture(); let scanner = ScannerRecorder(makeSession:{fixture})
+        let store = AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),scanner:scanner,scannerAvailable:{_ in false})
+        store.source = .scanner
+        XCTAssertEqual(store.sootFullnessText,"—")
+        let ready = expectation(description:"ECU trigger received")
+        scanner.onSample = { if $0.signals["dpfRegenTrigger"] != nil { ready.fulfill() } }
+        var vehicle = VehicleProfile(); vehicle.make="Volkswagen";vehicle.model="Jetta";vehicle.year=2014;vehicle.engine="TDI";vehicle.transmission="DSG"
+        scanner.connect(settings:ScannerSettings(transport:.obdLinkMXPlus),vehicle:vehicle)
+        await fulfillment(of:[ready],timeout:3)
+        scanner.onSample = nil
+        XCTAssertEqual(store.sootFullnessText,"100")
+        XCTAssertEqual(store.signalText(.sootMass),"—","Percent must not invent grams")
+        store.source = .phoneGPS; XCTAssertEqual(store.sootFullnessText,"—")
+        store.source = .scanner; scanner.disconnect(); XCTAssertEqual(store.sootFullnessText,"—")
+    }
+    @MainActor
     func testMatchingProfileSelectsEngineAndPollsAdvertisedExtendedReadings() async throws {
         let transport = TargetedJettaFixture();let scanner = ScannerRecorder(makeSession:{transport})
         var vehicle = VehicleProfile();vehicle.make="Volkswagen";vehicle.model="Jetta";vehicle.year=2014;vehicle.engine="TDI";vehicle.transmission="DSG"

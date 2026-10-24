@@ -29,6 +29,28 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["Logbook"].isSelected)
     }
     @MainActor
+    func testSootCardIncludesFullnessWithoutChangingCardSize() async {
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
+        XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))
+        app.buttons["Live"].tap()
+        let card = app.buttons["signal-card.drive.0"]
+        XCTAssertTrue(card.waitForExistence(timeout:5))
+        let original = card.frame
+        card.tap()
+        let choice = app.buttons.containing(.staticText,identifier:"DPF soot mass").firstMatch
+        for _ in 0..<12 {
+            if choice.exists && choice.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(choice.waitForExistence(timeout:3)); choice.tap()
+        XCTAssertTrue(card.waitForExistence(timeout:5))
+        XCTAssertTrue(card.label.contains("percent full"))
+        XCTAssertTrue(card.label.contains("ECU regeneration trigger"))
+        XCTAssertEqual(card.frame.height,original.height,accuracy:1)
+        XCTAssertEqual(card.frame.width,original.width,accuracy:1)
+        let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "Soot grams and fullness in existing card — unavailable sample values"; shot.lifetime = .keepAlways; add(shot)
+    }
+    @MainActor
     func testManualVehicleOnboardingAndVehicleSwitch() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing","--show-onboarding"]; app.launch()
         let manual = app.buttons["onboarding.manual"]
