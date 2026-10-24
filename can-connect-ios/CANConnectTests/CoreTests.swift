@@ -59,4 +59,13 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(loaded.trips,state.trips)
         XCTAssertEqual(loaded.preferences.signals["drive.0"],.voltage)
     }
+    func testGPSWarmupRejectsCachedAndPoorFixesUntilFreshPoint() {
+        let began = Date(timeIntervalSince1970:1_700_000_000)
+        XCTAssertFalse(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(-1),accuracy:9,beganAt:began,now:began.addingTimeInterval(1)))
+        XCTAssertTrue(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(1),accuracy:9,beganAt:began,now:began.addingTimeInterval(2)))
+        XCTAssertFalse(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(1),accuracy:51,beganAt:began,now:began.addingTimeInterval(2)))
+        XCTAssertFalse(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(1),accuracy:-1,beganAt:began,now:began.addingTimeInterval(2)))
+        XCTAssertFalse(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(1),accuracy:9,beganAt:began,now:began.addingTimeInterval(30)))
+    }
+
 }

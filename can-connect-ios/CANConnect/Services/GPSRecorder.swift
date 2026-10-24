@@ -11,6 +11,7 @@ final class GPSRecorder: NSObject, ObservableObject, @preconcurrency CLLocationM
     var onFailure: ((String) -> Void)?
     private let manager = CLLocationManager()
     private var wantsRecording = false
+    private var updatesBeganAt: Date?
     // Core Location delivers delegate calls on the run loop where its manager was created.
     // This manager is created on the main actor; the conformance checks that at runtime.
     override init() {
@@ -31,6 +32,7 @@ final class GPSRecorder: NSObject, ObservableObject, @preconcurrency CLLocationM
     }
     func stop() {
         wantsRecording = false
+        updatesBeganAt = nil
         manager.stopUpdatingLocation()
         manager.allowsBackgroundLocationUpdates = false
         speedKMH = nil
@@ -38,7 +40,11 @@ final class GPSRecorder: NSObject, ObservableObject, @preconcurrency CLLocationM
         status = "Ready when you are"
     }
     private func beginUpdates() {
-        guard wantsRecording else { return }
+        guard wantsRecording, updatesBeganAt == nil else { return }
+        updatesBeganAt = Date()
+        // A cached pre-recording fix must not strand a stationary recording behind
+        // the movement filter. Restore the filter after obtaining a fresh point.
+        manager.distanceFilter = kCLDistanceFilterNone
         manager.allowsBackgroundLocationUpdates = true
         manager.showsBackgroundLocationIndicator = true
         status = "Waiting for a GPS fix"
@@ -55,13 +61,17 @@ final class GPSRecorder: NSObject, ObservableObject, @preconcurrency CLLocationM
         }
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard wantsRecording else { return }
-        for location in locations where abs(location.timestamp.timeIntervalSinceNow) < 15 && location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 50 {
+        guard wantsRecording, let updatesBeganAt else { return }
+        for location in locations where Self.acceptsFix(timestamp:location.timestamp,accuracy:location.horizontalAccuracy,beganAt:updatesBeganAt,now:Date()) {
+            manager.distanceFilter = 5
             lastFix = location.timestamp
             speedKMH = location.speed >= 0 && location.speed <= 80 ? location.speed * 3.6 : nil
             status = "GPS active · ±\(Int(location.horizontalAccuracy)) m"
             onPoint?(RoutePoint(latitude:location.coordinate.latitude, longitude:location.coordinate.longitude, timestamp:location.timestamp, accuracy:location.horizontalAccuracy, speed:location.speed >= 0 ? location.speed : nil))
         }
+    }
+    nonisolated static func acceptsFix(timestamp: Date, accuracy: Double, beganAt: Date, now: Date) -> Bool {
+        timestamp >= beganAt && abs(timestamp.timeIntervalSince(now)) < 15 && accuracy.isFinite && (0...50).contains(accuracy)
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         if (error as? CLError)?.code == .locationUnknown { status = "Waiting for a GPS fix"; speedKMH = nil }
