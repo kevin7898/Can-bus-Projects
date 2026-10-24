@@ -1,15 +1,15 @@
 name: CAN CONNECT Mac
 on:
   push:
-    paths: ['mac-app/**', '.github/workflows/mac-app.yml']
+    paths: ['mac-app/**', 'branding/driveline/**', '.github/workflows/mac-app.yml']
   pull_request:
-    paths: ['mac-app/**', '.github/workflows/mac-app.yml']
+    paths: ['mac-app/**', 'branding/driveline/**', '.github/workflows/mac-app.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   build-and-test:
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

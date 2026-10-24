@@ -21,19 +21,19 @@ import AppKit
         }
     }
     var body:some Scene {
-        WindowGroup("CAN / CONNECT",id:"main") {
+        WindowGroup("DriveLine",id:"main") {
             RootView().environmentObject(store).preferredColorScheme(.dark).frame(minWidth:1080,minHeight:720)
         }.defaultSize(width:1540,height:1000)
             .commands {
                 CommandGroup(after:.newItem) { Button("Import recordings…") { store.importFiles() }.keyboardShortcut("i",modifiers:.command);Button("Open data folder") { store.openLibrary() } }
             }
-        MenuBarExtra("CAN / CONNECT",systemImage:"waveform.path.ecg") { MenuBarContent().environmentObject(store) }
+        MenuBarExtra("DriveLine",systemImage:"waveform.path.ecg") { MenuBarContent().environmentObject(store) }
     }
 }
 struct MenuBarContent:View {
     @EnvironmentObject var store:AppStore
     @Environment(\.openWindow) var openWindow
-    var body:some View { Button("Open CAN / CONNECT") { openWindow(id:"main");NSApp.activate(ignoringOtherApps:true) };Text("Server: "+store.serverStatus);Divider();Button("Import recordings…") { store.importFiles() };Button(store.ingestionPaused ? "Resume ingestion":"Pause ingestion") { store.togglePause() };Divider();Button("Quit CAN / CONNECT") { NSApp.terminate(nil) } }
+    var body:some View { Button("Open DriveLine") { openWindow(id:"main");NSApp.activate(ignoringOtherApps:true) };Text("Server: "+store.serverStatus);Divider();Button("Import recordings…") { store.importFiles() };Button(store.ingestionPaused ? "Resume ingestion":"Pause ingestion") { store.togglePause() };Divider();Button("Quit DriveLine") { NSApp.terminate(nil) } }
 }
 struct RootView:View {
     @EnvironmentObject var store:AppStore
@@ -55,7 +55,7 @@ struct RootView:View {
     }
     var sidebar:some View {
         VStack(alignment:.leading,spacing:18) {
-            Text("CAN / CONNECT").font(.system(size:11,weight:.semibold)).tracking(2).padding(.top,8)
+            Text("DriveLine").font(.system(size:11,weight:.semibold)).tracking(2).padding(.top,8)
             VStack(alignment:.leading,spacing:5) {
                 Text("YOUR GARAGE").font(.system(size:9)).tracking(1.5).foregroundStyle(Theme.muted)
                 Picker("Vehicle",selection:Binding(get:{store.state.selectedVehicleID},set:{ if let id = $0 { store.selectVehicle(id) } })) { if store.state.vehicles.isEmpty { Text("Add a vehicle").tag(nil as UUID?) };ForEach(store.state.vehicles) { vehicle in Text(vehicle.name).tag(Optional(vehicle.id)) } }.labelsHidden()
