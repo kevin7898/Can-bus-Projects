@@ -69,6 +69,13 @@ final class RegenCyclesTests: XCTestCase {
         XCTAssertEqual(analyze(draft.trip(endedAt:draft.updatedAt,recovered:true)).first?.outcome,.interrupted)
         XCTAssertEqual(RegenAnalyzer.history(trips:[t],vehicleID:vehicle,since:base,draft:draft).count,1)
     }
+    func testEngineStopAtInactiveTransitionIsInterruptedButStaleZeroRPMIsNotReused() {
+        let statuses: [(Double,Double)] = [(0,0),(3,1),(6,1),(9,0),(12,0)]
+        XCTAssertEqual(analyze(trip(statuses,extra:[sample(8,["rpm":0])])).first?.outcome,.interrupted)
+        XCTAssertEqual(analyze(trip(statuses,extra:[sample(0,["rpm":0]),sample(8,["rpm":1800])])).first?.outcome,.completed)
+        let later: [(Double,Double)] = [(0,0),(20,0),(23,1),(26,1),(29,0),(32,0)]
+        XCTAssertEqual(analyze(trip(later,extra:[sample(0,["rpm":0])])).first?.outcome,.completed)
+    }
     func testOldStateLoadsWithoutBaseline() throws {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with:JSONEncoder().encode(StoredState())) as? [String:Any])
         object.removeValue(forKey:"regenTrackingStartedAt")

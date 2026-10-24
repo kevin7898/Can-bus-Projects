@@ -85,8 +85,11 @@ enum RegenAnalyzer {
             } else {
                 if var c = candidate {
                     if let end = c.firstInactive {
-                        let outcome: RegenCycle.Outcome = c.activeCount < 2 ? .unconfirmed : c.priorInactive == nil ? .partial : .completed
-                        let reason = outcome == .completed ? "Inactive → active → inactive observed; end confirmed twice" : outcome == .partial ? "Recording began during regeneration; start not observed" : "Only one active-status response; cycle not confirmed"
+                        // An ECU can keep answering briefly after engine stop. Two
+                        // inactive flags in that case do not establish a finished regen.
+                        let stopped = readings(near:end,segmentEnd:sample.timestamp)["rpm"]?.value == 0
+                        let outcome: RegenCycle.Outcome = stopped ? .interrupted : c.activeCount < 2 ? .unconfirmed : c.priorInactive == nil ? .partial : .completed
+                        let reason = stopped ? "Engine stopped at the end transition; regeneration completion not confirmed" : outcome == .completed ? "Inactive → active → inactive observed; end confirmed twice" : outcome == .partial ? "Recording began during regeneration; start not observed" : "Only one active-status response; cycle not confirmed"
                         finish(c,at:end,outcome:outcome,reason:reason,segmentEnd:sample.timestamp)
                         candidate = nil
                     } else { c.firstInactive = sample.timestamp; candidate = c }
