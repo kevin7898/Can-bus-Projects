@@ -43,7 +43,7 @@ struct RecordingWidget: Widget {
                         }
                         Spacer()
                         if !context.attributes.countUnit.isEmpty { Text("\(context.state.responses) \(context.attributes.countUnit)").font(.caption).foregroundStyle(.secondary) }
-                    }.padding(.top,4)
+                    }.padding(.top,4).padding(.horizontal,8)
                 }
             } compactLeading: {
                 Image(systemName:context.isStale ? "pause.circle" : "waveform.path.ecg").foregroundStyle(accent)
