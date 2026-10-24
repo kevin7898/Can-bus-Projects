@@ -87,7 +87,7 @@ protocol AccessoryStreams: AnyObject {
 @MainActor
 final class MXPlusStreams: NSObject, AccessoryStreams, @preconcurrency StreamDelegate {
     var onEvent: ((Stream.Event) -> Void)?
-    private let session: EASession
+    private var session: EASession?
     private let input: InputStream
     private let output: OutputStream
     init(accessory: EAAccessory) throws {
@@ -126,6 +126,8 @@ final class MXPlusStreams: NSObject, AccessoryStreams, @preconcurrency StreamDel
         input.delegate = nil; output.delegate = nil
         input.close(); output.close()
         input.remove(from:.main,forMode:.common); output.remove(from:.main,forMode:.common)
+        // Release iOS's protocol ownership now, before another connection starts.
+        session = nil
     }
 }
 

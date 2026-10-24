@@ -11,6 +11,7 @@ final class ScannerRecorder: ObservableObject {
     var onSample: ((OBDSample) -> Void)?
     var onDisconnect: ((String) -> Void)?
     private var work: Task<Void,Never>?
+    private var pendingTeardown: Task<Void,Never>?
     private var session: ScannerTransport?
     private var journal: ScannerJournal?
     private let makeSession: (@MainActor () -> ScannerTransport)?
@@ -22,6 +23,7 @@ final class ScannerRecorder: ObservableObject {
     }
     func connect(settings: ScannerSettings, vehicle: VehicleProfile) {
         disconnect()
+        let previous = pendingTeardown
         journal = makeSession == nil ? ScannerJournal() : nil
         let transport: ScannerTransport
         if let makeSession { transport = makeSession() }
@@ -32,6 +34,10 @@ final class ScannerRecorder: ObservableObject {
         work = Task { [weak self] in
             guard let self else { return }
             do {
+                // Cancellation cleanup must finish before iOS opens the same MFi protocol again.
+                await previous?.value
+                try Task.checkCancellation()
+                self.pendingTeardown = nil
                 let identity = try await transport.open(host:settings.host,port:settings.port)
                 try Task.checkCancellation()
                 guard !vehicle.isSample else { throw AppFailure("Choose a real vehicle before connecting a scanner.") }
@@ -90,7 +96,8 @@ final class ScannerRecorder: ObservableObject {
             } catch is CancellationError {} catch {
                 guard !Task.isCancelled else { return }
                 self.connected = false; self.connecting = false; self.readings = [:]; self.vehicleID = nil
-                self.status = error.localizedDescription; transport.disconnect(); self.onDisconnect?(self.status)
+                self.status = error.localizedDescription; self.journal?.append(command:"ERROR",reply:self.status)
+                transport.disconnect(); self.onDisconnect?(self.status)
             }
         }
     }
@@ -100,7 +107,8 @@ final class ScannerRecorder: ObservableObject {
         return reply
     }
     func disconnect() {
-        work?.cancel(); work = nil; session?.disconnect(); session = nil
+        if let work { work.cancel(); pendingTeardown = work }
+        work = nil; session?.disconnect(); session = nil
         connected = false; connecting = false; vehicleID = nil; readings = [:]; status = "Not connected"; journal = nil
     }
 }

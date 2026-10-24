@@ -51,8 +51,6 @@ protocol ScannerTransport: AnyObject {
 @MainActor
 enum ELMIdentification {
     static func read(command: (String) async throws -> String) async throws -> ScannerIdentity {
-        // Reset adapter state left by an interrupted app/session before identification.
-        _ = try await command("ATZ")
         let adapter = try await command("ATI")
         for setting in ["ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0"] {
             let response = try await command(setting)

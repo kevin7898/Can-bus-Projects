@@ -38,7 +38,6 @@ final class MXPlusTransportTests: XCTestCase {
         let streams = FixtureAccessoryStreams()
         streams.response = { command in
             switch command {
-            case "ATZ": return "ELM327 SYNTHETIC RESET\r>"
             case "ATI": return "ELM327 SYNTHETIC MX+ STREAM\r>"
             case "0902": return "NO DATA\r>"
             case "0100": return "41 00 00 18 00 00\r>"
@@ -55,7 +54,7 @@ final class MXPlusTransportTests: XCTestCase {
         let sample = try await channel.command("010C")
         XCTAssertEqual(OBDDecoder.decode(sample,pid:12)?.signals["rpm"],1726)
         let commands = String(decoding:streams.written,as:UTF8.self).split(separator:"\r").map(String.init)
-        XCTAssertEqual(commands,["ATZ","ATI","ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0","0902","0100","ATDP","010C"])
+        XCTAssertEqual(commands,["ATI","ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0","0902","0100","ATDP","010C"])
         XCTAssertFalse(commands.contains("04"))
     }
     @MainActor

@@ -21,6 +21,7 @@ final class ScannerJournal {
     init() {
         url = try? FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
             .appendingPathComponent("CANConnect/scanner-diagnostics.json")
+        append(command:"SESSION",reply:"Preparing scanner connection")
     }
     func append(command: String, reply: String) {
         entries.append(Exchange(timestamp:Date(),command:command,reply:reply))

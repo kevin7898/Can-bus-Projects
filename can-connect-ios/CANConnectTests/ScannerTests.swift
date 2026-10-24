@@ -129,3 +129,63 @@ final class ScannerTests: XCTestCase {
     }
 
 }
+
+@MainActor
+private final class CancelledSessionFixture: ScannerTransport {
+    enum Phase { case opening, command, replacement }
+    let phase: Phase
+    let entered: XCTestExpectation?
+    var cleanupFinished = false
+    var canOpen: (() -> Bool)?
+    var openedBeforeCleanup = false
+    init(_ phase: Phase, entered: XCTestExpectation? = nil) { self.phase = phase; self.entered = entered }
+    private func pendingUntilCancelled() async throws {
+        entered?.fulfill()
+        do { try await Task.sleep(nanoseconds:10_000_000_000) }
+        catch {
+            // Model ownership held by an in-flight operation until its cancellation unwinds.
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.03) { continuation.resume() }
+            }
+            cleanupFinished = true
+            throw CancellationError()
+        }
+    }
+    func open(host: String, port: UInt16) async throws -> ScannerIdentity {
+        if phase == .replacement { openedBeforeCleanup = !(canOpen?() ?? false) }
+        if phase == .opening { try await pendingUntilCancelled() }
+        return ScannerIdentity(vin:nil,adapter:"SYNTHETIC SESSION",vehicleProtocol:"ISO 15765-4 CAN",supportedPIDs:[12])
+    }
+    func command(_ text: String) async throws -> String {
+        if phase == .command { try await pendingUntilCancelled() }
+        return "410C0D00"
+    }
+    func disconnect() {}
+}
+
+extension ScannerTests {
+    @MainActor
+    func testCancelOpeningOrPendingReadBeforeImmediateReconnect() async throws {
+        for (phase,explicitCancel) in [(CancelledSessionFixture.Phase.opening,false),(.opening,true),(.command,false),(.command,true)] {
+            let entered=expectation(description:"first session entered pending operation")
+            let first=CancelledSessionFixture(phase,entered:entered),next=CancelledSessionFixture(.replacement)
+            next.canOpen = { first.cleanupFinished }
+            var created=0
+            let scanner=ScannerRecorder(makeSession:{ created+=1;return created==1 ? first:next })
+            var vehicle=VehicleProfile();vehicle.make="Test";vehicle.model="Cancellation fixture"
+            let settings=ScannerSettings(transport:.obdLinkMXPlus)
+            scanner.connect(settings:settings,vehicle:vehicle)
+            await fulfillment(of:[entered],timeout:2)
+            let gotReplacement=expectation(description:"replacement supplies real fixture reply")
+            gotReplacement.assertForOverFulfill=false
+            scanner.onSample = { _ in gotReplacement.fulfill() }
+            if explicitCancel { scanner.disconnect() }
+            scanner.connect(settings:settings,vehicle:vehicle)
+            await fulfillment(of:[gotReplacement],timeout:3)
+            XCTAssertTrue(first.cleanupFinished)
+            XCTAssertFalse(next.openedBeforeCleanup,"A replacement session must await old task teardown")
+            XCTAssertTrue(scanner.connected);XCTAssertEqual(scanner.value("rpm",at:Date()),832)
+            scanner.disconnect()
+        }
+    }
+}
