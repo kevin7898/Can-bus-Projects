@@ -3,6 +3,19 @@ import Network
 
 final class SmokeTests: XCTestCase {
     @MainActor
+    func testRegenerationComparisonIsReachableAndDoesNotCountSampleTrips() async {
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
+        XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))
+        app.buttons["Vehicle"].tap(); app.buttons["DPF"].tap()
+        let compare = app.buttons["regen.compare"]
+        XCTAssertTrue(compare.waitForExistence(timeout:5)); compare.tap()
+        XCTAssertTrue(app.staticTexts["Latest complete cycles · 0 / 10"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Interrupted / incomplete · 0"].exists)
+        XCTAssertFalse(app.buttons["Export cycle comparison"].isEnabled)
+        let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "Automatic regeneration comparison — no invented sample cycles"; shot.lifetime = .keepAlways; add(shot)
+    }
+
+    @MainActor
     func testTabsPagesAndSampleRecording() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))

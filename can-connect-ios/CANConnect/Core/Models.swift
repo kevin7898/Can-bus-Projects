@@ -119,6 +119,7 @@ struct RecordingDraft: Codable {
 }
 struct StoredState: Codable {
     var schemaVersion = 3
+    var regenTrackingStartedAt: Date? = nil
     var vehicles: [VehicleProfile] = []
     var selectedVehicleID: UUID?
     var onboardingCompleted = false

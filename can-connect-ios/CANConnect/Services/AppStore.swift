@@ -50,6 +50,7 @@ final class AppStore: ObservableObject {
         self.scanner = scanner ?? ScannerRecorder()
         do {
             state = try disk.load() ?? SampleData.state()
+            if state.regenTrackingStartedAt == nil { state.regenTrackingStartedAt = Date() }
             if let draft = state.draft {
                 if !state.trips.contains(where: { $0.id == draft.id }) { state.trips.insert(draft.trip(endedAt:draft.updatedAt, recovered:true), at:0) }
                 state.draft = nil

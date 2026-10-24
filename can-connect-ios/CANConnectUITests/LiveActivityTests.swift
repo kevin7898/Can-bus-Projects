@@ -17,10 +17,10 @@ final class LiveActivityTests: XCTestCase {
         // keeping this automation independent of passcode/Face ID unlocks.
         springboard.coordinate(withNormalizedOffset:CGVector(dx:0.1,dy:0.01)).press(forDuration:0.1,
             thenDragTo:springboard.coordinate(withNormalizedOffset:CGVector(dx:0.1,dy:0.8)))
-        XCTAssertTrue(springboard.staticTexts["CAN / CONNECT"].waitForExistence(timeout:5))
+        XCTAssertTrue(springboard.staticTexts["DriveLine"].waitForExistence(timeout:5))
         XCTAssertTrue(springboard.staticTexts["Sample recording"].exists)
         let shot = XCTAttachment(screenshot:springboard.screenshot()); shot.name = "Lock Screen activity — synthetic sample recording"; shot.lifetime = .keepAlways; add(shot)
-        springboard.staticTexts["CAN / CONNECT"].tap()
+        springboard.staticTexts["DriveLine"].tap()
         XCTAssertTrue(app.buttons["Finish & save recording"].waitForExistence(timeout:5))
         app.buttons["Finish & save recording"].tap()
     }
@@ -40,7 +40,7 @@ final class LiveActivityTests: XCTestCase {
         let springboard = XCUIApplication(bundleIdentifier:"com.apple.springboard")
         try await Task.sleep(nanoseconds:2_000_000_000)
         springboard.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.035)).press(forDuration:1.5)
-        XCTAssertTrue(springboard.staticTexts["CAN / CONNECT"].waitForExistence(timeout:5))
+        XCTAssertTrue(springboard.staticTexts["DriveLine"].waitForExistence(timeout:5))
         XCTAssertTrue(springboard.staticTexts["Sample recording"].exists)
         let shot = XCTAttachment(screenshot:springboard.screenshot()); shot.name = "Live Activity — synthetic sample recording"; shot.lifetime = .keepAlways; add(shot)
         // The expanded island collapses while XCTest waits for quiescence.

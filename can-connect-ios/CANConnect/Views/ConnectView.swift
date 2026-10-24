@@ -18,7 +18,7 @@ struct ConnectView: View {
         .sheet(isPresented:$serverSetup) { ServerConnectionView() }
         .sheet(isPresented:$queue) { TransferQueueView() }
         .fileImporter(isPresented:$importing,allowedContentTypes:[.json]) { importRecording($0,store:store) }
-        .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"CANConnect-recordings") { result in if case .failure(let error) = result { store.error = error.localizedDescription } }
+        .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-recordings") { result in if case .failure(let error) = result { store.error = error.localizedDescription } }
     }
     private var devices: some View {
         VStack(alignment:.leading,spacing:16) {
@@ -53,7 +53,7 @@ struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @State private var garage = false
     @State private var removeSamples = false
-    var body: some View { SheetShell(title:"CAN / CONNECT") {
+    var body: some View { SheetShell(title:"DriveLine") {
         Eyebrow(text:"iOS companion · Native v1.0")
         Text("The design is locked.").font(.title2)
         InfoNote(text:"Five tabs. Pages within each tab. Independent signal cards. Local recordings and fill-ups.")

@@ -2,6 +2,7 @@
 """Generate the checked-in dependency-free Xcode project deterministically."""
 from pathlib import Path
 import hashlib
+import os
 ROOT = Path(__file__).resolve().parents[1]
 def uid(name): return hashlib.sha1(name.encode()).hexdigest()[:24].upper()
 def q(value): return '"' + value.replace('\\','\\\\').replace('"','\\"') + '"'
@@ -16,10 +17,12 @@ widgetfiles = sorted((ROOT/'CANConnectLiveActivity').glob('*.swift')) + sharedfi
 testfiles = sorted((ROOT/'CANConnectTests').glob('*.swift'))
 uifiles = sorted((ROOT/'CANConnectUITests').glob('*.swift'))
 resources = sorted(f for f in (ROOT/'CANConnect/Resources').iterdir() if f.suffix in {'.json','.txt'})
+resources += [ROOT.parent/'branding/driveline/DriveLine.icon']
+def relative(file): return Path(os.path.relpath(file,ROOT)).as_posix()
 fileIDs = {}; buildIDs = {}
 for file in dict.fromkeys(appfiles + widgetfiles + testfiles + uifiles + resources + [ROOT/'CANConnect/Info.plist', ROOT/'CANConnectLiveActivity/Info.plist']):
-    path = file.relative_to(ROOT).as_posix()
-    typ = 'sourcecode.swift' if file.suffix == '.swift' else 'text.json' if file.suffix == '.json' else 'text' if file.suffix == '.txt' else 'text.plist.xml'
+    path = relative(file)
+    typ = 'folder.iconcomposer.icon' if file.suffix == '.icon' else 'sourcecode.swift' if file.suffix == '.swift' else 'text.json' if file.suffix == '.json' else 'text' if file.suffix == '.txt' else 'text.plist.xml'
     fileIDs[path] = add('file:'+path,'PBXFileReference',f'lastKnownFileType = {typ}; path = {q(path)}; sourceTree = SOURCE_ROOT;')
     if file.suffix != '.plist': buildIDs[path] = add('build:'+path,'PBXBuildFile',f'fileRef = {fileIDs[path]};')
 productIDs = {}
@@ -46,14 +49,14 @@ def configlist(name, settings):
     return add(name+':configs','XCConfigurationList',f'buildConfigurations = {array(ids)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
 projectConfigs = configlist('project',projectSettings)
 for name, files in [('CANConnect',appfiles),('CANConnectTests',testfiles),('CANConnectUITests',uifiles),('CANConnectLiveActivity',widgetfiles)]:
-    sourcePhase = add(name+':sources','PBXSourcesBuildPhase',f'buildActionMask = 2147483647; files = {array([buildIDs[f.relative_to(ROOT).as_posix()] for f in files])}; runOnlyForDeploymentPostprocessing = 0;')
-    resPhase = add(name+':resources','PBXResourcesBuildPhase',f'buildActionMask = 2147483647; files = {array([buildIDs[f.relative_to(ROOT).as_posix()] for f in resources] if name=="CANConnect" else [])}; runOnlyForDeploymentPostprocessing = 0;')
+    sourcePhase = add(name+':sources','PBXSourcesBuildPhase',f'buildActionMask = 2147483647; files = {array([buildIDs[relative(f)] for f in files])}; runOnlyForDeploymentPostprocessing = 0;')
+    resPhase = add(name+':resources','PBXResourcesBuildPhase',f'buildActionMask = 2147483647; files = {array([buildIDs[relative(f)] for f in resources] if name=="CANConnect" else [])}; runOnlyForDeploymentPostprocessing = 0;')
     fwPhase = add(name+':frameworks','PBXFrameworksBuildPhase','buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')
     settings={'PRODUCT_NAME':'$(TARGET_NAME)','PRODUCT_BUNDLE_IDENTIFIER':'com.canconnect.'+('companion' if name=='CANConnect' else name.lower()),'CODE_SIGN_STYLE':'Automatic','TARGETED_DEVICE_FAMILY':'1','SUPPORTED_PLATFORMS':'iphoneos iphonesimulator','SUPPORTS_MACCATALYST':'NO','LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks','GENERATE_INFOPLIST_FILE':'YES'}
     dependencies=[]
-    if name=='CANConnect': settings.update({'GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'CANConnect/Info.plist','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'14','ENABLE_PREVIEWS':'YES'})
+    if name=='CANConnect': settings.update({'GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'CANConnect/Info.plist','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'15','ENABLE_PREVIEWS':'YES','ASSETCATALOG_COMPILER_APPICON_NAME':'DriveLine'})
     elif name=='CANConnectLiveActivity':
-        settings.update({'INFOPLIST_FILE':'CANConnectLiveActivity/Info.plist','PRODUCT_BUNDLE_IDENTIFIER':'com.canconnect.companion.recording','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'14','APPLICATION_EXTENSION_API_ONLY':'YES','SKIP_INSTALL':'YES'})
+        settings.update({'INFOPLIST_FILE':'CANConnectLiveActivity/Info.plist','PRODUCT_BUNDLE_IDENTIFIER':'com.canconnect.companion.recording','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'15','APPLICATION_EXTENSION_API_ONLY':'YES','SKIP_INSTALL':'YES'})
     else:
         proxy=add(name+':proxy','PBXContainerItemProxy',f'containerPortal = {uid("project")}; proxyType = 1; remoteGlobalIDString = {uid("target:CANConnect")}; remoteInfo = CANConnect;')
         dependencies.append(add(name+':dependency','PBXTargetDependency',f'target = {uid("target:CANConnect")}; targetProxy = {proxy};'))

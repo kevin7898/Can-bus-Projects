@@ -69,9 +69,7 @@ struct VehicleView: View {
     private var engine: some View {
         VStack(alignment:.leading,spacing:16) { Text("End of sample drive").font(.system(size:17)); VStack(spacing:0) { DataRow(label:"Coolant temperature",value:"89 °C"); DataRow(label:"Engine speed",value:"812 rpm"); DataRow(label:"Intake air temperature",value:"24 °C"); DataRow(label:"Control module voltage",value:"13.9 V") }; InfoNote(text:"These are sample recorded readings. Open Live to use the current source.",icon:"clock"); AppButton(title:"Open Live",secondary:true) { store.selectedTab = .live }; Spacer(minLength:0) }.padding(.horizontal,1).padding(.top,10)
     }
-    private var dpf: some View {
-        VStack(alignment:.leading,spacing:15) { Spacer(minLength:0); VStack(spacing:10) { Image(systemName:"line.3.horizontal.decrease.circle").font(.system(size:32)).foregroundStyle(Palette.muted); Text("No DPF data in this recording").font(.system(size:17)); Text("DPF readings appear when a source includes them.").captionStyle().multilineTextAlignment(.center) }.frame(maxWidth:.infinity); VStack(spacing:0) { DataRow(label:"Soot load",value:"— g"); DataRow(label:"Distance since regeneration",value:"— km"); DataRow(label:"Regeneration status",value:"Unavailable") }; AppButton(title:"Choose a recording",secondary:true) { store.selectedTab = .trips }; Spacer(minLength:0) }.padding(.horizontal,1)
-    }
+    private var dpf: some View { RegenSummaryView() }
     private var logbook: some View {
         VStack(alignment:.leading,spacing:18) {
             HStack { Text("Latest fill-up").font(.system(size:17)); Spacer(); Button("History") { history = true }.font(.system(size:11)) }

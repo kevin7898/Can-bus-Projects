@@ -65,7 +65,7 @@ struct TripDetailView: View {
         }
         AppButton(title:"Export recording",icon:"square.and.arrow.up") { do { document = JSONDocument(data:try store.archive([trip]).encoded()); exporting = true } catch { store.error = error.localizedDescription } }
         Button("Delete recording",role:.destructive) { delete = true }.frame(maxWidth:.infinity).padding(.top,8)
-    }.fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"CANConnect-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error) = result { store.error = error.localizedDescription } }
+    }.fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error) = result { store.error = error.localizedDescription } }
         .confirmationDialog("Delete this recording from this iPhone?",isPresented:$delete,titleVisibility:.visible) { Button("Delete recording",role:.destructive) { store.removeTrip(trip.id); dismiss() } }
     }
 }

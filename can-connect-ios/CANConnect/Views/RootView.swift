@@ -7,7 +7,7 @@ struct RootView: View {
     @State private var importFile = false
     var body: some View {
         VStack(spacing:12) {
-            HStack { HStack(spacing:9) { Text("CAN"); Text("/").foregroundStyle(Palette.blue); Text("CONNECT") }.font(.system(size:12, weight:.medium)).tracking(2)
+            HStack { Text("DriveLine").font(.system(size:12, weight:.medium)).tracking(2)
                 Spacer()
                 Menu {
                     ForEach(store.state.vehicles) { vehicle in Button(vehicle.title) { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } }.accessibilityIdentifier(vehicle.isSample ? "garage.select.sample" : "garage.select.\(vehicle.id.uuidString)") }
@@ -41,7 +41,7 @@ struct RootView: View {
         .sheet(isPresented:$store.garagePresented) { GarageView() }
         .fullScreenCover(isPresented:Binding(get:{!store.state.onboardingCompleted || store.vehicleSetupPresented},set:{store.vehicleSetupPresented = $0})) { VehicleSetupView() }
         .fileImporter(isPresented:$importFile, allowedContentTypes:[.json]) { result in importRecording(result, store:store) }
-        .alert("CAN / CONNECT", isPresented:Binding(get:{ store.error != nil }, set:{ if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
+        .alert("DriveLine", isPresented:Binding(get:{ store.error != nil }, set:{ if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
     }
     private var tabBar: some View {
         HStack(spacing:0) { ForEach(AppTab.allCases) { tab in

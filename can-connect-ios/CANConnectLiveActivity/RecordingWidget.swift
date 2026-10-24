@@ -14,7 +14,7 @@ struct RecordingWidget: Widget {
             HStack(spacing:16) {
                 Image(systemName:"waveform.path.ecg").font(.title2).foregroundStyle(accent)
                 VStack(alignment:.leading,spacing:4) {
-                    Text("CAN / CONNECT").font(.caption.weight(.semibold)).tracking(1.5)
+                    Text("DriveLine").font(.caption.weight(.semibold)).tracking(1.5)
                     Text(context.attributes.source).font(.caption).foregroundStyle(.secondary)
                     Text(status(context)).font(.subheadline.weight(.medium))
                 }
@@ -32,7 +32,7 @@ struct RecordingWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label("CAN / CONNECT",systemImage:"waveform.path.ecg").font(.caption.weight(.semibold)).foregroundStyle(accent)
+                    Label("DriveLine",systemImage:"waveform.path.ecg").font(.caption.weight(.semibold)).foregroundStyle(accent)
                 }
                 DynamicIslandExpandedRegion(.trailing) { timer(context).font(.headline.monospacedDigit()) }
                 DynamicIslandExpandedRegion(.bottom) {
