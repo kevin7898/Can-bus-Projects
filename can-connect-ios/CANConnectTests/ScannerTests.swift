@@ -81,7 +81,7 @@ final class ScannerTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let fixture = FixtureScanner(); let scanner = ScannerRecorder(makeSession:{fixture})
-        let disk = LocalStore(url:root.appendingPathComponent("state.json")); let store = AppStore(disk:disk,scanner:scanner)
+        let disk = LocalStore(url:root.appendingPathComponent("state.json")); let store = AppStore(disk:disk,scanner:scanner,gps:GPSFixture())
         var vehicle = VehicleProfile(); vehicle.make = "Test"; vehicle.model = "Synthetic ECU"
         try store.saveVehicle(vehicle)
         try store.connectScanner(host:"192.168.0.10",port:35000)
@@ -106,7 +106,7 @@ final class ScannerTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let fixture = FixtureScanner(); let scanner = ScannerRecorder(makeSession:{fixture})
-        let disk = LocalStore(url:root.appendingPathComponent("state.json")); let store = AppStore(disk:disk,scanner:scanner)
+        let disk = LocalStore(url:root.appendingPathComponent("state.json")); let store = AppStore(disk:disk,scanner:scanner,gps:GPSFixture())
         var vehicle = VehicleProfile(); vehicle.make = "Test"; vehicle.model = "Synthetic MX+"
         try store.saveVehicle(vehicle)
         try store.connectScanner(settings:ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:"SYNTHETIC"))

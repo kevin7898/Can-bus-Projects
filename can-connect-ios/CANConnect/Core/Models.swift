@@ -48,6 +48,19 @@ struct RoutePoint: Codable, Equatable {
     var timestamp: Date
     var accuracy: Double
     var speed: Double? // metres per second; nil when unavailable
+    // Render only consecutive observed segments, never a straight line over
+    // missing coverage. Match the distance integration's 30-second boundary.
+    static func segments(_ points: [RoutePoint]) -> [[RoutePoint]] {
+        var segments: [[RoutePoint]] = []
+        for point in points {
+            if let last = segments.last?.last,
+               point.timestamp > last.timestamp,
+               point.timestamp.timeIntervalSince(last.timestamp) <= 30 {
+                segments[segments.count - 1].append(point)
+            } else { segments.append([point]) }
+        }
+        return segments
+    }
     func distance(to other: RoutePoint) -> Double {
         let p1 = latitude * .pi / 180, p2 = other.latitude * .pi / 180
         let dp = (other.latitude - latitude) * .pi / 180
@@ -106,11 +119,11 @@ struct RecordingDraft: Codable {
             guard seconds > 0 else { return }
             let metres = last.distance(to: point)
             guard metres / seconds <= 80 else { return } // discard implausible jumps
-            if seconds <= 30 && metres >= 5 { distanceKM += metres / 1000 }
+            if source == .phoneGPS && seconds <= 30 && metres >= 5 { distanceKM += metres / 1000 }
             if seconds <= 30 && metres < 5 { return } // stationary jitter
         }
         route.append(point)
-        updatedAt = point.timestamp
+        updatedAt = max(updatedAt, point.timestamp)
     }
     func trip(endedAt: Date, recovered: Bool = false) -> Trip {
         let measured = measuredFuel(endedAt:endedAt)

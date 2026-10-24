@@ -1,0 +1,13 @@
+# GPS routes with scanner recordings
+
+Automatic and manually started scanner recordings now start the iPhone's Core Location recorder alongside OBD polling. Both streams belong to the same saved trip. Connect → Devices → This iPhone shows location status during scanner recording as well as phone-only recording. The existing screens, card layout, colours and soot percentage are unchanged.
+
+Location permission is required for routes; denied/revoked location access does not end an MX+ recording. That session continues with its measured vehicle readings, and a temporary message explains why GPS is missing. Phone-only GPS retains its existing permission/error behaviour. Finish and scanner loss stop GPS after the recording is durably saved. App switching checkpoints the same draft and leaves location updates running using the existing location background mode. iOS still controls background launch and execution; force-quitting cannot be overridden.
+
+GPS fixes must be fresh, obtained since this recording's location updates began, and have horizontal accuracy within 50 metres. Recorded points reject backwards/duplicate timestamps and implausible jumps. Map lines break across gaps over 30 seconds. Scanner distance remains integrated from measured vehicle speed; GPS points do not add distance again. Phone-only distance is calculated from consecutive valid GPS points. No missing coordinates are inferred from speed or filled from a map.
+
+The local recording/archive retains coordinates, accuracy, timestamps and available GPS speed. Mac uploads include both the raw scanner responses and separate GPS samples. The Mac retains the exact original upload and imports the coordinates and vehicle signals into its trip. GPS speed is not labelled as ECU vehicle speed. Old scanner recordings that contain no coordinates cannot acquire a historical route from this fix.
+
+Validation includes injected scanner/GPS lifecycle tests, permission failure, background checkpoint, save/reload/export, distance isolation, delayed callback timestamps, and route gaps. The UI test drives Core Location with explicitly synthetic coordinates while a TCP scanner fixture supplies OBD data, switches to the Home Screen, then checks the saved route map. Mac tests and an isolated receiver integration test verify mixed GPS/OBD uploads, coordinates, receipts, deduplication and original preservation.
+
+Physical acceptance remains a new drive with the iPhone and MX+: allow location and Precise Location, confirm GPS active before departure, then check the saved route and its Mac copy once parked. Software simulations do not verify GPS reception in the actual car or a full locked-screen drive.

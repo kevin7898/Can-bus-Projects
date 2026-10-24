@@ -2,7 +2,20 @@ import CoreLocation
 import Combine
 
 @MainActor
-final class GPSRecorder: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
+protocol GPSRecording: AnyObject {
+    var objectWillChange: ObservableObjectPublisher { get }
+    var speedKMH: Double? { get }
+    var lastFix: Date? { get }
+    var status: String { get }
+    var onPoint: ((RoutePoint) -> Void)? { get set }
+    var onReady: (() -> Void)? { get set }
+    var onFailure: ((String) -> Void)? { get set }
+    func start()
+    func stop()
+}
+
+@MainActor
+final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurrency CLLocationManagerDelegate {
     @Published var speedKMH: Double?
     @Published var lastFix: Date?
     @Published var status = "Ready when you are"
@@ -67,7 +80,7 @@ final class GPSRecorder: NSObject, ObservableObject, @preconcurrency CLLocationM
             lastFix = location.timestamp
             speedKMH = location.speed >= 0 && location.speed <= 80 ? location.speed * 3.6 : nil
             status = "GPS active · ±\(Int(location.horizontalAccuracy)) m"
-            onPoint?(RoutePoint(latitude:location.coordinate.latitude, longitude:location.coordinate.longitude, timestamp:location.timestamp, accuracy:location.horizontalAccuracy, speed:location.speed >= 0 ? location.speed : nil))
+            onPoint?(RoutePoint(latitude:location.coordinate.latitude, longitude:location.coordinate.longitude, timestamp:location.timestamp, accuracy:location.horizontalAccuracy, speed:location.speed >= 0 && location.speed <= 80 ? location.speed : nil))
         }
     }
     nonisolated static func acceptsFix(timestamp: Date, accuracy: Double, beganAt: Date, now: Date) -> Bool {

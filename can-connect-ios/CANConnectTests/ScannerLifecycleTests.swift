@@ -47,18 +47,22 @@ final class ScannerLifecycleTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at:root) }
         let disk = LocalStore(url:root.appendingPathComponent("state.json"))
         let vehicle = try savedVehicle(disk)
-        let transport = LifecycleTransport(), activity = ActivitySpy()
+        let transport = LifecycleTransport(), activity = ActivitySpy(), gps = GPSFixture()
         let scanner = ScannerRecorder(makeSession:{transport})
-        let store = AppStore(disk:disk,scanner:scanner,activity:activity,scannerAvailable:{ _ in true })
+        let store = AppStore(disk:disk,scanner:scanner,activity:activity,gps:gps,scannerAvailable:{ _ in true })
         defer { store.disconnectScanner() }
         await until("automatic recording") { store.recording }
         let first = try XCTUnwrap(store.state.draft)
         XCTAssertEqual(first.vehicleID,vehicle.id); XCTAssertEqual(first.scannerTransport,.obdLinkMXPlus)
         XCTAssertEqual(first.samples?.first?.signals["rpm"],832)
         XCTAssertEqual(activity.snapshot?.id,first.id)
+        XCTAssertEqual(gps.starts,1,"Automatic scanner recording also starts GPS")
+        let point = RoutePoint(latitude:49,longitude:-124,timestamp:Date(),accuracy:5,speed:nil)
+        gps.onPoint?(point)
         let disconnects = transport.disconnects
         NotificationCenter.default.post(name:UIApplication.didEnterBackgroundNotification,object:nil)
         XCTAssertEqual(try disk.load()?.draft?.id,first.id)
+        XCTAssertEqual(try disk.load()?.draft?.route,[point])
         await until("fresh response after app switching") { (store.state.draft?.samples?.count ?? 0) > (first.samples?.count ?? 0) }
         XCTAssertEqual(store.state.draft?.id,first.id); XCTAssertTrue(scanner.connected)
         XCTAssertEqual(transport.disconnects,disconnects)
@@ -68,13 +72,19 @@ final class ScannerLifecycleTests: XCTestCase {
         let protection = try FileManager.default.attributesOfItem(atPath:disk.url.path)[.protectionKey] as? FileProtectionType
         XCTAssertEqual(protection,.completeUntilFirstUserAuthentication)
         #endif
+        gps.onFailure?("Synthetic location permission revoked")
+        XCTAssertTrue(store.recording); XCTAssertNil(store.error)
+        XCTAssertEqual(store.state.draft?.id,first.id)
         store.finishRecording()
+        XCTAssertEqual(gps.stops,1)
+        XCTAssertEqual(try disk.load()?.trips.first?.route,[point])
         XCTAssertNil(activity.snapshot)
         let count = store.state.trips.count
         try await Task.sleep(nanoseconds:650_000_000)
         XCTAssertFalse(store.recording,"Finish must not immediately auto-start another draft")
         XCTAssertEqual(store.state.trips.count,count)
         store.startRecording(); XCTAssertTrue(store.recording,"Manual Start remains available")
+        XCTAssertEqual(gps.starts,2,"Manual scanner recording also starts GPS")
         store.finishRecording()
     }
     @MainActor
@@ -84,7 +94,7 @@ final class ScannerLifecycleTests: XCTestCase {
         let disk = LocalStore(url:root.appendingPathComponent("state.json")); _ = try savedVehicle(disk)
         let transport = LifecycleTransport(); var accessory = true
         let scanner = ScannerRecorder(makeSession:{transport})
-        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),scannerAvailable:{ _ in accessory })
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:GPSFixture(),scannerAvailable:{ _ in accessory })
         defer { store.disconnectScanner() }
         await until("first recording") { store.recording }
         let firstID = store.state.draft?.id
@@ -120,7 +130,7 @@ final class ScannerLifecycleTests: XCTestCase {
             let transport = LifecycleTransport(); transport.vin = mismatch ? "1D4GP00R55B123457" : vehicle.vin
             transport.noData = !mismatch
             let scanner = ScannerRecorder(makeSession:{transport})
-            let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),scannerAvailable:{ _ in true })
+            let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:GPSFixture(),scannerAvailable:{ _ in true })
             defer { store.disconnectScanner() }
             await until("failed identification or no ECU data") { !scanner.status.isEmpty && !scanner.connecting && transport.opens > 0 && !scanner.connected }
             if mismatch { XCTAssertTrue(store.error?.contains("VIN differs") == true) }
@@ -136,7 +146,7 @@ final class ScannerLifecycleTests: XCTestCase {
         let vehicle = try savedVehicle(disk)
         let transport = LifecycleTransport(); transport.available = false
         let scanner = ScannerRecorder(makeSession:{transport})
-        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),scannerAvailable:{ _ in true })
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:GPSFixture(),scannerAvailable:{ _ in true })
         defer { store.disconnectScanner() }
         await until("automatic startup fails") { transport.opens == 1 && !scanner.connecting }
         XCTAssertNil(store.error)
@@ -156,7 +166,7 @@ final class ScannerLifecycleTests: XCTestCase {
         let disk = LocalStore(url:root.appendingPathComponent("state.json"))
         _ = try savedVehicle(disk,settings:ScannerSettings(host:"127.0.0.1",port:35000))
         let transport = LifecycleTransport(), scanner = ScannerRecorder(makeSession:{transport})
-        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),scannerAvailable:{ _ in true })
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:GPSFixture(),scannerAvailable:{ _ in true })
         store.reconcileScannerConnection(at:Date()); XCTAssertEqual(transport.opens,0)
         store.state.vehicles[0].scannerConnection = ScannerSettings(transport:.obdLinkMXPlus)
         store.pendingGPS = true; store.reconcileScannerConnection(at:Date())
@@ -172,7 +182,7 @@ final class ScannerLifecycleTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at:root) }
         let disk = LocalStore(url:root.appendingPathComponent("state.json")); _ = try savedVehicle(disk)
         let transport = LifecycleTransport(), scanner = ScannerRecorder(makeSession:{transport})
-        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),scannerAvailable:{ _ in true })
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),gps:GPSFixture(),scannerAvailable:{ _ in true })
         defer { store.disconnectScanner() }
         await until("recording before storage failure") { store.recording }
         let id = store.state.draft?.id

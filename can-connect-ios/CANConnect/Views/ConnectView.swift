@@ -22,7 +22,7 @@ struct ConnectView: View {
     }
     private var devices: some View {
         VStack(alignment:.leading,spacing:16) {
-            device("This iPhone",subtitle:store.recording && store.source == .phoneGPS ? store.gps.status : "GPS recorder · ready",icon:"iphone",status:"Local",color:Palette.green)
+            device("This iPhone",subtitle:store.recording && store.source != .demo ? store.gps.status : "GPS recorder · ready",icon:"iphone",status:"Local",color:Palette.green)
             Button { recorderInfo = true } label: { device("CAN recorder",subtitle:store.scanner.status,icon:"cpu",status:store.scanner.connected ? "Online" : "Set up",color:store.scanner.connected ? Palette.green : Palette.muted) }.buttonStyle(.plain)
             Button { serverSetup = true } label: { device("Mac mini M4",subtitle:store.serverStatus,icon:"desktopcomputer",status:"Set up",color:Palette.muted) }.buttonStyle(.plain)
             InfoNote(text:"Record GPS or connect an OBDLink MX+ or Wi-Fi ELM327 scanner. Pair your private Mac server to transfer saved recordings.")

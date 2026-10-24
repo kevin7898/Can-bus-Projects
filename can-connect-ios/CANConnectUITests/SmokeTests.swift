@@ -1,17 +1,18 @@
 import XCTest
 import Network
+import CoreLocation
 
 final class SmokeTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
         continueAfterFailure = false
     }
-    override func tearDown() async throws {
-        // End each test's app while its automation session is still current.
-        // Launching a TCP listener before the next launch must not race cleanup
-        // of the previous app on slower CI simulators.
-        await MainActor.run { XCUIApplication().terminate() }
-        try await super.tearDown()
+    override func tearDownWithError() throws {
+        // XCTest invokes synchronous teardown on the main thread. An async
+        // teardown that hops to MainActor deadlocks when a main-actor assertion
+        // interrupts a test with continueAfterFailure disabled.
+        MainActor.assumeIsolated { XCUIApplication().terminate() }
+        try super.tearDownWithError()
     }
 
     @MainActor
@@ -118,6 +119,11 @@ final class SmokeTests: XCTestCase {
 
     @MainActor
     func testWiFiScannerRecordsActualTCPFixtureReadings() async throws {
+        addUIInterruptionMonitor(withDescription:"Location permission") { alert in
+            let allow = alert.buttons["Allow While Using App"]
+            if allow.exists { allow.tap(); return true }
+            return false
+        }
         let fixture = try LoopbackScannerFixture()
         try await fixture.start()
         defer { fixture.stop() }
@@ -134,6 +140,8 @@ final class SmokeTests: XCTestCase {
         port.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:5)+String(fixture.port))
         app.scrollViews.firstMatch.swipeUp()
         app.buttons["Connect selected vehicle"].tap()
+        let permission = XCUIApplication(bundleIdentifier:"com.apple.springboard").alerts.buttons["Allow While Using App"]
+        if permission.waitForExistence(timeout:5) { permission.tap() }
         XCTAssertTrue(app.staticTexts["WI-FI OBD · VEHICLE SPEED"].waitForExistence(timeout:10))
         XCTAssertTrue(app.staticTexts["60"].waitForExistence(timeout:5))
         // A validated scanner response starts recording without an extra tap.
@@ -141,10 +149,31 @@ final class SmokeTests: XCTestCase {
         app.buttons["Engine"].tap()
         XCTAssertTrue(app.staticTexts["1726"].waitForExistence(timeout:5))
         let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "Locked design — synthetic TCP scanner readings"; shot.lifetime = .keepAlways; add(shot)
+        // Exercise Core Location itself, including delivery while backgrounded.
+        // These public coordinates are synthetic fixtures, never a real trip.
+        defer { XCUIDevice.shared.location = nil }
+        func locate(_ latitude: Double) {
+            XCUIDevice.shared.location = XCUILocation(location:CLLocation(
+                coordinate:CLLocationCoordinate2D(latitude:latitude,longitude:-124),
+                altitude:0,horizontalAccuracy:5,verticalAccuracy:5,timestamp:Date()))
+        }
+        locate(49)
+        try await Task.sleep(for:.seconds(2))
+        XCUIDevice.shared.press(.home)
+        locate(49.0002)
+        try await Task.sleep(for:.seconds(2))
+        locate(49.0004)
+        try await Task.sleep(for:.seconds(2))
+        app.activate()
+        XCTAssertTrue(app.buttons["Finish & save recording"].waitForExistence(timeout:5))
         app.buttons["Finish & save recording"].tap(); app.buttons["Trips"].tap()
         XCTAssertTrue(app.staticTexts["Scanner drive"].waitForExistence(timeout:5))
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","Scanner drive")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Measured OBD responses"].waitForExistence(timeout:5))
+        let map = app.maps.firstMatch
+        XCTAssertTrue(map.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(app.staticTexts["This recording has no GPS route."].exists)
+        let routeShot = XCTAttachment(screenshot:app.screenshot()); routeShot.name = "Synthetic GPS route recorded with scanner and background delivery"; routeShot.lifetime = .keepAlways; add(routeShot)
     }
 
     @MainActor

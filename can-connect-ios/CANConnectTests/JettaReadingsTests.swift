@@ -114,7 +114,7 @@ extension JettaReadingsTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let fixture = TargetedJettaFixture(); let scanner = ScannerRecorder(makeSession:{fixture})
-        let store = AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),scanner:scanner,scannerAvailable:{_ in false})
+        let store = AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),scanner:scanner,gps:GPSFixture(),scannerAvailable:{_ in false})
         store.source = .scanner
         XCTAssertEqual(store.sootFullnessText,"—")
         let ready = expectation(description:"ECU trigger received")

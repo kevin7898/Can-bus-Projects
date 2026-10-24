@@ -36,6 +36,7 @@ struct NativeRouteMap: UIViewRepresentable {
     var route: [RoutePoint]
     func makeUIView(context: Context) -> MKMapView {
         let view = MKMapView(); view.overrideUserInterfaceStyle = .dark; view.delegate = context.coordinator
+        view.accessibilityIdentifier = "recorded.route"
         view.showsCompass = true; view.pointOfInterestFilter = .excludingAll
         return view
     }
@@ -45,8 +46,12 @@ struct NativeRouteMap: UIViewRepresentable {
         view.removeOverlays(view.overlays)
         let coords = route.map { CLLocationCoordinate2D(latitude:$0.latitude, longitude:$0.longitude) }
         if coords.count > 1 {
-            let line = MKPolyline(coordinates:coords, count:coords.count); view.addOverlay(line)
-            view.setVisibleMapRect(line.boundingMapRect, edgePadding:UIEdgeInsets(top:45,left:35,bottom:45,right:35), animated:false)
+            for segment in RoutePoint.segments(route) where segment.count > 1 {
+                let positions = segment.map { CLLocationCoordinate2D(latitude:$0.latitude, longitude:$0.longitude) }
+                view.addOverlay(MKPolyline(coordinates:positions,count:positions.count))
+            }
+            let bounds = MKPolyline(coordinates:coords,count:coords.count).boundingMapRect
+            view.setVisibleMapRect(bounds, edgePadding:UIEdgeInsets(top:45,left:35,bottom:45,right:35), animated:false)
         } else if let coordinate = coords.first {
             view.setRegion(MKCoordinateRegion(center:coordinate, latitudinalMeters:1500, longitudinalMeters:1500), animated:false)
         } else { view.setRegion(MKCoordinateRegion(center:CLLocationCoordinate2D(latitude:49.185, longitude:-123.96), latitudinalMeters:10000, longitudinalMeters:10000), animated:false) }

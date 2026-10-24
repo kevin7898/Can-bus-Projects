@@ -138,7 +138,7 @@ extension RecordingDraft {
             if dt > 0 && dt <= 10 { distanceKM += (before+speed)/2 * dt/3600 }
         }
         if samples == nil { samples = [] }
-        samples?.append(sample); updatedAt = sample.timestamp
+        samples?.append(sample); updatedAt = max(updatedAt, sample.timestamp)
     }
 }
 

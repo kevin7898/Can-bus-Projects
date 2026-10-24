@@ -21,7 +21,7 @@ final class AppStore: ObservableObject {
     @Published var pendingGPS = false
     @Published var vehicleSetupPresented = false
     @Published var garagePresented = false
-    let gps = GPSRecorder()
+    let gps: any GPSRecording
     let scanner: ScannerRecorder
     @Published var serverStatus = "Not connected"
     @Published var transferring = false
@@ -42,9 +42,10 @@ final class AppStore: ObservableObject {
     private var toastTask: Task<Void, Never>?
     private var canWrite = true
     init(disk: LocalStore = LocalStore(), scanner: ScannerRecorder? = nil,
-         activity: RecordingActivityManaging? = nil,
+         activity: RecordingActivityManaging? = nil, gps: (any GPSRecording)? = nil,
          scannerAvailable: @escaping @MainActor (ScannerSettings) -> Bool = { (try? MXPlusAccessory.select(serial:$0.accessorySerial)) != nil }) {
         self.activity = activity ?? RecordingLiveActivity()
+        self.gps = gps ?? GPSRecorder()
         self.disk = disk
         self.scannerAvailable = scannerAvailable
         self.scanner = scanner ?? ScannerRecorder()
@@ -79,6 +80,7 @@ final class AppStore: ObservableObject {
                     startedAt:sample.timestamp, updatedAt:sample.timestamp,
                     scannerTransport:(self.activeVehicle?.scannerConnection ?? self.state.scanner).kind)
                 self.lastCheckpoint = .distantPast
+                self.gps.start()
             }
             guard self.state.draft?.source == .scanner else { return }
             self.state.draft?.accept(sample)
@@ -92,7 +94,7 @@ final class AppStore: ObservableObject {
         self.scanner.onDisconnect = { [weak self] message in
             guard let self else { return }
             if self.state.draft?.source == .scanner {
-                // Genuine vehicle loss ends the trip at its last actual response.
+                // Genuine vehicle loss ends the trip at its last actual observation.
                 self.finishRecording(endedAt:self.state.draft?.updatedAt)
                 if self.recording { return } // Preserve an unsaved draft and its disk error.
             }
@@ -114,23 +116,30 @@ final class AppStore: ObservableObject {
                 self?.updateLiveActivity()
             })
         }
-        gps.onReady = { [weak self] in
+        self.gps.onReady = { [weak self] in
             guard let self, self.pendingGPS else { return }
             self.pendingGPS = false
             self.state.draft = RecordingDraft(vehicleID:self.state.selectedVehicleID, source:.phoneGPS, startedAt:Date(), updatedAt:Date())
             self.save()
         }
-        gps.onPoint = { [weak self] point in
-            guard let self, self.state.draft?.source == .phoneGPS else { return }
-            self.state.draft?.accept(point); self.save()
+        self.gps.onPoint = { [weak self] point in
+            guard let self, let source = self.state.draft?.source, source != .demo else { return }
+            self.state.draft?.accept(point)
+            self.checkpoint(at:Date())
         }
-        gps.onFailure = { [weak self] message in
+        self.gps.onFailure = { [weak self] message in
             guard let self else { return }
             self.pendingGPS = false
-            if self.state.draft != nil { self.finishRecording() }
-            self.error = message
+            // Location is optional for scanner telemetry. Losing GPS must never
+            // finish the MX+ session or discard its measurements.
+            if self.state.draft?.source == .scanner {
+                self.notify("Scanner recording continues without GPS. " + message)
+            } else {
+                if self.state.draft != nil { self.finishRecording() }
+                self.error = message
+            }
         }
-        gpsChanges = gps.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        gpsChanges = self.gps.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         Task { [weak self] in self?.reconcileScannerConnection(at:Date()) }
         ticker = Timer.publish(every:1, on:.main, in:.common).autoconnect().sink { [weak self] date in self?.tick(date) }
     }
@@ -214,6 +223,7 @@ final class AppStore: ObservableObject {
             state.draft = RecordingDraft(vehicleID:state.selectedVehicleID, source:.scanner, startedAt:now, updatedAt:now, scannerTransport:(activeVehicle?.scannerConnection ?? state.scanner).kind)
             UIApplication.shared.isIdleTimerDisabled = true
             save()
+            gps.start()
         }
         else { state.draft = RecordingDraft(vehicleID:state.selectedVehicleID, source:.demo, startedAt:now, updatedAt:now); save() }
     }
