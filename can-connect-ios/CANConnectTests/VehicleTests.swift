@@ -2,6 +2,19 @@ import XCTest
 @testable import CANConnect
 
 final class VehicleTests: XCTestCase {
+    func testProfileEditsWithTheSameIDAreDistinctValues() throws {
+        var original = VehicleProfile(); original.make = "Honda"; original.model = "CB500X"
+        var edited = original; edited.make = "Ford"; edited.model = "F-150"
+        XCTAssertEqual(edited.id,original.id)
+        XCTAssertNotEqual(edited,original,"SwiftUI State must observe field edits even when the vehicle identity is unchanged.")
+        XCTAssertEqual(edited.title,"Ford F-150")
+        edited = original; edited.dashboard.signals["drive.0"] = .voltage
+        XCTAssertNotEqual(edited,original)
+        edited = original; edited.scannerConnection = ScannerSettings(host:"192.168.0.10",port:35000)
+        XCTAssertNotEqual(edited,original)
+        XCTAssertEqual(try JSONDecoder().decode(VehicleProfile.self,from:JSONEncoder().encode(edited)),edited)
+    }
+
     func testVINAndELMFormattedAndLegacyReplies() throws {
         let formatted = "0902\r014\r0: 49 02 01 31 44 34\r1: 47 50 30 30 52 35 35\r2: 42 31 32 33 34 35 36\r>"
         XCTAssertEqual(try ELMIdentityParser.vin(formatted),"1D4GP00R55B123456")

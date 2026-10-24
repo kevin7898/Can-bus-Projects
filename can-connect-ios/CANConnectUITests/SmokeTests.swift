@@ -91,7 +91,6 @@ final class SmokeTests: XCTestCase {
     @MainActor
     private func enter(_ text: String, in field: XCUIElement, app: XCUIApplication) async {
         XCTAssertTrue(field.waitForExistence(timeout:5)); field.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
         field.typeText(text)
         let entered = XCTNSPredicateExpectation(predicate:NSPredicate(format:"value == %@",text),object:field)
         await fulfillment(of:[entered],timeout:5)

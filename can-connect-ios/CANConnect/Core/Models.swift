@@ -51,7 +51,7 @@ struct FuelEntry: Codable, Identifiable, Equatable {
     var full: Bool
     var isSample: Bool = false
 }
-struct Preferences: Codable {
+struct Preferences: Codable, Equatable {
     var signals: [String: Signal] = ["drive.0": .coolant, "drive.1": .boost, "engine.0": .rpm, "engine.1": .coolant, "engine.2": .boost, "engine.3": .fuel, "economy.0": .fuel, "economy.1": .economy, "economy.2": .outside, "economy.3": .voltage]
     var summaryOrder: [String] = ["week", "fuel", "trip"]
     var wifiLogs = true

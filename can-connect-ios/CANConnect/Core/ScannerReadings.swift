@@ -1,6 +1,6 @@
 import Foundation
 
-struct ScannerSettings: Codable {
+struct ScannerSettings: Codable, Equatable {
     var host = ""
     var port: UInt16 = 35000
 }

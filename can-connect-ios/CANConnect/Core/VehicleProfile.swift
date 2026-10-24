@@ -37,7 +37,6 @@ struct VehicleProfile: Codable, Identifiable, Equatable {
         return name.isEmpty ? "Vehicle" : name
     }
     var detail: String { [year.map(String.init),make,model,trim].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator:" ") }
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     static var sample: Self {
         var v = Self(); v.nickname = "Sample Jetta"; v.year = 2014; v.make = "Volkswagen"; v.model = "Jetta"; v.engine = "2.0 TDI"; v.transmission = "DSG"; v.fuel = .diesel; v.odometerKM = 216482; v.tankLitres = 55; v.isSample = true; v.identificationSource = "Bundled sample"; return v
     }
