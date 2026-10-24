@@ -5,6 +5,7 @@ public enum Signal: String, Codable, CaseIterable, Identifiable {
     case mafGps, outsideC, boostAbsoluteKpa, boostCommandedKpa, boostBAbsoluteKpa, boostBCommandedKpa
     case egt1C, egt2C, egt3C, egt4C, dpfDifferentialKpa, dpfInletKpa, dpfOutletKpa
     case dpfRegenActive, dpfRegenType, dpfRegenTrigger, dpfAverageRegenMinutes, dpfAverageRegenKM
+    case dpfAshML, dsgFluidC
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -38,13 +39,15 @@ public enum Signal: String, Codable, CaseIterable, Identifiable {
         case .dpfRegenTrigger: return "DPF regeneration trigger"
         case .dpfAverageRegenMinutes: return "Average regeneration interval"
         case .dpfAverageRegenKM: return "Average regeneration distance"
+        case .dpfAshML: return "DPF ash volume"
+        case .dsgFluidC: return "DSG fluid temperature"
         }
     }
     public var unit: String {
         switch self {
         case .speedKph: return "km/h"
         case .rpm: return "rpm"
-        case .coolantC, .intakeC, .oilC, .outsideC, .egt1C, .egt2C, .egt3C, .egt4C: return "°C"
+        case .coolantC, .intakeC, .oilC, .outsideC, .egt1C, .egt2C, .egt3C, .egt4C, .dsgFluidC: return "°C"
         case .boostKpa: return "kPa gauge"
         case .mapKpa, .barometricKpa, .boostAbsoluteKpa, .boostCommandedKpa, .boostBAbsoluteKpa, .boostBCommandedKpa: return "kPa absolute"
         case .fuelRateLph: return "L/h"
@@ -55,6 +58,7 @@ public enum Signal: String, Codable, CaseIterable, Identifiable {
         case .dpfRegenActive, .dpfRegenType: return "state"
         case .dpfAverageRegenMinutes: return "min"
         case .dpfAverageRegenKM: return "km"
+        case .dpfAshML: return "mL"
         }
     }
 }
