@@ -40,11 +40,11 @@ struct VehicleEditor:View {
         VStack(alignment:.leading,spacing:16) {
             Text(vehicle.name.isEmpty ? "Add a vehicle":"Vehicle profile").font(.title2)
             Form {
-                TextField("Vehicle name",text:$vehicle.name)
-                HStack { TextField("Year",text:$vehicle.year);TextField("Make",text:$vehicle.make) }
-                TextField("Model",text:$vehicle.model)
-                TextField("VIN (optional)",text:$vehicle.vin)
-                TextField("Notes",text:$vehicle.notes)
+                TextField("Vehicle name",text:$vehicle.name).accessibilityLabel("Vehicle name")
+                HStack { TextField("Year",text:$vehicle.year).accessibilityLabel("Year");TextField("Make",text:$vehicle.make).accessibilityLabel("Make") }
+                TextField("Model",text:$vehicle.model).accessibilityLabel("Model")
+                TextField("VIN (optional)",text:$vehicle.vin).accessibilityLabel("VIN (optional)")
+                TextField("Notes",text:$vehicle.notes).accessibilityLabel("Notes")
                 Section("Scanner-assisted identity") {
                     Text("Read VIN from an ELM-compatible Wi-Fi/TCP scanner. Review the result before saving. BLE and USB scanner adapters are not integrated yet.").font(.system(size:11)).foregroundStyle(Theme.muted)
                     HStack { TextField("Scanner IP",text:$scannerHost);TextField("Port",text:$scannerPort).frame(width:85);Button(detecting ? "Reading…":"Read VIN") { detect() }.disabled(detecting) }
@@ -115,7 +115,7 @@ struct ServerView:View {
     @State private var loginStatus = ""
     var body:some View {
         VStack(alignment:.leading,spacing:14) {
-            HStack { Label(store.serverStatus,systemImage:"server.rack").foregroundStyle(store.serverStatus=="Listening" ? Theme.green:Theme.muted);Spacer();Button(store.serverStatus=="Listening" ? "Stop server":"Start server") { if store.serverStatus=="Listening" { store.stopServer() } else { apply();store.startServer() } } }.font(.system(size:13))
+            HStack { Label(store.serverStatus,systemImage:"server.rack").foregroundStyle(store.serverStatus=="Listening" ? Theme.green:Theme.muted);Spacer();Button(store.serverStatus=="Listening" ? "Stop server":"Start server") { if store.serverStatus=="Listening" { store.stopServer() } else if apply() { store.startServer() } } }.font(.system(size:13))
             HStack(alignment:.top,spacing:14) {
                 VStack(spacing:14) {
                     Panel(title:"Companion API") {
@@ -123,7 +123,7 @@ struct ServerView:View {
                             Text("Authenticated HTTP · schema v1").font(.system(size:13,weight:.medium))
                             HStack { TextField("Port",text:$port).frame(width:120);Toggle("Allow trusted local network",isOn:$allowLAN) }.font(.system(size:12))
                             Text(allowLAN ? "LAN endpoint: use this Mac's local IP with port \(port). Internet access and TLS are not configured.":"Loopback only: http://127.0.0.1:\(port)").font(.system(size:11)).foregroundStyle(Theme.muted).textSelection(.enabled)
-                            HStack { Button("Apply settings") { apply() };Button("Copy pairing token") { store.copyToken() } }
+                            HStack { Button("Apply settings") { _ = apply() };Button("Copy pairing token") { store.copyToken() } }
                             Text("Keep the pairing token private. The app stores it in Keychain; it is not part of library backups.").font(.system(size:11)).foregroundStyle(Theme.muted)
                         }.padding(16)
                     }
@@ -137,7 +137,7 @@ struct ServerView:View {
                             KeyValue(label:"Original recordings",value:ByteCountFormatter.string(fromByteCount:Int64(store.state.receipts.reduce(0){$0+$1.byteCount}),countStyle:.file))
                             KeyValue(label:"Library manifest",value:manifestSize)
                             KeyValue(label:"Recorded samples",value:String(store.state.trips.reduce(0){$0+$1.samples.count}))
-                            Text("Originals are retained until you manage the library. Automatic 5,000 km raw-data expiry is not enabled in this release.").font(.system(size:11)).foregroundStyle(Theme.muted)
+                            Text("Originals are retained until you manage the library. Automatic 5,000 km raw-data expiry is not enabled in this release.").font(.system(size:11)).foregroundStyle(Theme.muted).fixedSize(horizontal:false,vertical:true)
                             HStack { Button("Open data folder") { store.openLibrary() };Button("Back up library…") { store.backup() } }
                         }.padding(16)
                     }
@@ -155,5 +155,5 @@ struct ServerView:View {
         }.onAppear { port = String(store.state.serverPort);allowLAN = store.state.allowLAN }
     }
     var manifestSize:String { let size = (try? store.repository?.manifest.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0;return ByteCountFormatter.string(fromByteCount:Int64(size),countStyle:.file) }
-    func apply() { guard let port = UInt16(port),port>0 else { store.error = "Use a port from 1 to 65535.";return };store.configureServer(port:port,lan:allowLAN) }
+    func apply() -> Bool { guard let port = UInt16(port),port>0 else { store.error = "Use a port from 1 to 65535.";return false };store.configureServer(port:port,lan:allowLAN);return true }
 }

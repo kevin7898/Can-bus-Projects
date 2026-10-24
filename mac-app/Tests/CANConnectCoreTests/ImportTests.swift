@@ -27,6 +27,17 @@ final class ImportTests:XCTestCase {
         let trip = try parse("timestamp,speedKph,fuelRateLph\n2026-10-23T12:00:00Z,60,3\n2026-10-23T12:00:30Z,60,3\n")
         XCTAssertNil(trip.distanceKm);XCTAssertNil(trip.fuelUsedL)
     }
+    func testChartGapsAndEndpointsSurviveDisplayDownsampling() {
+        let start = Date(timeIntervalSince1970:1792756800)
+        let samples = (0..<7001).map { i in TelemetrySample(timestamp:start.addingTimeInterval(Double(i)+(i>3500 ? 60:0)),signals:["rpm":Double(i)]) }
+        let trip = Trip(vehicleID:vehicle,name:"Synthetic",source:"test",samples:samples)
+        let trace = trip.trace(.rpm,limit:3000)
+        XCTAssertLessThanOrEqual(trace.count,3000)
+        XCTAssertEqual(trace.first?.sample,samples.first);XCTAssertEqual(trace.last?.sample,samples.last)
+        XCTAssertEqual(Set(trace.map(\.segment)),[0,1])
+        XCTAssertTrue(trip.trace(.fuelRateLph).isEmpty)
+        XCTAssertEqual(trip.samples,samples,"Display downsampling must not change imported data")
+    }
     func testWebCANIsRawOnly() throws {
         let trip = try parse("TimestampEpoch;BusChannel;ID;IDE;DLC;DataLength;Dir;EDL;BRS;ESI;RTR;DataBytes\n1792756800;0;7E8;0;3;3;0;0;0;0;0;410D3C\n")
         XCTAssertEqual(trip.rawFrameCount,1);XCTAssertEqual(trip.arbitrationIDs["7E8"],1);XCTAssertTrue(trip.availableSignals.isEmpty);XCTAssertNil(trip.distanceKm)
@@ -54,6 +65,47 @@ final class ImportTests:XCTestCase {
         XCTAssertEqual(result.trips[0].diagnosticResponseCount,1);XCTAssertEqual(result.trips[0].samples[0].value(.speedKph),60)
         XCTAssertEqual(result.trips[0].samples[0].timestamp.timeIntervalSinceReferenceDate,814622400.125,accuracy:0.00001)
     }
+    func testSQLiteSelectionPreservesWALAndOriginalBytes() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+".scanlogs")
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let url = root.appendingPathComponent("db.sqlite")
+        var db:OpaquePointer?;XCTAssertEqual(sqlite3_open(url.path,&db),SQLITE_OK)
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db,"PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE ZCOMMANDRESPONSE (ZSESSION INTEGER,ZTIMESTAMP DOUBLE,ZCOMMAND TEXT,ZRESPONSE BLOB); INSERT INTO ZCOMMANDRESPONSE VALUES (1,814622400.125,'010D',CAST('7E803410D3C' AS BLOB));",nil,nil,nil),SQLITE_OK)
+        XCTAssertGreaterThan(try FilePreparation.byteCount(URL(fileURLWithPath:url.path+"-wal")),0)
+        let input = try FilePreparation.archiveInput(url)
+        defer { if let cleanup = input.cleanup { try? FileManager.default.removeItem(at:cleanup) } }
+        let hash = try FilePreparation.hash(input.url)
+        let prepared = try FilePreparation.prepare(input.url)
+        defer { if let cleanup = prepared.cleanup { try? FileManager.default.removeItem(at:cleanup) } }
+        let result = try RecordingImporter.parse(url:prepared.url,vehicleID:vehicle,receiptID:UUID())
+        XCTAssertEqual(result.trips[0].diagnosticResponseCount,1)
+        XCTAssertEqual(result.trips[0].samples[0].value(.speedKph),60)
+        XCTAssertEqual(try FilePreparation.hash(input.url),hash,"Parsing must not mutate the preserved SQLite bundle, including SHM.")
+        let repeated = try FilePreparation.archiveInput(url)
+        defer { if let cleanup = repeated.cleanup { try? FileManager.default.removeItem(at:cleanup) } }
+        XCTAssertEqual(try FilePreparation.hash(repeated.url),hash)
+    }
+    func testZIPPreservesDatabaseSidecarsAndOriginal() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let folder = root.appendingPathComponent("sessions.scanlogs")
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        let database = folder.appendingPathComponent("db.sqlite")
+        var db:OpaquePointer?;XCTAssertEqual(sqlite3_open(database.path,&db),SQLITE_OK)
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db,"PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE ZCOMMANDRESPONSE (ZSESSION INTEGER,ZTIMESTAMP DOUBLE,ZCOMMAND TEXT,ZRESPONSE BLOB); INSERT INTO ZCOMMANDRESPONSE VALUES (1,814622400.125,'010C',CAST('7E804410C0CFA' AS BLOB));",nil,nil,nil),SQLITE_OK)
+        let zip = root.appendingPathComponent("archive.zip"), process = Process()
+        process.executableURL = URL(fileURLWithPath:"/usr/bin/ditto");process.arguments = ["-c","-k","--keepParent",folder.path,zip.path]
+        try process.run();process.waitUntilExit();XCTAssertEqual(process.terminationStatus,0)
+        let hash = try FilePreparation.hash(zip),prepared = try FilePreparation.prepare(zip)
+        defer { if let cleanup = prepared.cleanup { try? FileManager.default.removeItem(at:cleanup) } }
+        let result = try RecordingImporter.parse(url:prepared.url,vehicleID:vehicle,receiptID:UUID())
+        XCTAssertEqual(result.trips[0].samples[0].value(.rpm),830.5)
+        XCTAssertEqual(try FilePreparation.hash(zip),hash)
+    }
     func testAtomicLibraryRoundtripPreservesFractionalTime() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
@@ -62,6 +114,20 @@ final class ImportTests:XCTestCase {
         try repo.save(state);let saved = try repo.load()
         XCTAssertEqual(saved.trips[0].start.timeIntervalSince1970,state.trips[0].start.timeIntervalSince1970,accuracy:0.000001)
         try Data("invalid".utf8).write(to:repo.manifest);XCTAssertThrowsError(try repo.load())
+    }
+    func testDemoCleanupRetainsProfilesWithRealReceipts() {
+        var state = LibraryState()
+        let removable = Vehicle(name:"Only demo"),retained = Vehicle(name:"Demo with a real import")
+        state.vehicles = [removable,retained];state.selectedVehicleID = removable.id
+        state.trips = [removable,retained].map { Trip(vehicleID:$0.id,name:"Demo",source:"Synthetic",samples:[],isDemo:true) }
+        state.preferences[removable.id.uuidString] = VehiclePreferences()
+        var receipt = ImportReceipt(vehicleID:retained.id,originalName:"real.csv",archiveName:"original.csv",contentHash:"hash",byteCount:10)
+        receipt.status = .failed;state.receipts = [receipt]
+        state.removeDemoData()
+        XCTAssertEqual(state.vehicles.map(\.id),[retained.id])
+        XCTAssertEqual(state.receipts.map(\.id),[receipt.id])
+        XCTAssertEqual(state.selectedVehicleID,retained.id)
+        XCTAssertTrue(state.trips.isEmpty);XCTAssertNil(state.preferences[removable.id.uuidString])
     }
     func testHTTPRequestFragmentationAuthenticationAndFraming() throws {
         let body = Data("{}".utf8)

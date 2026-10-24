@@ -77,8 +77,8 @@ import CryptoKit
         var p = preferences; body(&p); perform { try commit { $0.preferences[id.uuidString] = p } }
     }
     func setMap(_ viewport:MapViewport) {
-        guard let id = state.selectedVehicleID else { return }
         saveMapTask?.cancel()
+        guard let id = state.selectedVehicleID,preferences.map != viewport else { return }
         saveMapTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds:400_000_000)
             guard !Task.isCancelled, let self = self else { return }
@@ -86,25 +86,31 @@ import CryptoKit
         }
     }
     func importFiles() {
-        guard selectedVehicle != nil else { page = .garage; notice = "Add or select a vehicle before importing."; return }
+        guard let vehicleID = state.selectedVehicleID else { page = .garage; notice = "Add or select a vehicle before importing."; return }
         let panel = NSOpenPanel(); panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
         panel.message = "Choose CSV, JSON, candump, webCAN, a Pelican .scanlogs folder, or its ZIP archive."
-        guard panel.runModal() == .OK else { return }
-        for url in panel.urls { perform { _ = try enqueue(url,vehicleID:state.selectedVehicleID!) } }
-        page = .imports; Task { await processPending() }
+        let completion:(NSApplication.ModalResponse)->Void = { [weak self] response in
+            guard response == .OK,let self = self else { return }
+            for url in panel.urls { self.perform { _ = try self.enqueue(url,vehicleID:vehicleID) } }
+            self.page = .imports;Task { await self.processPending() }
+        }
+        if let window = NSApp.keyWindow { panel.beginSheetModal(for:window,completionHandler:completion) }
+        else { panel.begin(completionHandler:completion) }
     }
     @discardableResult func enqueue(_ url:URL, vehicleID:UUID) throws -> ImportReceipt {
         guard state.vehicles.contains(where:{$0.id==vehicleID}), let repo = repository else { throw CANError.invalid("Select an existing vehicle.") }
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-        let bytes = try FilePreparation.byteCount(url)
-        guard bytes>0,bytes<=RecordingImporter.maxBytes else { throw CANError.invalid("Choose a non-empty recording of at most 50 MB.") }
-        let hash = try FilePreparation.hash(url)
+        let input = try FilePreparation.archiveInput(url)
+        defer { if let cleanup = input.cleanup { try? FileManager.default.removeItem(at:cleanup) } }
+        let bytes = try FilePreparation.byteCount(input.url)
+        guard bytes>0,bytes<=RecordingImporter.maxBytes else { throw CANError.invalid("\(url.lastPathComponent) is \(ByteCountFormatter.string(fromByteCount:Int64(bytes),countStyle:.file)). Choose a non-empty recording of at most 50 MB.") }
+        let hash = try FilePreparation.hash(input.url)
         if let duplicate = state.receipts.first(where:{$0.vehicleID==vehicleID && $0.contentHash==hash}) { notice = "This recording already has a receipt (\(duplicate.status.rawValue))."; return duplicate }
-        var isDirectory:ObjCBool = false; FileManager.default.fileExists(atPath:url.path,isDirectory:&isDirectory)
+        var isDirectory:ObjCBool = false; FileManager.default.fileExists(atPath:input.url.path,isDirectory:&isDirectory)
         let suffix = isDirectory.boolValue ? "scanlogs" : url.pathExtension.lowercased()
         let archiveName = UUID().uuidString + (suffix.isEmpty ? "" : "."+suffix)
         let destination = repo.originals.appendingPathComponent(archiveName)
-        try FileManager.default.copyItem(at:url,to:destination)
+        try FileManager.default.copyItem(at:input.url,to:destination)
         let receipt = ImportReceipt(vehicleID:vehicleID,originalName:url.lastPathComponent,archiveName:archiveName,contentHash:hash,byteCount:bytes)
         do { try commit { $0.receipts.append(receipt) } } catch { try? FileManager.default.removeItem(at:destination); throw error }
         return receipt
@@ -182,13 +188,7 @@ import CryptoKit
         }
     }
     func removeDemo() {
-        perform { try commit { state in
-            let ids = Set(state.trips.filter(\.isDemo).map(\.vehicleID))
-            state.trips.removeAll { $0.isDemo }
-            let retainedVehicleIDs = Set(state.trips.map(\.vehicleID))
-            state.vehicles.removeAll { ids.contains($0.id) && !retainedVehicleIDs.contains($0.id) }
-            if !state.vehicles.contains(where:{$0.id==state.selectedVehicleID}) { state.selectedVehicleID = state.vehicles.first?.id }
-        } }
+        perform { try commit { $0.removeDemoData() } }
     }
     private func handle(_ request:HTTPRequest) async -> HTTPResponse {
         do {

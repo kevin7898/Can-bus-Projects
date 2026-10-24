@@ -1,5 +1,9 @@
 # Codex handoff — native CAN / CONNECT Mac app
 
+## Local continuation, October 23, 2026
+
+Local validation now uses Xcode 27.2 / Swift 6.4.2. The application has been run from Xcode with scheme **CANConnect** and destination **My Mac**. See [LOCAL_VALIDATION.md](LOCAL_VALIDATION.md) for the checks, fixes, reproduction commands, and remaining acceptance boundaries. The original implementation/CI handoff below is retained as historical context. The locked design files remain unchanged; personal recordings and validation output remain outside this repository.
+
 ## Goal and current branch
 
 Continue this work in **local Codex on Kevin's Mac**, with Xcode already open. Repository: `https://github.com/kevin7898/Can-bus-Projects`. Implementation branch: **`feature/mac-native-app`**. Open **`mac-app/CANConnect.xcodeproj`**, scheme **CANConnect**, destination **My Mac**.

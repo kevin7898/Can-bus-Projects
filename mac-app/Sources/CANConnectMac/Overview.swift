@@ -8,8 +8,9 @@ struct OverviewView:View {
     @State private var corridor:Trip?
     @State private var customizing = false
     @State private var dragged:UUID?
+    @State private var availableWidth:CGFloat = 0
     var body:some View {
-        GeometryReader { geometry in
+        VStack(spacing:14) {
             HStack(alignment:.top,spacing:14) {
                 VStack(spacing:14) {
                     Grid(horizontalSpacing:10,verticalSpacing:10) {
@@ -25,9 +26,15 @@ struct OverviewView:View {
                     if customizing { customization }
                     if store.preferences.mapFirst { mapSection; if !expanded { recentTrips } } else { if !expanded { recentTrips }; mapSection }
                 }.frame(maxWidth:.infinity,alignment:.top)
-                if geometry.size.width>1000 { inspector.frame(width:235) }
+                if availableWidth>1000 { inspector.frame(width:235) }
             }
-        }.frame(minHeight:expanded ? 950 : 900)
+            if availableWidth<=1000 { inspector }
+        }.background {
+            GeometryReader { geometry in
+                Color.clear.onAppear { availableWidth = geometry.size.width }
+                    .onChange(of:geometry.size.width) { _,width in availableWidth = width }
+            }
+        }
             .onAppear { viewport = store.preferences.map }
             .onChange(of:store.state.selectedVehicleID) { _,_ in viewport = store.preferences.map; corridor = nil }
             .onChange(of:viewport) { _,value in store.setMap(value) }
@@ -114,20 +121,23 @@ struct OverviewView:View {
 struct SignalsView:View {
     @EnvironmentObject var store:AppStore
     @State private var selectedDate:Date?
+    @State private var availableWidth:CGFloat = 0
     var body:some View {
         if let trip = store.selectedTrip {
             VStack(alignment:.leading,spacing:14) {
                 HStack { Label("Historical recording · \(trip.source)",systemImage:"clock").foregroundStyle(Theme.muted);Spacer();Picker("Recording",selection:Binding(get:{Optional(trip.id)},set:{store.selectedTripID = $0})) { ForEach(store.vehicleTrips) { item in Text(item.name).tag(Optional(item.id)) } }.frame(maxWidth:340) }.font(.system(size:12))
-                LazyVGrid(columns:[GridItem(.adaptive(minimum:290))],spacing:14) {
+                LazyVGrid(columns:Array(repeating:GridItem(.flexible(minimum:290)),count:availableWidth>1050 ? 3:2),spacing:14) {
                     ForEach(Array(store.preferences.signals.enumerated()),id:\.offset) { index,signal in
                         Panel(title:"Signal card \(index+1)",icon:"slider.horizontal.3") {
-                            Picker("Reading",selection:Binding(get:{store.preferences.signals[index]},set:{value in store.changePreferences{$0.signals[index] = value}})) { ForEach(Signal.allCases) { s in Text(s.title).tag(s) } }.padding(12)
+                            Picker("Reading",selection:Binding(get:{store.preferences.signals[index]},set:{value in store.changePreferences{$0.signals[index] = value}})) { ForEach(Signal.allCases) { s in Text(s.title).tag(s) } }.accessibilityLabel("Reading for signal card \(index+1)").padding(12)
                             HStack(alignment:.firstTextBaseline) { Text(number(value(trip,signal),digits:signal == .rpm ? 0:1)).font(.system(size:30,weight:.medium,design:.monospaced));Text(signal.unit).font(.system(size:11)).foregroundStyle(Theme.muted) }.frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,14)
                             SignalChart(trip:trip,signal:signal,selectedDate:$selectedDate,height:150)
                         }
                     }
                 }
                 Text("Cards are independent and can show duplicate signals. Drag the chart to inspect a timestamp; values are not carried across recording gaps.").font(.system(size:11)).foregroundStyle(Theme.muted)
+            }.background {
+                GeometryReader { geometry in Color.clear.onAppear { availableWidth = geometry.size.width }.onChange(of:geometry.size.width) { _,width in availableWidth = width } }
             }
         } else { EmptyPanel(title:"No signals recorded yet",message:"Import a diagnostic or telemetry recording. Raw CAN requires a decoder before it can provide vehicle readings.") }
     }

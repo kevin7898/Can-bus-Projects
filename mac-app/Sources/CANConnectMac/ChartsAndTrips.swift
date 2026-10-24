@@ -1,30 +1,28 @@
 import SwiftUI
 import Charts
+import Combine
 
 struct SignalChart:View {
     let trip:Trip
     let signal:Signal
     @Binding var selectedDate:Date?
     var height:CGFloat = 160
-    var values:[TelemetrySample] {
-        let data = trip.samples.filter { $0.value(signal) != nil }
-        let step = max(1,data.count/3000)
-        return stride(from:0,to:data.count,by:step).map { data[$0] }
-    }
     var body:some View {
+        let values = trip.trace(signal)
         VStack(alignment:.leading,spacing:6) {
             HStack { Text(signal.title); Spacer(); Text(signal.unit).foregroundStyle(Theme.muted) }.font(.system(size:11))
             if values.isEmpty { Text("No recorded \(signal.title.lowercased()) signal").font(.system(size:12)).foregroundStyle(Theme.muted).frame(maxWidth:.infinity,maxHeight:.infinity) }
             else {
                 Chart {
-                    ForEach(values) { sample in
-                        if let value = sample.value(signal) { LineMark(x:.value("Time",sample.timestamp),y:.value(signal.unit,value)).foregroundStyle(Theme.blue) }
+                    ForEach(values) { point in
+                        if let value = point.sample.value(signal) { LineMark(x:.value("Time",point.sample.timestamp),y:.value(signal.unit,value),series:.value("Recorded segment",point.segment)).foregroundStyle(Theme.blue) }
                     }
                     if let selectedDate = selectedDate { RuleMark(x:.value("Playback",selectedDate)).foregroundStyle(Theme.muted).lineStyle(StrokeStyle(lineWidth:1,dash:[3])) }
-                }.chartXScale(domain:trip.start...max(trip.end,trip.start.addingTimeInterval(0.001)))
+                }.chartLegend(.hidden).chartXScale(domain:trip.start...max(trip.end,trip.start.addingTimeInterval(0.001)))
                     .chartOverlay { proxy in GeometryReader { geometry in
                         Rectangle().fill(Color.clear).contentShape(Rectangle()).gesture(DragGesture(minimumDistance:0).onChanged { value in
-                            let x = value.location.x-geometry[proxy.plotAreaFrame].origin.x
+                            guard let frame = proxy.plotFrame else { return }
+                            let x = value.location.x-geometry[frame].origin.x
                             if let date:Date = proxy.value(atX:x) { selectedDate = min(max(date,trip.start),trip.end) }
                         })
                     } }
@@ -35,7 +33,7 @@ struct SignalChart:View {
 struct TripStats:View {
     let trip:Trip
     var body:some View {
-        HStack(spacing:24) {
+        LazyVGrid(columns:[GridItem(.adaptive(minimum:105),alignment:.leading)],alignment:.leading,spacing:14) {
             stat(number(trip.distanceKm),"km recorded")
             stat(duration(trip.duration),"duration")
             stat(number(trip.economyL100),"L/100 km")
@@ -83,9 +81,9 @@ struct TripsView:View {
                         HStack { Picker("Signal",selection:$signal) { ForEach(Signal.allCases) { s in Text(s.title).tag(s) } }.frame(maxWidth:300); Spacer(); Text("Historical recording").foregroundStyle(Theme.muted) }.font(.system(size:11)).padding(12)
                         SignalChart(trip:trip,signal:signal,selectedDate:$selectedDate)
                         HStack {
-                            Button { if playSeconds>=trip.duration { playSeconds = 0 }; playing.toggle() } label: { Image(systemName:playing ? "pause.fill" : "play.fill") }.help("Play or pause")
+                            Button { if playSeconds>=trip.duration { playSeconds = 0 }; playing.toggle() } label: { Image(systemName:playing ? "pause.fill" : "play.fill") }.help("Play or pause").accessibilityLabel(playing ? "Pause playback":"Play playback")
                             Text(duration(playSeconds)).monospacedDigit().frame(width:65)
-                            Slider(value:$playSeconds,in:0...max(0.001,trip.duration)).onChange(of:playSeconds) { _,value in selectedDate = trip.start.addingTimeInterval(value) }
+                            Slider(value:$playSeconds,in:0...max(0.001,trip.duration)).accessibilityLabel("Playback position").onChange(of:playSeconds) { _,value in selectedDate = trip.start.addingTimeInterval(value) }
                             Text(duration(trip.duration)).monospacedDigit()
                         }.font(.system(size:11)).padding(12)
                     }
@@ -121,7 +119,7 @@ struct CompareView:View {
     @ViewBuilder func comparison(_ title:String,selection:Binding<UUID?>,fallback:Int) -> some View {
         if let trip = store.vehicleTrips.first(where:{$0.id==selection.wrappedValue}) ?? store.vehicleTrips.dropFirst(fallback).first {
             Panel(title:title) {
-                Picker(title,selection:selection) { ForEach(store.vehicleTrips) { t in Text(t.name+" · "+t.start.formatted(date:.abbreviated,time:.shortened)).tag(Optional(t.id)) } }.padding(12)
+                Picker(title,selection:selection) { ForEach(store.vehicleTrips) { t in Text(t.name+" · "+t.start.formatted(date:.abbreviated,time:.shortened)).tag(Optional(t.id)) } }.accessibilityLabel(title).padding(12)
                 MapPanel(trips:[trip],viewport:$viewport,style:store.preferences.mapStyle,height:350)
                 TripStats(trip:trip)
                 SignalChart(trip:trip,signal:.speedKph,selectedDate:$selectedDate,height:180)

@@ -82,12 +82,14 @@ struct MapPanel:View {
     var marker:TelemetrySample? = nil
     var onSelect:((Trip)->Void)? = nil
     var body:some View {
-        ZStack(alignment:.bottomLeading) {
+        VStack(spacing:0) {
+            ZStack {
             RouteMap(trips:trips,viewport:$viewport,marker:marker,style:style,onSelect:onSelect)
             if trips.flatMap(\.coordinates).isEmpty {
                 Text("No recorded GPS coordinates in this selection").font(.system(size:12)).padding(10).background(Theme.panel.opacity(0.95)).clipShape(RoundedRectangle(cornerRadius:6)).frame(maxWidth:.infinity,maxHeight:.infinity)
             }
-            HStack { Label("Recorded GPS traces",systemImage:"point.topleft.down.curvedto.point.bottomright.up"); Spacer(); Button("Fit recordings") { viewport = RouteMap.fitted(trips) } }.font(.system(size:10)).padding(10).background(Theme.background.opacity(0.86))
+            }.frame(height:max(1,height-38))
+            HStack { Label("Recorded GPS traces",systemImage:"point.topleft.down.curvedto.point.bottomright.up"); Spacer(); Button("Fit recordings") { viewport = RouteMap.fitted(trips) } }.font(.system(size:10)).padding(.horizontal,10).frame(height:38).background(Theme.background.opacity(0.86))
         }.frame(height:height).clipped()
     }
 }

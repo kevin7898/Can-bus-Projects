@@ -83,6 +83,20 @@ public struct Trip: Codable, Identifiable {
     public var duration: TimeInterval { max(0, end.timeIntervalSince(start)) }
     public var coordinates: [TelemetrySample] { samples.filter(\.hasCoordinate) }
     public var availableSignals: [Signal] { Signal.allCases.filter { key in samples.contains { $0.value(key) != nil } } }
+    // Segment before display downsampling so a chart cannot bridge an unrecorded gap.
+    public func trace(_ signal:Signal,limit:Int = 3000) -> [SignalTracePoint] {
+        var points:[SignalTracePoint] = [],segment = 0
+        var previous:Date?
+        for sample in samples where sample.value(signal) != nil {
+            if let previous = previous,sample.timestamp.timeIntervalSince(previous)>10 { segment += 1 }
+            points.append(SignalTracePoint(sample:sample,segment:segment));previous = sample.timestamp
+        }
+        guard points.count>max(2,limit) else { return points }
+        let step = Int(ceil(Double(points.count-1)/Double(max(2,limit)-1)))
+        var selected = stride(from:0,to:points.count,by:step).map { points[$0] }
+        if selected.last?.id != points.last?.id,let last = points.last { selected.append(last) }
+        return selected
+    }
     public var distanceKm: Double? {
         let gps = coordinates
         if gps.count > 1 {
@@ -135,6 +149,12 @@ public struct Trip: Codable, Identifiable {
         }
         return merged.values.sorted { $0.timestamp < $1.timestamp }
     }
+}
+
+public struct SignalTracePoint:Identifiable {
+    public var sample:TelemetrySample
+    public var segment:Int
+    public var id:Date { sample.timestamp }
 }
 
 public enum ReceiptStatus: String, Codable { case queued, processing, processed, failed }
@@ -193,6 +213,15 @@ public struct LibraryState: Codable {
     public var allowLAN = false
     public var autoStartServer = false
     public init() {}
+    public mutating func removeDemoData() {
+        let demoVehicleIDs = Set(trips.filter(\.isDemo).map(\.vehicleID))
+        trips.removeAll { $0.isDemo }
+        let retainedIDs = Set(trips.map(\.vehicleID)).union(receipts.map(\.vehicleID))
+        let removedIDs = demoVehicleIDs.subtracting(retainedIDs)
+        vehicles.removeAll { removedIDs.contains($0.id) }
+        for id in removedIDs { preferences.removeValue(forKey:id.uuidString) }
+        if !vehicles.contains(where:{$0.id==selectedVehicleID}) { selectedVehicleID = vehicles.first?.id }
+    }
 }
 public enum CANError: LocalizedError {
     case invalid(String)
