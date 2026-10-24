@@ -8,6 +8,7 @@ final class ScannerRecorder: ObservableObject {
     @Published private(set) var status = "Not connected"
     @Published private(set) var readings: [String: (value: Double, date: Date)] = [:]
     private(set) var vehicleID: UUID?
+    private(set) var failureRequiresAttention = false
     var onConnected: (() -> Void)?
     var onSample: ((OBDSample) -> Void)?
     var onDisconnect: ((String) -> Void)?
@@ -22,8 +23,9 @@ final class ScannerRecorder: ObservableObject {
         guard connected, let reading = readings[key], (0...10).contains(date.timeIntervalSince(reading.date)) else { return nil }
         return reading.value
     }
-    func connect(settings: ScannerSettings, vehicle: VehicleProfile) {
+    func connect(settings: ScannerSettings, vehicle: VehicleProfile, automatically: Bool = false) {
         disconnect()
+        failureRequiresAttention = false
         let previous = pendingTeardown
         journal = makeSession == nil ? ScannerJournal() : nil
         let transport: ScannerTransport
@@ -34,6 +36,8 @@ final class ScannerRecorder: ObservableObject {
         connecting = true; status = "Identifying vehicle…"
         work = Task { [weak self] in
             guard let self else { return }
+            var needsUserCorrection = false
+            var established = false
             do {
                 // Cancellation cleanup must finish before iOS opens the same MFi protocol again.
                 await previous?.value
@@ -41,8 +45,12 @@ final class ScannerRecorder: ObservableObject {
                 self.pendingTeardown = nil
                 let identity = try await transport.open(host:settings.host,port:settings.port)
                 try Task.checkCancellation()
-                guard !vehicle.isSample else { throw AppFailure("Choose a real vehicle before connecting a scanner.") }
+                guard !vehicle.isSample else {
+                    needsUserCorrection = true
+                    throw AppFailure("Choose a real vehicle before connecting a scanner.")
+                }
                 if let expected = vehicle.vin, let detected = identity.vin, expected != detected {
+                    needsUserCorrection = true
                     throw AppFailure("The scanner VIN differs from the selected vehicle. Add or choose the correct vehicle before recording.")
                 }
                 let jetta = Jetta2014Profile.matches(vehicle)
@@ -51,6 +59,7 @@ final class ScannerRecorder: ObservableObject {
                 var enhancedControllers = Set<VWController>()
                 if jetta {
                     guard identity.vehicleProtocol.uppercased().contains("CAN"), !identity.vehicleProtocol.contains("29") else {
+                        needsUserCorrection = true
                         throw AppFailure("The 2014 TDI profile requires the vehicle's 11-bit CAN protocol.")
                     }
                     // Retain the anonymous reply to diagnose conflicting engine/DSG RPM.
@@ -83,6 +92,7 @@ final class ScannerRecorder: ObservableObject {
                 let pids = OBDDecoder.definitions.filter { supported.contains($0.pid) }
                 guard !pids.isEmpty else { throw AppFailure("The vehicle reported no supported dashboard PIDs.") }
                 self.vehicleID = vehicle.id; self.connected = true; self.connecting = false
+                established = true
                 self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals"
                 self.onConnected?()
                 var nextRead: [Int:Date] = [:]
@@ -130,6 +140,10 @@ final class ScannerRecorder: ObservableObject {
                 }
             } catch is CancellationError {} catch {
                 guard !Task.isCancelled else { return }
+                // Ignition loss and unattended reconnect failures belong in the
+                // existing status, not a modal alert. Explicit setup failures and
+                // vehicle validation failures still require the user's attention.
+                self.failureRequiresAttention = needsUserCorrection || (!automatically && !established)
                 self.connected = false; self.connecting = false; self.readings = [:]; self.vehicleID = nil
                 self.status = error.localizedDescription; self.journal?.append(command:"ERROR",reply:self.status)
                 transport.disconnect(); self.onDisconnect?(self.status)

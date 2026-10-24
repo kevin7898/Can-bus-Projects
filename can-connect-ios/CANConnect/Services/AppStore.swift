@@ -95,7 +95,7 @@ final class AppStore: ObservableObject {
                 self.finishRecording(endedAt:self.state.draft?.updatedAt)
                 if self.recording { return } // Preserve an unsaved draft and its disk error.
             }
-            self.error = message
+            if self.scanner.failureRequiresAttention { self.error = message }
             self.reconnectFailures = min(self.reconnectFailures + 1, 6)
             self.nextReconnect = Date().addingTimeInterval(min(60, pow(2, Double(self.reconnectFailures))))
         }
@@ -191,7 +191,7 @@ final class AppStore: ObservableObject {
         guard available, !automaticConnectionSuppressed, !scanner.connected, !scanner.connecting,
               !recording, !pendingGPS, date >= nextReconnect else { return }
         source = .scanner
-        scanner.connect(settings:settings,vehicle:vehicle)
+        scanner.connect(settings:settings,vehicle:vehicle,automatically:true)
     }
     func disconnectScanner() {
         automaticConnectionSuppressed = true

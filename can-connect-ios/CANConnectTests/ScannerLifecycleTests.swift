@@ -91,6 +91,7 @@ final class ScannerLifecycleTests: XCTestCase {
         transport.available = false
         await until("loss saves recording") { !store.recording && !scanner.connected }
         XCTAssertEqual(store.state.trips.first?.id,firstID)
+        XCTAssertNil(store.error,"Ignition loss must save quietly without a popup")
         let attempts = transport.opens
         store.reconcileScannerConnection(at:Date())
         XCTAssertEqual(transport.opens,attempts,"Do not spin on failed connections")
@@ -121,9 +122,31 @@ final class ScannerLifecycleTests: XCTestCase {
             let scanner = ScannerRecorder(makeSession:{transport})
             let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),scannerAvailable:{ _ in true })
             defer { store.disconnectScanner() }
-            await until("failed identification or no ECU data") { store.error != nil }
+            await until("failed identification or no ECU data") { !scanner.status.isEmpty && !scanner.connecting && transport.opens > 0 && !scanner.connected }
+            if mismatch { XCTAssertTrue(store.error?.contains("VIN differs") == true) }
+            else { XCTAssertNil(store.error,"No data with ignition off is a quiet connection status") }
             XCTAssertFalse(store.recording); XCTAssertTrue(store.state.trips.isEmpty)
         }
+    }
+    @MainActor
+    func testAutomaticStartupFailureIsQuietButExplicitConnectStillReportsFailure() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let disk = LocalStore(url:root.appendingPathComponent("state.json"))
+        let vehicle = try savedVehicle(disk)
+        let transport = LifecycleTransport(); transport.available = false
+        let scanner = ScannerRecorder(makeSession:{transport})
+        let store = AppStore(disk:disk,scanner:scanner,activity:ActivitySpy(),scannerAvailable:{ _ in true })
+        defer { store.disconnectScanner() }
+        await until("automatic startup fails") { transport.opens == 1 && !scanner.connecting }
+        XCTAssertNil(store.error)
+        XCTAssertEqual(scanner.status,"Synthetic ignition off")
+        store.reconcileScannerConnection(at:Date().addingTimeInterval(61))
+        await until("automatic retry fails quietly") { transport.opens == 2 && !scanner.connecting }
+        XCTAssertNil(store.error); XCTAssertTrue(store.state.trips.isEmpty)
+        try store.connectScanner(settings:try XCTUnwrap(vehicle.scannerConnection))
+        await until("explicit startup reports failure") { store.error != nil }
+        XCTAssertEqual(store.error,"Synthetic ignition off")
     }
     @MainActor
     func testSavedWiFiAndOtherActiveSourcesAreNotAutomaticallyReplaced() async throws {
