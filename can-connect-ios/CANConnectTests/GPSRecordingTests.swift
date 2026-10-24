@@ -1,6 +1,7 @@
 import XCTest
 import Combine
 import UIKit
+import CoreLocation
 @testable import CANConnect
 
 @MainActor
@@ -14,6 +15,7 @@ final class GPSFixture: GPSRecording {
     var onFailure: ((String) -> Void)?
     var starts = 0
     var stops = 0
+    func requestAutomaticAuthorization() {}
     func start() { starts += 1; onReady?() }
     func stop() { stops += 1 }
 }
@@ -75,5 +77,93 @@ final class GPSRecordingTests: XCTestCase {
         XCTAssertEqual(store.state.trips.first?.route,[point]); XCTAssertEqual(gps.stops,1)
         gps.onPoint?(point)
         XCTAssertNil(store.state.draft)
+    }
+}
+
+@MainActor
+private final class LocationManagerFixture: CLLocationManager {
+    var permission: CLAuthorizationStatus = .authorizedWhenInUse
+    override var authorizationStatus: CLAuthorizationStatus { permission }
+    var starts = 0
+    var stops = 0
+    var alwaysRequests = 0
+    override func startUpdatingLocation() { starts += 1 }
+    override func stopUpdatingLocation() { stops += 1 }
+    override func requestAlwaysAuthorization() { alwaysRequests += 1 }
+    override func requestWhenInUseAuthorization() {}
+}
+
+extension GPSRecordingTests {
+    @MainActor
+    func testBackgroundTripWaitsForForegroundAndResumesWithoutRestartingScanner() async {
+        let manager = LocationManagerFixture()
+        var foreground = false
+        let gps = GPSRecorder(manager:manager,isForeground:{ foreground })
+        var points: [RoutePoint] = []
+        gps.onPoint = { points.append($0) }
+        gps.start()
+        XCTAssertEqual(manager.starts,0)
+        XCTAssertTrue(gps.status.contains("GPS waiting"))
+        XCTAssertEqual(manager.alwaysRequests,0,"Background recording cannot request broader permission")
+        foreground = true
+        NotificationCenter.default.post(name:UIApplication.didBecomeActiveNotification,object:nil)
+        await Task.yield()
+        XCTAssertEqual(manager.starts,1)
+        let location = CLLocation(coordinate:CLLocationCoordinate2D(latitude:49,longitude:-124),altitude:0,horizontalAccuracy:4,verticalAccuracy:4,timestamp:Date())
+        gps.locationManager(manager,didUpdateLocations:[location])
+        XCTAssertEqual(points.count,1)
+        foreground = false; gps.start()
+        XCTAssertEqual(manager.starts,1,"A foreground-started session continues without restarting")
+        gps.stop(); foreground = true
+        NotificationCenter.default.post(name:UIApplication.didBecomeActiveNotification,object:nil)
+        await Task.yield()
+        XCTAssertEqual(manager.starts,1,"Finished trips cannot resume location collection")
+    }
+    @MainActor
+    func testAlwaysPermissionAllowsSuccessiveBackgroundTripsAndRecoversAfterGrant() {
+        let manager = LocationManagerFixture(); manager.permission = .authorizedAlways
+        let gps = GPSRecorder(manager:manager,isForeground:{false})
+        gps.start(); XCTAssertEqual(manager.starts,1)
+        gps.stop(); gps.start(); XCTAssertEqual(manager.starts,2)
+        manager.permission = .denied
+        gps.locationManagerDidChangeAuthorization(manager)
+        XCTAssertTrue(gps.status.contains("Location access is off"))
+        manager.permission = .authorizedAlways
+        gps.locationManagerDidChangeAuthorization(manager)
+        XCTAssertEqual(manager.starts,3)
+        gps.stop()
+        gps.locationManagerDidChangeAuthorization(manager)
+        XCTAssertEqual(manager.starts,3)
+    }
+    @MainActor
+    func testAutomaticLocationPermissionUpgradeIsExplicitAndForegroundOnly() {
+        let manager = LocationManagerFixture()
+        var foreground = false
+        let gps = GPSRecorder(manager:manager,isForeground:{foreground})
+        gps.requestAutomaticAuthorization(); XCTAssertEqual(manager.alwaysRequests,0)
+        foreground = true
+        gps.start(); XCTAssertEqual(manager.alwaysRequests,0)
+        gps.requestAutomaticAuthorization(); XCTAssertEqual(manager.alwaysRequests,1)
+        gps.stop()
+        XCTAssertNotNil(Bundle.main.object(forInfoDictionaryKey:"NSLocationAlwaysAndWhenInUseUsageDescription"))
+    }
+}
+
+
+extension GPSRecordingTests {
+    @MainActor
+    func testFailedPhoneGPSWarmupClearsLocationIntent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let gps = GPSFixture()
+        let store = AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),gps:gps,scannerAvailable:{_ in false})
+        var vehicle = VehicleProfile(); vehicle.make = "Test"; vehicle.model = "Permission fixture"
+        try store.saveVehicle(vehicle)
+        gps.onReady = nil
+        store.source = .phoneGPS; store.startRecording()
+        XCTAssertTrue(store.pendingGPS); XCTAssertFalse(store.recording)
+        gps.onFailure?("Location denied")
+        XCTAssertFalse(store.pendingGPS); XCTAssertFalse(store.recording)
+        XCTAssertEqual(gps.stops,1)
     }
 }

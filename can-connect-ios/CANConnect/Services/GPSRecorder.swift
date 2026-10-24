@@ -1,5 +1,6 @@
 import CoreLocation
 import Combine
+import UIKit
 
 @MainActor
 protocol GPSRecording: AnyObject {
@@ -10,6 +11,7 @@ protocol GPSRecording: AnyObject {
     var onPoint: ((RoutePoint) -> Void)? { get set }
     var onReady: (() -> Void)? { get set }
     var onFailure: ((String) -> Void)? { get set }
+    func requestAutomaticAuthorization()
     func start()
     func stop()
 }
@@ -22,24 +24,53 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
     var onPoint: ((RoutePoint) -> Void)?
     var onReady: (() -> Void)?
     var onFailure: ((String) -> Void)?
-    private let manager = CLLocationManager()
+    private let manager: CLLocationManager
+    private let isForeground: () -> Bool
+    private var foregroundObserver: NSObjectProtocol?
+    private var upgradeAfterPermission = false
     private var wantsRecording = false
     private var updatesBeganAt: Date?
     // Core Location delivers delegate calls on the run loop where its manager was created.
     // This manager is created on the main actor; the conformance checks that at runtime.
-    override init() {
+    init(manager: CLLocationManager = CLLocationManager(),
+         isForeground: @escaping () -> Bool = { UIApplication.shared.applicationState == .active }) {
+        self.manager = manager; self.isForeground = isForeground
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.distanceFilter = 5
         manager.activityType = .automotiveNavigation
         manager.pausesLocationUpdatesAutomatically = false
+        foregroundObserver = NotificationCenter.default.addObserver(forName:UIApplication.didBecomeActiveNotification,object:nil,queue:.main) { [weak self] _ in
+            Task { @MainActor in self?.resumeIfRequested() }
+        }
+        updateIdleStatus()
+    }
+    deinit { if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) } }
+    func requestAutomaticAuthorization() {
+        guard isForeground() else { return }
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            upgradeAfterPermission = true; manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse: manager.requestAlwaysAuthorization()
+        case .denied, .restricted:
+            if let url = URL(string:UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+        default: resumeIfRequested()
+        }
+    }
+    private func updateIdleStatus() {
+        status = manager.authorizationStatus == .authorizedAlways ? "Automatic trip GPS ready" : "Automatic GPS needs Always access · tap to enable"
+    }
+    private func resumeIfRequested() {
+        if wantsRecording { start() } else { updateIdleStatus() }
     }
     func start() {
         wantsRecording = true
         switch manager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse: beginUpdates()
-        case .notDetermined: status = "Waiting for permission"; manager.requestWhenInUseAuthorization()
+        case .notDetermined:
+            status = "Open DriveLine to allow GPS access"
+            if isForeground() { manager.requestWhenInUseAuthorization() }
         default: fail("Allow location access in iPhone Settings to record a GPS drive.")
         }
     }
@@ -50,10 +81,16 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
         manager.allowsBackgroundLocationUpdates = false
         speedKMH = nil
         lastFix = nil
-        status = "Ready when you are"
+        updateIdleStatus()
     }
     private func beginUpdates() {
         guard wantsRecording, updatesBeganAt == nil else { return }
+        // When In Use can continue an existing foreground session, but cannot
+        // reliably start a new session for an automatic background scanner trip.
+        guard manager.authorizationStatus == .authorizedAlways || isForeground() else {
+            status = "GPS waiting · open DriveLine or enable Always access"
+            return
+        }
         updatesBeganAt = Date()
         // A cached pre-recording fix must not strand a stationary recording behind
         // the movement filter. Restore the filter after obtaining a fresh point.
@@ -64,9 +101,18 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
         onReady?()
         manager.startUpdatingLocation()
     }
-    private func fail(_ message: String) { stop(); status = message; onFailure?(message) }
+    private func fail(_ message: String) {
+        // Keep the recording intent so a permission change/foreground return can
+        // resume GPS for an ongoing scanner trip. Finish still calls stop().
+        manager.stopUpdatingLocation(); manager.allowsBackgroundLocationUpdates = false
+        updatesBeganAt = nil; speedKMH = nil; lastFix = nil
+        status = message; onFailure?(message)
+    }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard wantsRecording else { return }
+        if upgradeAfterPermission && manager.authorizationStatus == .authorizedWhenInUse && isForeground() {
+            upgradeAfterPermission = false; manager.requestAlwaysAuthorization()
+        }
+        guard wantsRecording else { updateIdleStatus(); return }
         switch manager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse: beginUpdates()
         case .denied, .restricted: fail("Location access is off. Enable it in Settings to record a drive.")

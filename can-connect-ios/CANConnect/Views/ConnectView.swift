@@ -22,7 +22,7 @@ struct ConnectView: View {
     }
     private var devices: some View {
         VStack(alignment:.leading,spacing:16) {
-            device("This iPhone",subtitle:store.recording && store.source != .demo ? store.gps.status : "GPS recorder · ready",icon:"iphone",status:"Local",color:Palette.green)
+            Button { store.gps.requestAutomaticAuthorization() } label: { device("This iPhone",subtitle:store.gps.status,icon:"iphone",status:"Local",color:Palette.green) }.buttonStyle(.plain).accessibilityIdentifier("gps.authorization")
             Button { recorderInfo = true } label: { device("CAN recorder",subtitle:store.scanner.status,icon:"cpu",status:store.scanner.connected ? "Online" : "Set up",color:store.scanner.connected ? Palette.green : Palette.muted) }.buttonStyle(.plain)
             Button { serverSetup = true } label: { device("Mac mini M4",subtitle:store.serverStatus,icon:"desktopcomputer",status:"Set up",color:Palette.muted) }.buttonStyle(.plain)
             InfoNote(text:"Record GPS or connect an OBDLink MX+ or Wi-Fi ELM327 scanner. Pair your private Mac server to transfer saved recordings.")
@@ -61,7 +61,7 @@ struct SettingsView: View {
         DataRow(label:"GPS recording",value:"Available")
         DataRow(label:"Live vehicle data",value:store.scanner.connected ? store.scannerTitle : "GPS / sample / OBD")
         DataRow(label:"Mac server",value:store.serverStatus)
-        InfoNote(text:"Start a GPS recording to request location access. While recording, the blue location indicator lets GPS continue when the phone locks. Stop recording from Live.",icon:"location")
+        InfoNote(text:"For trips that start while locked, tap This iPhone in Connect and allow Always location access with Precise Location on. While Using supports trips started with DriveLine open. GPS stops when recording finishes.",icon:"location")
         AppButton(title:"Remove sample history",secondary:true) { removeSamples = true }
         Text("This removes only bundled sample trips and fill-ups. Your own recordings stay on the phone.").captionStyle()
         Text("Map data: City of Nanaimo open data. Expanded route maps: Apple Maps.").captionStyle()

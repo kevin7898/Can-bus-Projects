@@ -136,6 +136,7 @@ final class AppStore: ObservableObject {
                 self.notify("Scanner recording continues without GPS. " + message)
             } else {
                 if self.state.draft != nil { self.finishRecording() }
+                else { self.gps.stop() } // A failed GPS-only warm-up must not restart later.
                 self.error = message
             }
         }

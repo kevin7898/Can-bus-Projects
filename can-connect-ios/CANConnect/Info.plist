@@ -11,6 +11,7 @@
 <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>LSRequiresIPhoneOS</key><true/>
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>Record your route when the scanner starts a trip while your iPhone is locked or another app is open. Location recording stops when the trip finishes.</string>
 <key>NSLocationWhenInUseUsageDescription</key><string>Record the route, distance and speed of a drive you start. Recording stops when you tap Finish.</string>
 <key>NSLocalNetworkUsageDescription</key><string>Connect to the Wi-Fi diagnostic adapter you choose to read vehicle identification and supported diagnostic data, and transfer recordings to your private Mac server.</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
