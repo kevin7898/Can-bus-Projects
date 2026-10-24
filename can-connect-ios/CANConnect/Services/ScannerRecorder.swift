@@ -23,7 +23,7 @@ final class ScannerRecorder: ObservableObject {
         guard connected, let reading = readings[key], (0...10).contains(date.timeIntervalSince(reading.date)) else { return nil }
         return reading.value
     }
-    func connect(settings: ScannerSettings, vehicle: VehicleProfile, automatically: Bool = false) {
+    func connect(settings: ScannerSettings, vehicle: VehicleProfile) {
         disconnect()
         failureRequiresAttention = false
         let previous = pendingTeardown
@@ -37,7 +37,6 @@ final class ScannerRecorder: ObservableObject {
         work = Task { [weak self] in
             guard let self else { return }
             var needsUserCorrection = false
-            var established = false
             do {
                 // Cancellation cleanup must finish before iOS opens the same MFi protocol again.
                 await previous?.value
@@ -92,7 +91,6 @@ final class ScannerRecorder: ObservableObject {
                 let pids = OBDDecoder.definitions.filter { supported.contains($0.pid) }
                 guard !pids.isEmpty else { throw AppFailure("The vehicle reported no supported dashboard PIDs.") }
                 self.vehicleID = vehicle.id; self.connected = true; self.connecting = false
-                established = true
                 self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals"
                 self.onConnected?()
                 var nextRead: [Int:Date] = [:]
@@ -140,10 +138,10 @@ final class ScannerRecorder: ObservableObject {
                 }
             } catch is CancellationError {} catch {
                 guard !Task.isCancelled else { return }
-                // Ignition loss and unattended reconnect failures belong in the
-                // existing status, not a modal alert. Explicit setup failures and
-                // vehicle validation failures still require the user's attention.
-                self.failureRequiresAttention = needsUserCorrection || (!automatically && !established)
+                // Transport timeouts (including an explicit Connect while the
+                // car is off) belong in the existing status, not a modal alert.
+                // A wrong vehicle/profile still requires the user's attention.
+                self.failureRequiresAttention = needsUserCorrection
                 self.connected = false; self.connecting = false; self.readings = [:]; self.vehicleID = nil
                 self.status = error.localizedDescription; self.journal?.append(command:"ERROR",reply:self.status)
                 transport.disconnect(); self.onDisconnect?(self.status)

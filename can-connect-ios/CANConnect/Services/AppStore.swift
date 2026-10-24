@@ -191,7 +191,7 @@ final class AppStore: ObservableObject {
         guard available, !automaticConnectionSuppressed, !scanner.connected, !scanner.connecting,
               !recording, !pendingGPS, date >= nextReconnect else { return }
         source = .scanner
-        scanner.connect(settings:settings,vehicle:vehicle,automatically:true)
+        scanner.connect(settings:settings,vehicle:vehicle)
     }
     func disconnectScanner() {
         automaticConnectionSuppressed = true

@@ -129,7 +129,7 @@ final class ScannerLifecycleTests: XCTestCase {
         }
     }
     @MainActor
-    func testAutomaticStartupFailureIsQuietButExplicitConnectStillReportsFailure() async throws {
+    func testAutomaticAndExplicitStartupTimeoutsRemainInStatusWithoutAlerts() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let disk = LocalStore(url:root.appendingPathComponent("state.json"))
@@ -145,8 +145,9 @@ final class ScannerLifecycleTests: XCTestCase {
         await until("automatic retry fails quietly") { transport.opens == 2 && !scanner.connecting }
         XCTAssertNil(store.error); XCTAssertTrue(store.state.trips.isEmpty)
         try store.connectScanner(settings:try XCTUnwrap(vehicle.scannerConnection))
-        await until("explicit startup reports failure") { store.error != nil }
-        XCTAssertEqual(store.error,"Synthetic ignition off")
+        await until("explicit startup fails quietly") { transport.opens == 3 && !scanner.connecting }
+        XCTAssertNil(store.error)
+        XCTAssertEqual(scanner.status,"Synthetic ignition off")
     }
     @MainActor
     func testSavedWiFiAndOtherActiveSourcesAreNotAutomaticallyReplaced() async throws {
