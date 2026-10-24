@@ -165,8 +165,18 @@ final class SmokeTests: XCTestCase {
         locate(49.0004)
         try await Task.sleep(for:.seconds(2))
         app.activate()
-        XCTAssertTrue(app.buttons["Finish & save recording"].waitForExistence(timeout:5))
-        app.buttons["Finish & save recording"].tap(); app.buttons["Trips"].tap()
+        let finish = app.buttons["Finish & save recording"]
+        XCTAssertTrue(finish.waitForExistence(timeout:5))
+        XCTAssertTrue(finish.isHittable)
+        // After foregrounding, the hosted simulator returned a stale hit point
+        // on the Drive tab for this button. Use its current frame centre and
+        // verify the saved state before navigating away.
+        finish.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        guard app.buttons["Start scanner recording"].waitForExistence(timeout:10) else {
+            XCTFail("Finish did not save the scanner recording. " + app.debugDescription)
+            return
+        }
+        app.buttons["Trips"].tap()
         XCTAssertTrue(app.staticTexts["Scanner drive"].waitForExistence(timeout:5))
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","Scanner drive")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Measured OBD responses"].waitForExistence(timeout:5))

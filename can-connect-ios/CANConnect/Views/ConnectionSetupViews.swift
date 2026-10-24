@@ -51,7 +51,7 @@ struct ScannerConnectionView: View {
         if store.scanner.connected || store.scanner.connecting {
             AppButton(title:"Disconnect scanner",secondary:true) { store.disconnectScanner() }.disabled(store.recording)
         }
-        InfoNote(text:"Keep the app visible for scanner recordings. Leaving the app saves the recording and disconnects the scanner. GPS recording can continue with the phone locked.")
+        InfoNote(text:"Scanner recordings continue when you switch apps or lock the phone. Stay within adapter range. Location access adds the GPS route; Finish saves the recording.")
     }.onAppear {
         let settings = store.activeVehicle?.scannerConnection ?? store.state.scanner
         kind = settings.kind; host = settings.host; port = String(settings.port)
