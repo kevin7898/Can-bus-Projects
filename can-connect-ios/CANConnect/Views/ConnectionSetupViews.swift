@@ -3,28 +3,65 @@ import SwiftUI
 struct ScannerConnectionView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var accessories = MXPlusAccessories()
+    @State private var kind: ScannerConnectionKind = .wifi
+    @State private var selectedAccessoryID: Int?
     @State private var host = ""
     @State private var port = ""
     @State private var failure: String?
-    var body: some View { SheetShell(title:"Wi-Fi scanner") {
-        InfoNote(text:"Join your ELM327 adapter's Wi-Fi and turn on ignition. This connection records standard OBD readings for the selected vehicle. Bluetooth/MFi and raw CAN are unavailable.")
+    var body: some View { SheetShell(title:"OBD scanner") {
+        Picker("Connection",selection:$kind) { ForEach(ScannerConnectionKind.allCases) { Text($0.title).tag($0) } }.accessibilityIdentifier("scanner.transport")
+        if kind == .wifi {
+            InfoNote(text:"Join your ELM327 adapter's Wi-Fi and turn on ignition. This connection records standard OBD readings for the selected vehicle.")
+        } else {
+            InfoNote(text:"Plug in your OBDLink MX+, turn on ignition, and pair it in iPhone Settings → Bluetooth. Press its Connect button to enable pairing. Close other OBD apps before connecting here.")
+            if accessories.items.isEmpty {
+                InfoNote(text:"No authenticated MX+ found. Pair the adapter, allow a few seconds, then refresh. Generic Bluetooth ELM327 and OBDLink CX are different transports.")
+            } else {
+                Picker("OBDLink MX+",selection:$selectedAccessoryID) {
+                    Text("Choose adapter").tag(nil as Int?)
+                    ForEach(accessories.items) { item in Text(item.name).tag(Optional(item.id)) }
+                }.accessibilityIdentifier("scanner.accessory")
+            }
+            Button("Pair / reconnect MX+") { accessories.showPicker() }.disabled(accessories.showingPicker).accessibilityIdentifier("scanner.pair")
+            Button("Refresh paired adapters") { refresh() }.accessibilityIdentifier("scanner.refresh")
+            if let message = accessories.pickerMessage { InfoNote(text:message) }
+        }
         DataRow(label:"Vehicle",value:store.activeVehicle?.title ?? "Choose a vehicle")
         InfoNote(text:"Confirm that this is the connected vehicle. If both profiles provide VINs, they must match. Without a VIN, verify the vehicle yourself before connecting.")
-        TextField("Scanner address",text:$host).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder).accessibilityIdentifier("connection.host")
-        TextField("TCP port",text:$port).keyboardType(.numberPad).textFieldStyle(.roundedBorder).accessibilityIdentifier("connection.port")
+        if kind == .wifi {
+            TextField("Scanner address",text:$host).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder).accessibilityIdentifier("connection.host")
+            TextField("TCP port",text:$port).keyboardType(.numberPad).textFieldStyle(.roundedBorder).accessibilityIdentifier("connection.port")
+        }
         if let failure { Text(failure).foregroundStyle(Palette.red).font(.system(size:13)) }
         InfoNote(text:store.scanner.status)
         AppButton(title:"Connect selected vehicle",icon:"antenna.radiowaves.left.and.right") {
             do {
-                guard let tcp = UInt16(port) else { throw AppFailure("Enter a TCP port from 1 to 65535.") }
-                try store.connectScanner(host:host,port:tcp); store.selectedTab = .live; dismiss()
+                let settings: ScannerSettings
+                if kind == .wifi {
+                    guard let tcp = UInt16(port), tcp > 0 else { throw AppFailure("Enter a TCP port from 1 to 65535.") }
+                    settings = ScannerSettings(host:host.trimmingCharacters(in:.whitespacesAndNewlines),port:tcp)
+                } else {
+                    guard let item = accessories.items.first(where:{$0.id == selectedAccessoryID}) else { throw AppFailure("Pair and choose your OBDLink MX+, then connect.") }
+                    settings = ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:item.serial)
+                }
+                try store.connectScanner(settings:settings); store.selectedTab = .live; dismiss()
             } catch { failure = error.localizedDescription }
         }.disabled(store.recording || store.pendingGPS)
         if store.scanner.connected || store.scanner.connecting {
             AppButton(title:"Disconnect scanner",secondary:true) { store.scanner.disconnect() }.disabled(store.recording)
         }
         InfoNote(text:"Keep the app visible for scanner recordings. Leaving the app saves the recording and disconnects the scanner. GPS recording can continue with the phone locked.")
-    }.onAppear { host = store.activeVehicle?.scannerConnection?.host ?? store.state.scanner.host; port = String(store.activeVehicle?.scannerConnection?.port ?? store.state.scanner.port) } }
+    }.onAppear {
+        let settings = store.activeVehicle?.scannerConnection ?? store.state.scanner
+        kind = settings.kind; host = settings.host; port = String(settings.port)
+        refresh()
+        selectedAccessoryID = accessories.items.first(where:{$0.serial == settings.accessorySerial})?.id ?? selectedAccessoryID
+    }.onChange(of:accessories.items.map(\.id)) { _,_ in selectOnlyAccessory() } }
+    private func refresh() { accessories.refresh(); selectOnlyAccessory() }
+    private func selectOnlyAccessory() {
+        if !accessories.items.contains(where:{$0.id == selectedAccessoryID}) { selectedAccessoryID = accessories.items.count == 1 ? accessories.items.first?.id : nil }
+    }
 }
 
 struct ServerConnectionView: View {

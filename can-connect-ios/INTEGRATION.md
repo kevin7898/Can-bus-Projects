@@ -19,17 +19,23 @@ This is synthetic explanatory data. Each sample contains only the readings retur
 
 Imports enforce a 20 MB / 500 trip / 500 profile limit, at most 100,000 route points and 200,000 OBD responses per trip, finite valid measurements and known schema/source semantics. Duplicate trip IDs within one archive are rejected; existing IDs are skipped. Vehicles map by ID/VIN; unknown IDs without profiles are rejected. Legacy archives without vehicle IDs bind to the selected profile. GPS-only trips cannot claim fuel/economy. Sample trips remain labelled. Scanner raw responses and original telemetry survive local export/import; the phone does not decode Android raw CSV or proprietary CAN captures.
 
-## ELM327 Wi-Fi
+## ELM327 identification and Wi-Fi
 
-`ELMWiFiSession` implements one TCP session with prompt buffering, per-command timeout, serial requests and explicit disconnect. Initialization sends `ATI`, `ATE0`, `ATL0`, `ATS1`, `ATH0`, `ATCAF1`, `ATSP0`, then Mode 09 VIN and supported standard PID pages, and reads `ATDP`. Required adapter settings must be acknowledged. No clearing faults, module coding, security access or bus monitoring is issued.
+`ELMIdentification` shares the same command sequence between Wi-Fi and MX+. `ELMWiFiSession` implements one TCP session with prompt buffering, per-command timeout, serial requests and explicit disconnect. Initialization sends `ATI`, `ATE0`, `ATL0`, `ATS1`, `ATH0`, `ATCAF1`, `ATSP0`, then Mode 09 VIN and supported standard PID pages, and reads `ATDP`. Required adapter settings must be acknowledged. No clearing faults, module coding, security access or bus monitoring is issued.
 
 `ScannerRecorder` keeps the identified connection open and serially polls only recognized, confirmed Mode 01 PIDs. `OBDDecoder` handles speed, RPM, coolant, absolute MAP/barometer, fuel rate/level, ambient temperature, ECU voltage, intake/oil temperatures and engine load in canonical units. With headers disabled, conflicting ECU replies are deliberately unavailable because their source cannot be attributed. Multiple distinct VINs are rejected. Unsupported commands, timeout, transport loss and empty polling cycles stop live acquisition; disconnect clears readings. Live values expire after ten seconds. Real vehicle/scanner compatibility remains unverified.
 
 Scanner endpoint validation accepts private/link-local IPv4 addresses, valid `.local` names and loopback for local protocol fixtures. There is no network sweep. VIN lookup is separate, explicit and ephemeral; it uses NHTSA vPIC suggestions for review, never inferred odometer/tank/DPF values.
 
+## OBDLink MX+ Bluetooth
+
+`ELMMXPlusSession` opens an Apple `EASession` only for an authenticated MX+ advertising `com.obdlink`. Name/model matching accepts MX+ / MX201 and excludes other OBDLink products. The setup sheet offers the native Bluetooth accessory picker, refresh and explicit selection. A privately remembered serial prevents replacing a chosen adapter with another one. `ScannerSettings.transport` is optional; legacy profiles default to Wi-Fi.
+
+`MXPlusStreams` schedules input/output on the main run loop; `ELMAccessoryChannel` handles partial writes, backpressure, fragmented prompts, serial requests, a 64 KB response bound, per-command timeout, cancellation and stream closure. The same identity, VIN safety and confirmed-PID polling pipeline feeds actual scanner recordings. Optional recording transport metadata survives drafts, archives and the Mac wire source label. Non-scanner recordings cannot claim scanner transport metadata. No Bluetooth session, manufacturer approval or hardware acceptance is inferred from stream fixtures. See MXPLUS.md.
+
 ## Native Mac API v1
 
-The server implementation is on branch `feature/mac-native-app`, under `mac-app/`. The iOS branch consumes its contract without changing the Mac branch or LAN configuration. Requests carry `Authorization: Bearer …`. Redirects are refused; local-network HTTP is enabled via `NSAllowsLocalNetworking`, and public endpoints/credentials in URLs are rejected by the client.
+The server implementation is on branch `feature/mac-native-app`, under `mac-app/`. The iOS branch consumes its contract without changing the Mac branch. LAN access remains an explicit runtime setting. Requests carry `Authorization: Bearer …`. Redirects are refused; local-network HTTP is enabled via `NSAllowsLocalNetworking`, and public endpoints/credentials in URLs are rejected by the client.
 
 - `GET /v1/health`: validate schema 1, service `CAN CONNECT`, and ingestion running/paused.
 - `GET /v1/vehicles`: match ID or normalized VIN; conflicting identity fails. No name-based guessing.
@@ -45,7 +51,7 @@ The Mac archives source bytes before its initial 202 receipt, then processes sep
 
 - `Core/Models.swift`, `VehicleProfile.swift`, `ScannerReadings.swift`: values, migrations, acceptance, standard decoding and source-aware derived totals.
 - `Services/GPSRecorder.swift`: Core Location lifecycle.
-- `Services/VehicleIdentification.swift`, `ScannerRecorder.swift`: TCP transport, reviewed identity and continuous acquisition.
+- `Services/VehicleIdentification.swift`, `MXPlusTransport.swift`, `ScannerRecorder.swift`: TCP/MFi transports, reviewed identity and continuous acquisition.
 - `Services/LocalStore.swift`, `AppStore.swift`: atomic state, recovery, vehicle isolation and orchestration.
 - `Services/MacServer.swift`: Keychain, endpoint/API contract, stable payload and receipt validation.
 - `Views/`: existing locked tab/page/card design, native connection/setup sheets.

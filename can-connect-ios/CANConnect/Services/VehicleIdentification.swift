@@ -47,6 +47,30 @@ protocol ScannerTransport: AnyObject {
     func disconnect()
 }
 
+// The same reviewed identity and read-only configuration for every transport.
+@MainActor
+enum ELMIdentification {
+    static func read(command: (String) async throws -> String) async throws -> ScannerIdentity {
+        let adapter = try await command("ATI")
+        for setting in ["ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0"] {
+            let response = try await command(setting)
+            guard response.uppercased().contains("OK") else { throw AppFailure("The adapter rejected configuration \(setting). Check ELM327 compatibility.") }
+        }
+        let vinReply = try await command("0902")
+        let vin = try ELMIdentityParser.vin(vinReply)
+        var supported: [Int] = []
+        for base in [0,32,64] {
+            if base != 0 && !supported.contains(base) { break }
+            let response = try await command(String(format:"01%02X",base))
+            supported += ELMIdentityParser.supportedPIDs(response,base:base)
+        }
+        let vehicleProtocol = try await command("ATDP")
+        guard vin != nil || !supported.isEmpty else { throw AppFailure("The adapter replied, but the vehicle did not provide identification. Check ignition and connection, or continue manually.") }
+        return ScannerIdentity(vin:vin,adapter:Self.clean(adapter),vehicleProtocol:["ISO","CAN","J1850","SAE"].contains(where:{vehicleProtocol.uppercased().contains($0)}) ? Self.clean(vehicleProtocol) : "Unknown",supportedPIDs:supported.filter {$0 % 32 != 0})
+    }
+    private static func clean(_ value: String) -> String { value.components(separatedBy:.newlines).filter {!$0.uppercased().hasPrefix("AT") && !$0.isEmpty}.joined(separator:" ").trimmingCharacters(in:.whitespacesAndNewlines) }
+}
+
 @MainActor
 final class ELMWiFiSession: ScannerTransport {
     private var connection: NWConnection?
@@ -63,22 +87,7 @@ final class ELMWiFiSession: ScannerTransport {
     func open(host: String, port: UInt16) async throws -> ScannerIdentity {
         guard Self.isLocalHost(host), port > 0 else { throw AppFailure("Enter the scanner's local IPv4 address (or .local hostname) and TCP port from its instructions.") }
         try await connect(host:host,port:port)
-        let adapter = try await command("ATI")
-        for setting in ["ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0"] {
-            let response = try await command(setting)
-            guard response.uppercased().contains("OK") else { throw AppFailure("The adapter rejected configuration \(setting). Check ELM327 compatibility.") }
-        }
-        let vinReply = try await command("0902")
-        let vin = try ELMIdentityParser.vin(vinReply)
-        var supported: [Int] = []
-        for base in [0,32,64] {
-            if base != 0 && !supported.contains(base) { break }
-            let response = try await command(String(format:"01%02X",base))
-            supported += ELMIdentityParser.supportedPIDs(response,base:base)
-        }
-        let vehicleProtocol = try await command("ATDP")
-        guard vin != nil || !supported.isEmpty else { throw AppFailure("The adapter replied, but the vehicle did not provide identification. Check ignition and connection, or continue manually.") }
-        return ScannerIdentity(vin:vin,adapter:clean(adapter),vehicleProtocol:["ISO","CAN","J1850","SAE"].contains(where:{vehicleProtocol.uppercased().contains($0)}) ? clean(vehicleProtocol) : "Unknown",supportedPIDs:supported.filter {$0 % 32 != 0})
+        return try await ELMIdentification.read(command:command)
     }
     nonisolated static func isLocalHost(_ input: String) -> Bool {
         let host = input.lowercased().trimmingCharacters(in:.whitespacesAndNewlines)
@@ -148,7 +157,6 @@ final class ELMWiFiSession: ScannerTransport {
             }
         }
     }
-    private func clean(_ value: String) -> String { value.components(separatedBy:.newlines).filter {!$0.uppercased().hasPrefix("AT") && !$0.isEmpty}.joined(separator:" ").trimmingCharacters(in:.whitespacesAndNewlines) }
     private func armTimeout() {
         timeout?.cancel()
         timeout = Task { [weak self] in

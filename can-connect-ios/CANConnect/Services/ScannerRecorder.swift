@@ -12,8 +12,8 @@ final class ScannerRecorder: ObservableObject {
     var onDisconnect: ((String) -> Void)?
     private var work: Task<Void,Never>?
     private var session: ScannerTransport?
-    private let makeSession: @MainActor () -> ScannerTransport
-    init(makeSession: (@MainActor () -> ScannerTransport)? = nil) { self.makeSession = makeSession ?? { ELMWiFiSession() } }
+    private let makeSession: (@MainActor () -> ScannerTransport)?
+    init(makeSession: (@MainActor () -> ScannerTransport)? = nil) { self.makeSession = makeSession }
 
     func value(_ key: String, at date: Date) -> Double? {
         guard connected, let reading = readings[key], (0...10).contains(date.timeIntervalSince(reading.date)) else { return nil }
@@ -21,7 +21,11 @@ final class ScannerRecorder: ObservableObject {
     }
     func connect(settings: ScannerSettings, vehicle: VehicleProfile) {
         disconnect()
-        let transport = makeSession(); session = transport
+        let transport: ScannerTransport
+        if let makeSession { transport = makeSession() }
+        else if settings.kind == .wifi { transport = ELMWiFiSession() }
+        else { transport = ELMMXPlusSession(serial:settings.accessorySerial) }
+        session = transport
         connecting = true; status = "Identifying vehicle…"
         work = Task { [weak self] in
             guard let self else { return }
@@ -35,7 +39,7 @@ final class ScannerRecorder: ObservableObject {
                 let pids = OBDDecoder.definitions.filter { identity.supportedPIDs.contains($0.pid) }
                 guard !pids.isEmpty else { throw AppFailure("The vehicle reported no supported dashboard PIDs.") }
                 self.vehicleID = vehicle.id; self.connected = true; self.connecting = false
-                self.status = "Wi-Fi OBD connected · \(pids.count) signals"
+                self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals"
                 while !Task.isCancelled {
                     var received = false
                     for definition in pids {

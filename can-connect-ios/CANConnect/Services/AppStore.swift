@@ -131,7 +131,7 @@ final class AppStore: ObservableObject {
         if source == .phoneGPS { pendingGPS = true; gps.start() }
         else if source == .scanner {
             guard scanner.connected, scanner.vehicleID == state.selectedVehicleID else { error = "Connect the scanner to the selected vehicle first."; return }
-            state.draft = RecordingDraft(vehicleID:state.selectedVehicleID, source:.scanner, startedAt:now, updatedAt:now)
+            state.draft = RecordingDraft(vehicleID:state.selectedVehicleID, source:.scanner, startedAt:now, updatedAt:now, scannerTransport:(activeVehicle?.scannerConnection ?? state.scanner).kind)
             UIApplication.shared.isIdleTimerDisabled = true
             save()
         }
@@ -257,11 +257,16 @@ final class AppStore: ObservableObject {
         case .economy: return "—"
         }
     }
+    var scannerTitle: String { (activeVehicle?.scannerConnection ?? state.scanner).kind.shortTitle }
     func connectScanner(host: String, port: UInt16) throws {
+        try connectScanner(settings:ScannerSettings(host:host.trimmingCharacters(in:.whitespacesAndNewlines),port:port))
+    }
+    func connectScanner(settings: ScannerSettings) throws {
         guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before changing scanner connections.") }
         guard let vehicle = activeVehicle, !vehicle.isSample else { throw AppFailure("Choose or add your real vehicle before connecting a scanner.") }
-        let settings = ScannerSettings(host:host.trimmingCharacters(in:.whitespacesAndNewlines),port:port)
-        guard ELMWiFiSession.isLocalHost(settings.host), port > 0 else { throw AppFailure("Enter a private scanner address and valid TCP port.") }
+        if settings.kind == .wifi {
+            guard ELMWiFiSession.isLocalHost(settings.host), settings.port > 0 else { throw AppFailure("Enter a private scanner address and valid TCP port.") }
+        }
         var next = state; next.scanner = settings
         if let i = next.vehicles.firstIndex(where:{$0.id == vehicle.id}) { next.vehicles[i].scannerConnection = settings }
         try disk.save(next); state = next

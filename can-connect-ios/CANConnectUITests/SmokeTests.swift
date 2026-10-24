@@ -51,6 +51,25 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
+    func testMXPlusSetupUsesPairedAccessoriesWithoutNetworkFields() async {
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing","--show-onboarding"]; app.launch()
+        XCTAssertTrue(app.buttons["onboarding.manual"].waitForExistence(timeout:10)); app.buttons["onboarding.manual"].tap()
+        await enter("Test",in:app.textFields["vehicle.make"],app:app)
+        await enter("Synthetic MX+",in:app.textFields["vehicle.model"],app:app)
+        await saveVehicle(in:app); await waitForOnboardingToDismiss(app)
+        app.buttons["Connect"].tap()
+        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","CAN recorder")).firstMatch.tap()
+        let picker = app.buttons["scanner.transport"]
+        XCTAssertTrue(picker.waitForExistence(timeout:5)); picker.tap()
+        app.buttons["OBDLink MX+ · Bluetooth"].tap()
+        XCTAssertTrue(app.buttons["scanner.refresh"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.textFields["connection.host"].exists)
+        XCTAssertFalse(app.textFields["connection.port"].exists)
+        app.buttons["Connect selected vehicle"].tap()
+        XCTAssertTrue(app.staticTexts["Pair and choose your OBDLink MX+, then connect."].waitForExistence(timeout:5))
+    }
+
+    @MainActor
     func testWiFiScannerRecordsActualTCPFixtureReadings() async throws {
         let fixture = try LoopbackScannerFixture()
         try await fixture.start()

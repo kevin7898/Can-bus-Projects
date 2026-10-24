@@ -99,4 +99,31 @@ final class ScannerTests: XCTestCase {
         XCTAssertGreaterThan(trip.samples?.count ?? 0,0)
         XCTAssertEqual(try disk.load()?.trips.first?.id,trip.id)
     }
+    @MainActor
+    func testMXPlusRecordingRetainsTransportAndSourceResponses() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let fixture = FixtureScanner(); let scanner = ScannerRecorder(makeSession:{fixture})
+        let disk = LocalStore(url:root.appendingPathComponent("state.json")); let store = AppStore(disk:disk,scanner:scanner)
+        var vehicle = VehicleProfile(); vehicle.make = "Test"; vehicle.model = "Synthetic MX+"
+        try store.saveVehicle(vehicle)
+        try store.connectScanner(settings:ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:"SYNTHETIC"))
+        let connected = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in scanner.connected },object:nil)
+        await fulfillment(of:[connected],timeout:3)
+        XCTAssertTrue(scanner.status.contains("MX+ Bluetooth"))
+        store.startRecording()
+        let samples = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in (store.state.draft?.samples?.count ?? 0) >= 3 },object:nil)
+        await fulfillment(of:[samples],timeout:3)
+        store.finishRecording(); scanner.disconnect()
+        let trip = try XCTUnwrap(store.sortedTrips.first)
+        XCTAssertEqual(trip.scannerTransport,.obdLinkMXPlus)
+        XCTAssertEqual(trip.source,.scanner); XCTAssertFalse(trip.isSample)
+        XCTAssertTrue(trip.samples?.contains(where:{$0.command == "010C" && $0.reply == "41 0C 1A F8\r>"}) ?? false)
+        let archive = try TripArchive.decode(store.archive([trip]).encoded())
+        XCTAssertEqual(archive.trips.first?.scannerTransport,.obdLinkMXPlus)
+        let wire = try JSONSerialization.jsonObject(with:MacRecording.encode(trip)) as? [String:Any]
+        XCTAssertEqual(wire?["source"] as? String,"OBDLink MX+ · Bluetooth")
+        XCTAssertEqual(try disk.load()?.vehicles.last?.scannerConnection?.kind,.obdLinkMXPlus)
+    }
+
 }

@@ -23,6 +23,7 @@ struct TransferItem: Codable, Identifiable {
 // Stable source payload: retry sends the identical bytes, allowing Mac content-hash deduplication.
 enum MacRecording {
     static func encode(_ trip: Trip) throws -> Data {
+        guard trip.scannerTransport == nil || trip.source == .scanner else { throw AppFailure("Scanner transport metadata requires a scanner recording.") }
         guard !trip.isSample else { throw AppFailure("Sample recordings cannot be uploaded as real vehicle data.") }
         var samples: [[String:Any]] = (trip.samples ?? []).map {
             ["timestamp":$0.timestamp.timeIntervalSince1970,"signals":$0.signals,"command":$0.command,"reply":$0.reply]
@@ -34,7 +35,7 @@ enum MacRecording {
         }
         guard !samples.isEmpty else { throw AppFailure("This recording has no measured scanner samples or GPS points to transfer.") }
         samples.sort { ($0["timestamp"] as! Double) < ($1["timestamp"] as! Double) }
-        let bytes = try JSONSerialization.data(withJSONObject:["schemaVersion":1,"recordingID":trip.id.uuidString,"name":trip.name,"source":trip.source.title,"samples":samples],options:[.sortedKeys])
+        let bytes = try JSONSerialization.data(withJSONObject:["schemaVersion":1,"recordingID":trip.id.uuidString,"name":trip.name,"source":trip.scannerTransport?.title ?? trip.source.title,"samples":samples],options:[.sortedKeys])
         guard bytes.count <= 50*1024*1024 else { throw AppFailure("This recording exceeds the Mac's 50 MB transfer limit. Export it for manual handling.") }
         return bytes
     }

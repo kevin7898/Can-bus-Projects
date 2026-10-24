@@ -2,7 +2,7 @@ import Foundation
 
 // v1.0: approved CAN / CONNECT design, native iOS implementation.
 enum TripSource: String, Codable, CaseIterable { case demo, phoneGPS, scanner, imported
-    var title: String { switch self { case .demo: return "Sample CAN feed"; case .phoneGPS: return "iPhone GPS"; case .scanner: return "Wi-Fi scanner"; case .imported: return "Imported recording" } }
+    var title: String { switch self { case .demo: return "Sample CAN feed"; case .phoneGPS: return "iPhone GPS"; case .scanner: return "OBD scanner"; case .imported: return "Imported recording" } }
 }
 enum Signal: String, Codable, CaseIterable, Identifiable {
     case rpm, coolant, boost, fuel, economy, outside, voltage
@@ -39,6 +39,7 @@ struct Trip: Codable, Identifiable, Equatable {
     var fuelLitres: Double?
     var route: [RoutePoint] = []
     var samples: [OBDSample]? = nil
+    var scannerTransport: ScannerConnectionKind? = nil
     var durationText: String { "\(max(0, Int(duration / 60))) min" }
 }
 struct FuelEntry: Codable, Identifiable, Equatable {
@@ -66,6 +67,7 @@ struct RecordingDraft: Codable {
     var distanceKM: Double = 0
     var route: [RoutePoint] = []
     var samples: [OBDSample]? = nil
+    var scannerTransport: ScannerConnectionKind? = nil
     mutating func accept(_ point: RoutePoint) {
         guard point.isValid, point.accuracy <= 50, point.timestamp >= startedAt else { return }
         if let last = route.last {
@@ -81,7 +83,7 @@ struct RecordingDraft: Codable {
     }
     func trip(endedAt: Date, recovered: Bool = false) -> Trip {
         let measured = measuredFuel(endedAt:endedAt)
-        return Trip(id: id, vehicleID:vehicleID, name: recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"), startedAt: startedAt, duration: max(0, endedAt.timeIntervalSince(startedAt)), distanceKM: distanceKM, source: source, isSample: source == .demo, economy: source == .demo ? 5.4 : measured.economy, fuelLitres: source == .demo ? distanceKM * 5.4 / 100 : measured.litres, route: route, samples: samples)
+        return Trip(id: id, vehicleID:vehicleID, name: recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"), startedAt: startedAt, duration: max(0, endedAt.timeIntervalSince(startedAt)), distanceKM: distanceKM, source: source, isSample: source == .demo, economy: source == .demo ? 5.4 : measured.economy, fuelLitres: source == .demo ? distanceKM * 5.4 / 100 : measured.litres, route: route, samples: samples, scannerTransport:scannerTransport)
     }
 }
 struct StoredState: Codable {
@@ -126,6 +128,7 @@ struct TripArchive: Codable {
                   trip.economy.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   trip.fuelLitres.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   trip.source != .phoneGPS || (trip.economy == nil && trip.fuelLitres == nil),
+                  trip.scannerTransport == nil || trip.source == .scanner,
                   trip.source != .demo || trip.isSample else { throw AppFailure("The recording contains invalid values.") }
         }
         return archive

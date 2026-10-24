@@ -1,8 +1,19 @@
 import Foundation
 
+enum ScannerConnectionKind: String, Codable, CaseIterable, Identifiable {
+    case wifi, obdLinkMXPlus
+    var id: String { rawValue }
+    var title: String { self == .wifi ? "Wi-Fi ELM327" : "OBDLink MX+ · Bluetooth" }
+    var shortTitle: String { self == .wifi ? "Wi-Fi OBD" : "MX+ Bluetooth OBD" }
+}
+
 struct ScannerSettings: Codable, Equatable {
     var host = ""
     var port: UInt16 = 35000
+    // Optional so saved Wi-Fi profiles decode without migration or data loss.
+    var transport: ScannerConnectionKind? = nil
+    var accessorySerial: String? = nil
+    var kind: ScannerConnectionKind { transport ?? .wifi }
 }
 
 // One actual adapter response, timestamped on receipt. No carried-forward readings.

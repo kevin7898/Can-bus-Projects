@@ -25,7 +25,7 @@ struct ConnectView: View {
             device("This iPhone",subtitle:store.recording && store.source == .phoneGPS ? store.gps.status : "GPS recorder · ready",icon:"iphone",status:"Local",color:Palette.green)
             Button { recorderInfo = true } label: { device("CAN recorder",subtitle:store.scanner.status,icon:"cpu",status:store.scanner.connected ? "Online" : "Set up",color:store.scanner.connected ? Palette.green : Palette.muted) }.buttonStyle(.plain)
             Button { serverSetup = true } label: { device("Mac mini M4",subtitle:store.serverStatus,icon:"desktopcomputer",status:"Set up",color:Palette.muted) }.buttonStyle(.plain)
-            InfoNote(text:"Record GPS or connect a Wi-Fi ELM327 scanner. Pair your private Mac server to transfer saved recordings.")
+            InfoNote(text:"Record GPS or connect an OBDLink MX+ or Wi-Fi ELM327 scanner. Pair your private Mac server to transfer saved recordings.")
             Spacer(minLength:0)
             AppButton(title:"Use iPhone GPS",icon:"location",secondary:true) { if !store.recording { store.source = .phoneGPS }; store.selectedTab = .live }
         }.padding(.horizontal,1).padding(.top,10)
@@ -59,7 +59,7 @@ struct SettingsView: View {
         InfoNote(text:"Five tabs. Pages within each tab. Independent signal cards. Local recordings and fill-ups.")
         AppButton(title:"Manage vehicles",icon:"car.2",secondary:true) { garage = true }
         DataRow(label:"GPS recording",value:"Available")
-        DataRow(label:"Live vehicle data",value:store.scanner.connected ? "Wi-Fi OBD" : "GPS / sample / Wi-Fi OBD")
+        DataRow(label:"Live vehicle data",value:store.scanner.connected ? store.scannerTitle : "GPS / sample / OBD")
         DataRow(label:"Mac server",value:store.serverStatus)
         InfoNote(text:"Start a GPS recording to request location access. While recording, the blue location indicator lets GPS continue when the phone locks. Stop recording from Live.",icon:"location")
         AppButton(title:"Remove sample history",secondary:true) { removeSamples = true }

@@ -11,7 +11,7 @@ struct LiveView: View {
                 Menu {
                     Button("Sample CAN feed") { store.source = .demo }
                     Button("iPhone GPS") { store.source = .phoneGPS }
-                    Button("Wi-Fi scanner") { store.source = .scanner }
+                    Button("OBD scanner") { store.source = .scanner }
                 } label: { HStack(spacing:8) { Image(systemName:store.source == .phoneGPS ? "location" : "cpu").foregroundStyle(Palette.blue); Text(store.source.title).foregroundStyle(Palette.text); Text(store.source == .demo ? "· Sample data" : store.source == .scanner ? "· Measured OBD" : "· GPS only").foregroundStyle(Palette.muted); Spacer(); Image(systemName:"chevron.down").foregroundStyle(Palette.muted) }.font(.system(size:11)).padding(12).background(Palette.surface, in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(Palette.border)) }.disabled(store.recording || store.pendingGPS)
                 PageControl(labels:["Drive","Engine","Economy"], selection:$page)
                 TabView(selection:$page) {
@@ -35,7 +35,7 @@ struct LiveView: View {
     private func drive(compact: Bool) -> some View {
         VStack(spacing:compact ? 9 : 16) {
             Spacer(minLength:0)
-            VStack(spacing:3) { Eyebrow(text:store.source == .demo ? "Sample CAN · Preview" : store.source == .scanner ? "Wi-Fi OBD · Vehicle speed" : "iPhone GPS · Speed")
+            VStack(spacing:3) { Eyebrow(text:store.source == .demo ? "Sample CAN · Preview" : store.source == .scanner ? "\(store.scannerTitle) · Vehicle speed" : "iPhone GPS · Speed")
                 Text(store.speedText).font(.system(size:compact ? 64 : 80, weight:.regular)).monospacedDigit().minimumScaleFactor(0.6)
                 Text("km/h").font(.system(size:13)).foregroundStyle(Palette.muted)
             }

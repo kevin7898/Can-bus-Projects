@@ -53,7 +53,7 @@ struct VehicleSetupView: View {
         VStack(alignment:.leading,spacing:15) {
             Button { wifi.toggle(); failure = nil } label: { choice("Read from a scanner",detail:"Wi-Fi ELM327 · VIN, protocol and supported PIDs",icon:"cpu") }.buttonStyle(.plain).accessibilityIdentifier("onboarding.scanner")
             if wifi {
-                InfoNote(text:"Join the adapter's Wi-Fi and turn the ignition on. Enter its address and port. Bluetooth adapters and the CAN recorder need their own transport integration.")
+                InfoNote(text:"Join the adapter's Wi-Fi and turn the ignition on. Enter its address and port. For OBDLink MX+, enter your vehicle manually, then choose Bluetooth in Connect → CAN recorder.")
                 field("Scanner address",placeholder:"e.g. 192.168.0.10",text:$host,key:"scanner.host")
                 field("TCP port",placeholder:"From adapter instructions",text:$port,key:"scanner.port",keyboard:.numberPad)
                 Toggle("Look up VIN details with NHTSA",isOn:$lookup).font(.system(size:13))

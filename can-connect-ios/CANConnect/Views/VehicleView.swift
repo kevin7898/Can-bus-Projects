@@ -47,7 +47,7 @@ struct VehicleView: View {
             Text(store.latest?.samples?.isEmpty == false ? "End of recorded drive" : "Waiting for recorded vehicle signals").font(.system(size:17))
             if store.activeVehicle?.fuel != .electric { DataRow(label:"Coolant temperature",value:"\(store.latest?.recordedValue("coolantC")?.text(0) ?? "—") °C"); DataRow(label:"Engine speed",value:"\(store.latest?.recordedValue("rpm")?.text(0) ?? "—") rpm") }
             DataRow(label:"System voltage",value:"\(store.latest?.recordedValue("voltage")?.text(1) ?? "—") V")
-            InfoNote(text:"These are saved readings from the latest drive, when available. Open Live for current Wi-Fi OBD readings; unsupported signals stay unavailable.")
+            InfoNote(text:"These are saved readings from the latest drive, when available. Open Live for current OBD readings; unsupported signals stay unavailable.")
             if let vehicle = store.activeVehicle, !vehicle.supportedPIDs.isEmpty { Text("\(vehicle.supportedPIDs.count) standard OBD PIDs confirmed during setup").captionStyle() }
             Spacer(minLength:0)
         }.padding(.horizontal,1).padding(.top,8)
