@@ -2,7 +2,8 @@ import XCTest
 import Network
 
 final class SmokeTests: XCTestCase {
-    func testTabsPagesAndSampleRecording() {
+    @MainActor
+    func testTabsPagesAndSampleRecording() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))
         app.buttons["Live"].tap()
@@ -27,24 +28,30 @@ final class SmokeTests: XCTestCase {
         app.buttons["Vehicle"].tap()
         XCTAssertTrue(app.buttons["Logbook"].isSelected)
     }
-    func testManualVehicleOnboardingAndVehicleSwitch() {
+    @MainActor
+    func testManualVehicleOnboardingAndVehicleSwitch() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing","--show-onboarding"]; app.launch()
         let manual = app.buttons["onboarding.manual"]
         XCTAssertTrue(manual.waitForExistence(timeout:10)); manual.tap()
-        let make = app.textFields["vehicle.make"]; make.tap(); make.typeText("Honda")
-        let model = app.textFields["vehicle.model"]; model.tap(); model.typeText("CB500X")
+        await enter("Honda",in:app.textFields["vehicle.make"],app:app)
+        await enter("CB500X",in:app.textFields["vehicle.model"],app:app)
         let save = app.buttons["onboarding.save"]
         for _ in 0..<6 {
             if save.isHittable { break }
-            app.scrollViews.firstMatch.swipeUp()
+            app.scrollViews["onboarding.form"].swipeUp()
         }
         XCTAssertTrue(save.waitForExistence(timeout:5)); save.tap()
+        await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["Choose vehicle"].waitForExistence(timeout:5))
         app.buttons["Vehicle"].tap()
         XCTAssertTrue(app.staticTexts["Honda CB500X · recorded values"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["Starting odometer"].exists == false)
         let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "New vehicle without sample telemetry"; shot.lifetime = .keepAlways; add(shot)
-        app.buttons["Choose vehicle"].tap(); app.buttons["Sample Jetta"].tap()
+        app.buttons["Choose vehicle"].tap()
+        let sample = app.buttons["garage.select.sample"]
+        let ready = XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == true AND hittable == true"),object:sample)
+        await fulfillment(of:[ready],timeout:5)
+        sample.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
         XCTAssertTrue(app.staticTexts["Sample vehicle snapshot · recorded values"].waitForExistence(timeout:5))
     }
 
@@ -55,11 +62,12 @@ final class SmokeTests: XCTestCase {
         defer { fixture.stop() }
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing","--show-onboarding"]; app.launch()
         XCTAssertTrue(app.buttons["onboarding.manual"].waitForExistence(timeout:10)); app.buttons["onboarding.manual"].tap()
-        app.textFields["vehicle.make"].tap(); app.textFields["vehicle.make"].typeText("Test")
-        app.textFields["vehicle.model"].tap(); app.textFields["vehicle.model"].typeText("Synthetic ECU")
+        await enter("Test",in:app.textFields["vehicle.make"],app:app)
+        await enter("Synthetic ECU",in:app.textFields["vehicle.model"],app:app)
         let save = app.buttons["onboarding.save"]
-        for _ in 0..<6 { if save.isHittable { break }; app.scrollViews.firstMatch.swipeUp() }
+        for _ in 0..<6 { if save.isHittable { break }; app.scrollViews["onboarding.form"].swipeUp() }
         save.tap()
+        await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["Connect"].waitForExistence(timeout:5)); app.buttons["Connect"].tap()
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","CAN recorder")).firstMatch.tap()
         let host = app.textFields["connection.host"]; XCTAssertTrue(host.waitForExistence(timeout:3)); host.tap(); host.typeText("127.0.0.1")
@@ -78,6 +86,22 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Scanner drive"].waitForExistence(timeout:5))
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","Scanner drive")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Measured OBD responses"].waitForExistence(timeout:5))
+    }
+
+    @MainActor
+    private func enter(_ text: String, in field: XCUIElement, app: XCUIApplication) async {
+        XCTAssertTrue(field.waitForExistence(timeout:5)); field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
+        field.typeText(text)
+        let entered = XCTNSPredicateExpectation(predicate:NSPredicate(format:"value == %@",text),object:field)
+        await fulfillment(of:[entered],timeout:5)
+    }
+    @MainActor
+    private func waitForOnboardingToDismiss(_ app: XCUIApplication) async {
+        let dismissed = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
+            !app.buttons["onboarding.save"].exists && app.keyboards.count == 0 && app.buttons["Vehicle"].isHittable
+        },object:nil)
+        await fulfillment(of:[dismissed],timeout:10)
     }
 
 }

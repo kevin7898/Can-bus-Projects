@@ -10,11 +10,11 @@ struct RootView: View {
             HStack { HStack(spacing:9) { Text("CAN"); Text("/").foregroundStyle(Palette.blue); Text("CONNECT") }.font(.system(size:12, weight:.medium)).tracking(2)
                 Spacer()
                 Menu {
-                    ForEach(store.state.vehicles) { vehicle in Button(vehicle.title) { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } } }
+                    ForEach(store.state.vehicles) { vehicle in Button(vehicle.title) { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } }.accessibilityIdentifier(vehicle.isSample ? "garage.select.sample" : "garage.select.\(vehicle.id.uuidString)") }
                     Divider()
                     Button("Add a vehicle",systemImage:"plus") { store.vehicleSetupPresented = true }
                     Button("Manage vehicles",systemImage:"car.2") { store.garagePresented = true }
-                } label: { HStack(spacing:5) { Image(systemName:store.activeVehicle?.kind.icon ?? "car.side"); Text(store.activeVehicle?.title ?? "Add vehicle").lineLimit(1).minimumScaleFactor(0.7) }.font(.system(size:10)).foregroundStyle(Palette.blue).frame(maxWidth:120) }.disabled(store.recording || store.pendingGPS).accessibilityLabel("Choose vehicle")
+                } label: { HStack(spacing:5) { Image(systemName:store.activeVehicle?.kind.icon ?? "car.side"); Text(store.activeVehicle?.title ?? "Add vehicle").lineLimit(1).minimumScaleFactor(0.7) }.font(.system(size:10)).foregroundStyle(Palette.blue).frame(maxWidth:120,minHeight:30).contentShape(Rectangle()) }.disabled(store.recording || store.pendingGPS).accessibilityLabel("Choose vehicle")
                 Button { settings = true } label: { Image(systemName:"slider.horizontal.3").frame(width:36,height:30) }.foregroundStyle(Palette.muted).accessibilityLabel("App settings")
             }
             HStack(alignment:.bottom) {

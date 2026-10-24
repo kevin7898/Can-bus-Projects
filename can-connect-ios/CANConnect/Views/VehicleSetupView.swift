@@ -18,6 +18,7 @@ struct VehicleSetupView: View {
     @State private var failure: String?
     @State private var work: Task<Void,Never>?
     @State private var scanner = ELMWiFiSession()
+    @FocusState private var focusedField: String?
     init(existing: VehicleProfile? = nil) {
         let vehicle = existing ?? VehicleProfile()
         _profile = State(initialValue:vehicle); _page = State(initialValue:existing == nil ? 0 : 1)
@@ -39,13 +40,14 @@ struct VehicleSetupView: View {
                     if let failure { Text(failure).font(.system(size:12)).foregroundStyle(Palette.red).fixedSize(horizontal:false,vertical:true) }
                     if busy { HStack { ProgressView(); Text("Reading vehicle details…").captionStyle(); Spacer(); Button("Cancel") { cancel() } }.padding(.vertical,10) }
                 }.padding(20)
-            }.background(Palette.background).foregroundStyle(Palette.text)
+            }.accessibilityIdentifier("onboarding.form").scrollDismissesKeyboard(.interactively).background(Palette.background).foregroundStyle(Palette.text)
                 .navigationTitle("Vehicle setup").navigationBarTitleDisplayMode(.inline)
                 .toolbar { if store.state.onboardingCompleted { ToolbarItem(placement:.topBarTrailing) { Button("Cancel") { cancel(); dismiss() } } } }
                 .toolbarBackground(Palette.surface,for:.navigationBar).toolbarBackground(.visible,for:.navigationBar)
         }.preferredColorScheme(.dark).tint(Palette.blue)
             .interactiveDismissDisabled(!store.state.onboardingCompleted || busy)
             .onDisappear { cancel() }
+            .onChange(of:page) { _,_ in focusedField = nil }
     }
     private var identification: some View {
         VStack(alignment:.leading,spacing:15) {
@@ -93,7 +95,7 @@ struct VehicleSetupView: View {
     private var existingVIN: VehicleProfile? { guard let normalized = try? VIN.normalized(vin) else { return nil }; return store.state.vehicles.first {$0.id != profile.id && $0.vin == normalized} }
     private func choice(_ title: String, detail: String, icon: String) -> some View { HStack(spacing:13) { Image(systemName:icon).font(.system(size:25)).foregroundStyle(Palette.blue); VStack(alignment:.leading,spacing:6) { Text(title).font(.system(size:16)); Text(detail).captionStyle() }; Spacer(); Image(systemName:"chevron.right").font(.system(size:11)).foregroundStyle(Palette.muted) }.foregroundStyle(Palette.text).card() }
     private func field(_ title: String, placeholder: String, text: Binding<String>, key: String, keyboard: UIKeyboardType = .default) -> some View {
-        VStack(alignment:.leading,spacing:7) { Text(title).captionStyle(); TextField(placeholder,text:text).keyboardType(keyboard).textInputAutocapitalization(key.contains("VIN") || key == "vehicle.vin" ? .characters : .words).autocorrectionDisabled().padding(12).font(.system(size:15)).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier(key) }
+        VStack(alignment:.leading,spacing:7) { Text(title).captionStyle(); TextField(placeholder,text:text).keyboardType(keyboard).textInputAutocapitalization(key.contains("VIN") || key == "vehicle.vin" ? .characters : .words).autocorrectionDisabled().focused($focusedField,equals:key).padding(12).font(.system(size:15)).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier(key) }
     }
     private func apply(_ suggested: VehicleProfile) {
         profile.make = suggested.make; profile.model = suggested.model; profile.trim = suggested.trim; profile.engine = suggested.engine; profile.transmission = suggested.transmission; profile.kind = suggested.kind; profile.fuel = suggested.fuel
@@ -134,6 +136,7 @@ struct VehicleSetupView: View {
         }
     }
     private func save() {
+        focusedField = nil
         do {
             if !year.isEmpty && Int(year) == nil { throw AppFailure("Check the model year.") }
             profile.year = Int(year); profile.vin = vin.isEmpty ? nil : vin
@@ -144,7 +147,7 @@ struct VehicleSetupView: View {
             try store.saveVehicle(profile); dismiss()
         } catch { failure = error.localizedDescription }
     }
-    private func cancel() { work?.cancel(); work = nil; scanner.disconnect(); busy = false }
+    private func cancel() { focusedField = nil; work?.cancel(); work = nil; scanner.disconnect(); busy = false }
 }
 struct GarageView: View {
     @EnvironmentObject private var store: AppStore

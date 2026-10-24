@@ -113,7 +113,9 @@ final class AppStore: ObservableObject {
         return distance > 0 ? measured.reduce(0) { $0 + $1.distanceKM * ($1.economy ?? 0) } / distance : nil
     }
     func tick(_ date: Date) {
-        now = date
+        // Keep setup forms and native menus stable while idle. Live freshness and
+        // recording timers still update every second; history refreshes each minute.
+        if recording || pendingGPS || selectedTab == .live || abs(date.timeIntervalSince(now)) >= 60 { now = date }
         if state.draft?.source == .demo {
             state.draft?.distanceKM = elapsed * 78 / 3600
             state.draft?.updatedAt = date
