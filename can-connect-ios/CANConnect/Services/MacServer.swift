@@ -157,6 +157,22 @@ final class MacServerClient {
         guard saved.id == remote.id, saved.vin == remote.vin else { throw AppFailure("The Mac did not acknowledge this vehicle.") }
         return saved.id
     }
+    // Poll only an acknowledged receipt, never re-upload while processing.
+    // Paused/slow ingestion remains pending after a bounded foreground check.
+    func waitForProcessing(_ initial: MacReceipt, item: TransferItem,
+                           attempts: Int = 8,
+                           pause: () async throws -> Void = { try await Task.sleep(nanoseconds:1_000_000_000) }) async throws -> MacReceipt {
+        try initial.validate(item:item)
+        var receipt = initial
+        var acknowledged = item; acknowledged.receiptID = initial.id
+        for _ in 0..<max(0,attempts) {
+            guard receipt.status == "queued" || receipt.status == "processing" else { break }
+            try await pause()
+            try Task.checkCancellation()
+            receipt = try await self.receipt(for:acknowledged)
+        }
+        return receipt
+    }
     func receipt(for item: TransferItem) async throws -> MacReceipt {
         let data: Data
         if let id = item.receiptID { data = try await request("GET",path:"v1/receipts/\(id.uuidString)") }

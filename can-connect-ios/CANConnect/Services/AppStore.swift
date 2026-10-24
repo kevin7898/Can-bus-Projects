@@ -397,8 +397,14 @@ final class AppStore: ObservableObject {
                 let client = try MacServerClient(address:item.endpoint,token:token,cellular:!state.preferences.wifiLogs && state.preferences.cellularSummaries)
                 serverStatus = try await client.health()
                 if item.remoteVehicleID == nil { item.remoteVehicleID = try await client.resolve(item.vehicle); try updateTransfer(item) }
-                let receipt = try await client.receipt(for:item)
+                var receipt = try await client.receipt(for:item)
                 item.receiptID = receipt.id
+                if receipt.status == "queued" || receipt.status == "processing" {
+                    item.status = .awaitingReceipt
+                    item.message = "Mac stored original · checking processing receipt"
+                    try updateTransfer(item)
+                    receipt = try await client.waitForProcessing(receipt,item:item)
+                }
                 if receipt.status == "processed" {
                     item.status = .complete; item.message = "Mac processed recording · original kept on iPhone"
                 } else if receipt.status == "failed" {

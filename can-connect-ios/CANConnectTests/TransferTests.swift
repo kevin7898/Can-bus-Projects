@@ -76,6 +76,42 @@ final class TransferTests: XCTestCase {
         }
         let resolved = try await client().resolve(vehicle); XCTAssertEqual(resolved,remote.id)
     }
+    func testProcessingReceiptPollsWithoutUploadingAgain() async throws {
+        defer { HTTPFixture.handler = nil }
+        let vehicle = VehicleProfile()
+        var item = TransferItem(tripID:UUID(),name:"Synthetic",endpoint:"http://mac-mini.local:8765",vehicle:vehicle,payload:Data("fixture".utf8))
+        item.remoteVehicleID = vehicle.id
+        let initial = MacReceipt(id:UUID(),vehicleID:vehicle.id,contentHash:item.contentHash,status:"queued",byteCount:item.payload.count,tripIDs:[])
+        var requests = 0
+        HTTPFixture.handler = { request in
+            requests += 1
+            XCTAssertEqual(request.httpMethod,"GET")
+            XCTAssertEqual(request.url?.path,"/v1/receipts/\(initial.id.uuidString)")
+            let data = try JSONSerialization.data(withJSONObject:["id":initial.id.uuidString,"vehicleID":vehicle.id.uuidString,"contentHash":initial.contentHash,"byteCount":initial.byteCount,"status":requests == 1 ? "processing" : "processed","tripIDs":requests == 1 ? [] : [UUID().uuidString]])
+            return (200,data)
+        }
+        let receipt = try await client().waitForProcessing(initial,item:item,pause:{})
+        XCTAssertEqual(receipt.status,"processed"); XCTAssertEqual(requests,2)
+    }
+    func testProcessingReceiptIsBoundedAndRejectsWrongReceipt() async throws {
+        defer { HTTPFixture.handler = nil }
+        let vehicle = VehicleProfile()
+        var item = TransferItem(tripID:UUID(),name:"Synthetic",endpoint:"http://mac-mini.local:8765",vehicle:vehicle,payload:Data("fixture".utf8))
+        item.remoteVehicleID = vehicle.id
+        let initial = MacReceipt(id:UUID(),vehicleID:vehicle.id,contentHash:item.contentHash,status:"queued",byteCount:item.payload.count,tripIDs:[])
+        var requests = 0; var wrongID = false
+        HTTPFixture.handler = { request in
+            requests += 1; XCTAssertEqual(request.httpMethod,"GET")
+            return (200,try JSONSerialization.data(withJSONObject:["id":(wrongID ? UUID() : initial.id).uuidString,"vehicleID":vehicle.id.uuidString,"contentHash":initial.contentHash,"byteCount":initial.byteCount,"status":"queued","tripIDs":[]]))
+        }
+        let receipt = try await client().waitForProcessing(initial,item:item,attempts:3,pause:{})
+        XCTAssertEqual(receipt.status,"queued"); XCTAssertEqual(requests,3)
+        wrongID = true
+        do { _ = try await client().waitForProcessing(initial,item:item,pause:{}); XCTFail("Mismatched receipt accepted") } catch {}
+        let before = requests
+        do { _ = try await client().waitForProcessing(initial,item:item,pause:{throw CancellationError()}); XCTFail("Cancellation ignored") } catch is CancellationError {} catch { XCTFail("Unexpected error") }
+        XCTAssertEqual(requests,before)
+    }
     @MainActor
     func testQueuePersistsExactPayloadAndPreventsDeletingUnacknowledgedOriginal() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -112,10 +148,6 @@ final class TransferTests: XCTestCase {
         XCTAssertEqual(try store.queueRecordings(),1)
         let payload = try XCTUnwrap(store.state.transfers.first?.payload)
         await store.sendQueued()
-        for _ in 0..<20 {
-            if store.state.transfers.first?.status == .complete { break }
-            try await Task.sleep(nanoseconds:100_000_000); await store.sendQueued()
-        }
         XCTAssertEqual(store.state.transfers.first?.status,.complete,store.state.transfers.first?.message ?? "No queue entry")
         XCTAssertNotNil(store.state.transfers.first?.receiptID)
         XCTAssertTrue(store.state.trips.contains(where:{$0.id == recording.id}))

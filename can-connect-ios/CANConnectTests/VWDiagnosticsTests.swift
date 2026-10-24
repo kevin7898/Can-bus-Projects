@@ -68,7 +68,7 @@ final class VWDiagnosticsTests: XCTestCase {
     }
     func testBlock114SootRequiresCorrectControllerFieldTypeAndCompletePayload() throws {
         let blank: [UInt8] = [0x25,0,0]
-        let fields = Array(repeating:blank,count:5).flatMap{$0} + [0x7E,2,43] + blank + blank
+        let fields: [UInt8] = Array(repeating:blank,count:5).flatMap { (field: [UInt8]) -> [UInt8] in field } + [0x7E,2,43] + blank + blank
         var response = VWMeasurementReply(payload:[0x61,114]+fields,raw:"SYNTHETIC block 114",requestHeader:"740",responseHeader:"300",timestamp:Date(timeIntervalSince1970:1700000000.25))
         let sample = try XCTUnwrap(VWMeasurementDecoder.decode(response,controller:.engine,group:114))
         XCTAssertEqual(sample.signals,["dpfSootG":8.6]); XCTAssertTrue(sample.isValid)
