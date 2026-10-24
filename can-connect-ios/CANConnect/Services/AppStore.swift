@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import UIKit
 
 @MainActor
 final class AppStore: ObservableObject {
@@ -20,13 +21,19 @@ final class AppStore: ObservableObject {
     @Published var vehicleSetupPresented = false
     @Published var garagePresented = false
     let gps = GPSRecorder()
+    let scanner: ScannerRecorder
+    @Published var serverStatus = "Not connected"
+    @Published var transferring = false
+    private var scannerChanges: AnyCancellable?
+    private var backgroundChanges: AnyCancellable?
     private let disk: LocalStore
     private var ticker: AnyCancellable?
     private var gpsChanges: AnyCancellable?
     private var toastTask: Task<Void, Never>?
     private var canWrite = true
-    init(disk: LocalStore = LocalStore()) {
+    init(disk: LocalStore = LocalStore(), scanner: ScannerRecorder? = nil) {
         self.disk = disk
+        self.scanner = scanner ?? ScannerRecorder()
         do {
             state = try disk.load() ?? SampleData.state()
             if let draft = state.draft {
@@ -37,6 +44,30 @@ final class AppStore: ObservableObject {
         } catch {
             state = StoredState(); canWrite = false
             self.error = "Could not open saved data. The original file is preserved. \(error.localizedDescription)"
+        }
+        source = activeVehicle?.isSample == true ? .demo : .phoneGPS
+        self.scanner.onSample = { [weak self] sample in
+            guard let self, self.state.draft?.source == .scanner else { return }
+            self.state.draft?.accept(sample)
+            if (self.state.draft?.samples?.count ?? 0) >= 100_000 {
+                self.finishRecording()
+                if self.recording { self.scanner.disconnect(); self.error = "Recording reached the 100,000-response limit. Free storage and retry Finish to save the draft." }
+                else { self.error = "Recording saved at the 100,000-response limit. Start a new recording to continue." }
+            }
+        }
+        self.scanner.onDisconnect = { [weak self] message in
+            guard let self else { return }
+            if self.state.draft?.source == .scanner {
+                self.finishRecording()
+                if self.recording { return } // Preserve the actionable disk-write error and unsaved draft.
+            }
+            self.error = message
+        }
+        scannerChanges = self.scanner.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        backgroundChanges = NotificationCenter.default.publisher(for:UIApplication.didEnterBackgroundNotification).sink { [weak self] _ in
+            guard let self else { return }
+            if self.state.draft?.source == .scanner { self.finishRecording() }
+            self.scanner.disconnect(); UIApplication.shared.isIdleTimerDisabled = false
         }
         gps.onReady = { [weak self] in
             guard let self, self.pendingGPS else { return }
@@ -62,6 +93,7 @@ final class AppStore: ObservableObject {
     var timerText: String { let n = Int(elapsed); return n >= 3600 ? String(format:"%d:%02d:%02d",n/3600,(n%3600)/60,n%60) : String(format:"%02d:%02d",n/60,n%60) }
     var speedText: String {
         if source == .demo { return "78" }
+        if source == .scanner { return scanner.value("speedKph",at:Date())?.text(0) ?? "—" }
         guard let fix = gps.lastFix, now.timeIntervalSince(fix) <= 10 else { return "—" }
         return gps.speedKMH.map { $0.text(0) } ?? "—"
     }
@@ -85,7 +117,9 @@ final class AppStore: ObservableObject {
         if state.draft?.source == .demo {
             state.draft?.distanceKM = elapsed * 78 / 3600
             state.draft?.updatedAt = date
-            if Int(elapsed) % 5 == 0 { save() }
+        }
+        if recording && Int(elapsed) % 5 == 0 {
+            state.draft?.updatedAt = date; save()
         }
     }
     func startRecording() {
@@ -93,6 +127,12 @@ final class AppStore: ObservableObject {
         guard activeVehicle != nil else { vehicleSetupPresented = true; return }
         now = Date()
         if source == .phoneGPS { pendingGPS = true; gps.start() }
+        else if source == .scanner {
+            guard scanner.connected, scanner.vehicleID == state.selectedVehicleID else { error = "Connect the scanner to the selected vehicle first."; return }
+            state.draft = RecordingDraft(vehicleID:state.selectedVehicleID, source:.scanner, startedAt:now, updatedAt:now)
+            UIApplication.shared.isIdleTimerDisabled = true
+            save()
+        }
         else { state.draft = RecordingDraft(vehicleID:state.selectedVehicleID, source:.demo, startedAt:now, updatedAt:now); save() }
     }
     func cancelGPS() { pendingGPS = false; gps.stop() }
@@ -108,7 +148,7 @@ final class AppStore: ObservableObject {
         next.draft = nil
         do {
             try disk.save(next)
-            gps.stop(); state = next; notify("Recording saved on this iPhone")
+            gps.stop(); UIApplication.shared.isIdleTimerDisabled = false; state = next; notify("Recording saved on this iPhone")
         } catch { self.error = "Could not save the recording. Keep the app open and retry Finish. \(error.localizedDescription)" }
     }
     func signal(_ slot: String) -> Signal { dashboard.signals[slot] ?? .rpm }
@@ -150,7 +190,7 @@ final class AppStore: ObservableObject {
                 guard let localID = mapping[vehicleID] ?? next.vehicles.first(where:{$0.id == vehicleID})?.id else { throw AppFailure("This archive has no profile for its vehicle. Export it again with the current app, or import an older archive without a vehicle ID into the selected profile.") }
                 trip.vehicleID = localID
             } else { trip.vehicleID = next.selectedVehicleID }
-            if !trip.isSample && trip.source != .phoneGPS { trip.source = .imported }
+            if !trip.isSample && trip.source != .phoneGPS && trip.source != .scanner { trip.source = .imported }
             additions.append(trip)
         }
         next.trips += additions
@@ -160,7 +200,12 @@ final class AppStore: ObservableObject {
         notify("Imported \(additions.count) recording\(additions.count == 1 ? "" : "s")")
     }
     func addSample() { state.trips.insert(Trip(vehicleID:state.selectedVehicleID, name:"Sample imported drive", startedAt:Date(), duration:1260, distanceKM:15.2, source:.imported, isSample:true, economy:5.3, fuelLitres:0.81, route:SampleData.route()), at:0); save(); notify("Sample recording added") }
-    func removeTrip(_ id: UUID) { state.trips.removeAll { $0.id == id }; save() }
+    func removeTrip(_ id: UUID) {
+        guard canWrite else { error = "Saved data is unavailable."; return }
+        guard !state.transfers.contains(where:{$0.tripID == id && $0.status != .complete}) else { error = "Complete this recording's queued transfer before deleting it."; return }
+        var next = state; next.trips.removeAll { $0.id == id }
+        do { try disk.save(next); state = next } catch { self.error = error.localizedDescription }
+    }
     func removeSamples() { state.trips.removeAll( where: \.isSample); state.fills.removeAll(where: \.isSample); save(); notify("Sample history removed") }
     func chooseVehicle(_ id: UUID) throws {
         guard canWrite else { throw AppFailure("Saved data is unavailable.") }
@@ -168,6 +213,7 @@ final class AppStore: ObservableObject {
         guard state.vehicles.contains(where:{$0.id == id}) else { throw AppFailure("Vehicle not found.") }
         var next = state; next.selectedVehicleID = id; next.onboardingCompleted = true
         try disk.save(next); state = next; tripPage = 0
+        scanner.disconnect(); source = activeVehicle?.isSample == true ? .demo : .phoneGPS
     }
     func saveVehicle(_ vehicle: VehicleProfile) throws {
         guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before setting up a vehicle.") }
@@ -178,16 +224,101 @@ final class AppStore: ObservableObject {
         var next = state
         if let i = next.vehicles.firstIndex(where:{$0.id == value.id}) { next.vehicles[i] = value } else { next.vehicles.append(value) }
         next.selectedVehicleID = value.id; next.onboardingCompleted = true
+        if let connection = value.scannerConnection { next.scanner = connection }
         try disk.save(next); state = next; tripPage = 0; vehicleSetupPresented = false
+        scanner.disconnect(); source = .phoneGPS
         notify("Vehicle ready: \(value.title)")
     }
     func useSampleVehicle() throws {
-        guard canWrite else { throw AppFailure("Saved data is unavailable.") }
+        guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before switching vehicles.") }
         var next = state
         if let existing = next.vehicles.first(where:\.isSample) { next.selectedVehicleID = existing.id }
         else { let sample = VehicleProfile.sample; next.vehicles.append(sample); next.selectedVehicleID = sample.id }
         next.onboardingCompleted = true
         try disk.save(next); state = next; vehicleSetupPresented = false
+        scanner.disconnect(); source = .demo
+    }
+    func reading(_ key: String) -> Double? { source == .scanner ? scanner.value(key,at:Date()) : nil }
+    func signalText(_ signal: Signal) -> String {
+        if source == .demo { return signal.sample }
+        switch signal {
+        case .rpm: return reading("rpm")?.text(0) ?? "—"
+        case .coolant: return reading("coolantC")?.text(0) ?? "—"
+        case .outside: return reading("outsideC")?.text(0) ?? "—"
+        case .voltage: return reading("voltage")?.text(1) ?? "—"
+        case .boost:
+            guard let map = reading("mapKpa"), let baro = reading("barometricKpa") else { return "—" }
+            return ((map-baro)/100).text(2)
+        case .fuel:
+            guard let rate = reading("fuelRateLph"), let speed = reading("speedKph"), speed > 5 else { return "—" }
+            return (rate*100/speed).text(1)
+        case .economy: return "—"
+        }
+    }
+    func connectScanner(host: String, port: UInt16) throws {
+        guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before changing scanner connections.") }
+        guard let vehicle = activeVehicle, !vehicle.isSample else { throw AppFailure("Choose or add your real vehicle before connecting a scanner.") }
+        let settings = ScannerSettings(host:host.trimmingCharacters(in:.whitespacesAndNewlines),port:port)
+        guard ELMWiFiSession.isLocalHost(settings.host), port > 0 else { throw AppFailure("Enter a private scanner address and valid TCP port.") }
+        var next = state; next.scanner = settings
+        if let i = next.vehicles.firstIndex(where:{$0.id == vehicle.id}) { next.vehicles[i].scannerConnection = settings }
+        try disk.save(next); state = next
+        source = .scanner; scanner.connect(settings:settings,vehicle:vehicle)
+    }
+    func configureServer(address: String, token: String) async throws {
+        guard canWrite, !transferring else { throw AppFailure("Wait for the current transfer to finish.") }
+        let endpoint = try MacServerClient.endpoint(address).absoluteString
+        let secret = token.trimmingCharacters(in:.whitespacesAndNewlines)
+        let credential = try secret.isEmpty ? PairingSecrets.read(endpoint:endpoint) : secret
+        let client = try MacServerClient(address:endpoint,token:credential)
+        let status = try await client.health()
+        try PairingSecrets.save(credential,endpoint:endpoint)
+        var next = state; next.server.address = endpoint; try disk.save(next); state = next
+        serverStatus = status
+    }
+    @discardableResult func queueRecordings() throws -> Int {
+        guard canWrite else { throw AppFailure("Saved data is unavailable.") }
+        let endpoint = try MacServerClient.endpoint(state.server.address).absoluteString
+        var next = state; var count = 0
+        for trip in state.trips where !trip.isSample && !state.transfers.contains(where:{$0.tripID == trip.id && $0.endpoint == endpoint}) {
+            guard let vehicle = state.vehicles.first(where:{$0.id == trip.vehicleID}), !vehicle.isSample,
+                  !trip.route.isEmpty || trip.samples?.isEmpty == false else { continue }
+            let payload = try MacRecording.encode(trip)
+            next.transfers.append(TransferItem(tripID:trip.id,name:trip.name,endpoint:endpoint,vehicle:vehicle,payload:payload)); count += 1
+        }
+        try disk.save(next); state = next
+        return count
+    }
+    private func updateTransfer(_ item: TransferItem) throws {
+        guard canWrite, let i = state.transfers.firstIndex(where:{$0.id == item.id}) else { throw AppFailure("Transfer queue is unavailable.") }
+        var next = state; next.transfers[i] = item; try disk.save(next); state = next
+    }
+    func sendQueued() async {
+        guard !transferring, canWrite else { return }
+        transferring = true; defer { transferring = false }
+        for original in state.transfers where original.status != .complete {
+            var item = original
+            do {
+                let token = try PairingSecrets.read(endpoint:item.endpoint)
+                let client = try MacServerClient(address:item.endpoint,token:token,cellular:!state.preferences.wifiLogs && state.preferences.cellularSummaries)
+                serverStatus = try await client.health()
+                if item.remoteVehicleID == nil { item.remoteVehicleID = try await client.resolve(item.vehicle); try updateTransfer(item) }
+                let receipt = try await client.receipt(for:item)
+                item.receiptID = receipt.id
+                if receipt.status == "processed" {
+                    item.status = .complete; item.message = "Mac processed recording · original kept on iPhone"
+                } else if receipt.status == "failed" {
+                    item.status = .failed; item.message = "Mac could not process the preserved original. Retry the import on the Mac, then check receipt."
+                } else {
+                    item.status = .awaitingReceipt; item.message = "Mac stored original · awaiting processing. Check again."
+                }
+                try updateTransfer(item)
+            } catch {
+                item.status = .failed; item.message = error.localizedDescription
+                do { try updateTransfer(item) } catch { self.error = "Could not save transfer status. Original and queue preserved for retry."; break }
+                serverStatus = "Transfer needs attention"
+            }
+        }
     }
     func notify(_ message: String) {
         toastTask?.cancel(); toast = message

@@ -1,8 +1,8 @@
 import Foundation
 
 // v1.0: approved CAN / CONNECT design, native iOS implementation.
-enum TripSource: String, Codable, CaseIterable { case demo, phoneGPS, imported
-    var title: String { switch self { case .demo: return "Sample CAN feed"; case .phoneGPS: return "iPhone GPS"; case .imported: return "Imported recording" } }
+enum TripSource: String, Codable, CaseIterable { case demo, phoneGPS, scanner, imported
+    var title: String { switch self { case .demo: return "Sample CAN feed"; case .phoneGPS: return "iPhone GPS"; case .scanner: return "Wi-Fi scanner"; case .imported: return "Imported recording" } }
 }
 enum Signal: String, Codable, CaseIterable, Identifiable {
     case rpm, coolant, boost, fuel, economy, outside, voltage
@@ -38,6 +38,7 @@ struct Trip: Codable, Identifiable, Equatable {
     var economy: Double?
     var fuelLitres: Double?
     var route: [RoutePoint] = []
+    var samples: [OBDSample]? = nil
     var durationText: String { "\(max(0, Int(duration / 60))) min" }
 }
 struct FuelEntry: Codable, Identifiable, Equatable {
@@ -64,6 +65,7 @@ struct RecordingDraft: Codable {
     var updatedAt: Date
     var distanceKM: Double = 0
     var route: [RoutePoint] = []
+    var samples: [OBDSample]? = nil
     mutating func accept(_ point: RoutePoint) {
         guard point.isValid, point.accuracy <= 50, point.timestamp >= startedAt else { return }
         if let last = route.last {
@@ -78,11 +80,12 @@ struct RecordingDraft: Codable {
         updatedAt = point.timestamp
     }
     func trip(endedAt: Date, recovered: Bool = false) -> Trip {
-        Trip(id: id, vehicleID:vehicleID, name: recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : "iPhone GPS drive"), startedAt: startedAt, duration: max(0, endedAt.timeIntervalSince(startedAt)), distanceKM: distanceKM, source: source, isSample: source == .demo, economy: source == .demo ? 5.4 : nil, fuelLitres: source == .demo ? distanceKM * 5.4 / 100 : nil, route: route)
+        let measured = measuredFuel(endedAt:endedAt)
+        return Trip(id: id, vehicleID:vehicleID, name: recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"), startedAt: startedAt, duration: max(0, endedAt.timeIntervalSince(startedAt)), distanceKM: distanceKM, source: source, isSample: source == .demo, economy: source == .demo ? 5.4 : measured.economy, fuelLitres: source == .demo ? distanceKM * 5.4 / 100 : measured.litres, route: route, samples: samples)
     }
 }
 struct StoredState: Codable {
-    var schemaVersion = 2
+    var schemaVersion = 3
     var vehicles: [VehicleProfile] = []
     var selectedVehicleID: UUID?
     var onboardingCompleted = false
@@ -90,6 +93,9 @@ struct StoredState: Codable {
     var fills: [FuelEntry] = []
     var preferences = Preferences()
     var draft: RecordingDraft?
+    var scanner = ScannerSettings()
+    var server = ServerSettings()
+    var transfers: [TransferItem] = []
 }
 struct TripArchive: Codable {
     var schemaVersion = 1
@@ -97,7 +103,13 @@ struct TripArchive: Codable {
     var trips: [Trip]
     static func decode(_ data: Data) throws -> TripArchive {
         guard data.count <= 20_000_000 else { throw AppFailure("Choose a JSON recording under 20 MB.") }
-        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
+            if let date = formatter.date(from:text) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            guard let date = formatter.date(from:text) else { throw AppFailure("Invalid recording timestamp.") }; return date
+        }
         let archive = try decoder.decode(TripArchive.self, from: data)
         guard archive.schemaVersion == 1, archive.trips.count <= 500 else { throw AppFailure("Unsupported archive version or too many recordings.") }
         guard Set(archive.trips.map(\.id)).count == archive.trips.count else { throw AppFailure("The archive contains duplicate recording IDs.") }
@@ -110,6 +122,7 @@ struct TripArchive: Codable {
                   trip.name.count <= 200, trip.duration.isFinite, trip.duration >= 0,
                   trip.distanceKM.isFinite, trip.distanceKM >= 0,
                   trip.route.count <= 100_000, trip.route.allSatisfy(\.isValid),
+                  (trip.samples?.count ?? 0) <= 200_000, trip.samples?.allSatisfy(\.isValid) ?? true,
                   trip.economy.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   trip.fuelLitres.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   trip.source != .phoneGPS || (trip.economy == nil && trip.fuelLitres == nil),
@@ -118,7 +131,10 @@ struct TripArchive: Codable {
         return archive
     }
     func encoded() throws -> Data {
-        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .custom { date, encoder in
+            let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
+            var container = encoder.singleValueContainer(); try container.encode(formatter.string(from:date))
+        }
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(self)
     }

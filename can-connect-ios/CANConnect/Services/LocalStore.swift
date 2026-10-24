@@ -8,7 +8,7 @@ struct LocalStore {
     func load() throws -> StoredState? {
         guard FileManager.default.fileExists(atPath:url.path) else { return nil }
         var state = try JSONDecoder().decode(StoredState.self, from:Data(contentsOf:url))
-        guard (1...2).contains(state.schemaVersion) else { throw AppFailure("This saved data needs a newer app. Your file has been preserved.") }
+        guard (1...3).contains(state.schemaVersion) else { throw AppFailure("This saved data needs a newer app. Your file has been preserved.") }
         state.migrateVehicles()
         return state
     }

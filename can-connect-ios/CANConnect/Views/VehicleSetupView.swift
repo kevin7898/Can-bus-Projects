@@ -119,6 +119,7 @@ struct VehicleSetupView: View {
             defer { busy = false }
             do {
                 let identity = try await session.identify(host:address,port:tcpPort); try Task.checkCancellation()
+                profile.scannerConnection = ScannerSettings(host:address,port:tcpPort)
                 profile.scannerProtocol = identity.vehicleProtocol; profile.supportedPIDs = identity.supportedPIDs; profile.identificationSource = "Scanner identification · \(identity.adapter)"
                 if let detected = identity.vin {
                     vin = detected

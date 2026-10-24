@@ -1,70 +1,56 @@
 # CAN / CONNECT — iOS companion
 
-A native SwiftUI iPhone app ported from Kevin's locked CAN / CONNECT design. Open the checked-in Xcode project directly; there are no package dependencies or project generators to install.
+Native SwiftUI iPhone app in the approved graphite/blue design, with five fixed tabs, pages within tabs, independent reading cards, and a fixed recording control. Open **CANConnect.xcodeproj**, select **CANConnect**, and Run in Xcode. Minimum iOS: 17.0; no package dependencies. Choose a development team for installation on a physical phone.
 
-## Open and run
+## Use your vehicle
 
-1. Clone or download this branch, then open **`can-connect-ios/CANConnect.xcodeproj`** in Xcode 16 or newer.
-2. Select the **CANConnect** scheme and an iPhone simulator, then press **Run** (⌘R).
-3. To run on your iPhone, select your Apple development team under **Signing & Capabilities**, choose your phone, and Run. Use a unique bundle identifier if Xcode asks.
+First launch opens vehicle setup. Enter details manually, explicitly look up a VIN using NHTSA, or read VIN/protocol/supported PIDs through a Wi-Fi ELM327 adapter, then review and save. VIN lookup sends the VIN to NHTSA only after your action. Manual setup works offline. Scanner setup remembers its address and port. The vehicle menu manages separate profiles, trips, fuel entries and dashboard preferences. Switching profiles is blocked during recording; a scanner connection is cleared when switching vehicles.
 
-Minimum iOS version: **17.0**. Portrait iPhone layout. The sample dashboard works immediately in the simulator. GPS needs location permission and movement (or a simulated route in Xcode).
+The sample dashboard is opt-in during onboarding. Sample feeds and trips remain labelled; they are excluded from Mac transfers. Real profiles initially use iPhone GPS and show unavailable vehicle values until actual readings are available.
 
-## Working features
+## Record
 
-- Five fixed bottom tabs: Overview, Trips, Live, Vehicle and Connect.
-- Horizontal pages inside tabs, with labelled page controls; no long dashboard scroll.
-- Live Drive, Engine and Economy pages; the recording button stays anchored.
-- Independent signal selection for each card, with duplicates allowed and choices saved.
-- Sample CAN recording that creates a saved sample trip.
-- Real iPhone GPS recording: route, distance, current speed and duration. Location is requested only after you tap Start GPS recording. Active recordings can continue with the phone locked using the visible iOS location indicator.
-- GPS accuracy, stale fixes, stationary jitter and implausible jumps are filtered. Gaps over 30 seconds do not invent distance.
-- Trip filters, screen-sized pagination, detail maps, deletion, JSON import and export. Reimporting the same IDs does not duplicate trips.
-- Fuel log with full and partial fills, validation, history and tank-to-tank economy between full fills. Demo entries are excluded from real calculations.
-- Reorderable Overview summary cards, local preferences and sample-history removal.
-- Atomic on-device storage. An interrupted recording is recovered on the next launch using the last saved checkpoint.
-- Bundled offline Nanaimo road geometry for the approved overview design; native Apple Maps for recorded routes.
+- **iPhone GPS:** choose it in Live and start recording. Location permission is requested when needed. Accepted GPS points retain their timestamps, accuracy and optional speed. Poor fixes, jumps and stationary jitter are filtered; distance excludes gaps over 30 seconds. GPS recording can continue with the location indicator while the phone is locked. GPS does not supply engine/fuel values.
+- **Wi-Fi scanner:** join the adapter Wi-Fi, enable ignition, choose a real vehicle, then Connect → CAN recorder. Enter the adapter's local address/port and confirm the vehicle. The selected VIN must match the scanner VIN when both are present. Without a VIN, check the selected vehicle yourself. Continuous standard Mode 01 polling uses only PIDs confirmed by that connection. Supported readings include speed, RPM, coolant, MAP, barometric pressure, fuel rate/level, ambient temperature, voltage, intake temperature, oil temperature and engine load. The locked cards retain their independent selections. Unsupported, conflicting and stale readings are unavailable; gauge boost requires measured MAP and barometric pressure, and instantaneous L/100 km requires measured fuel rate and speed.
+- Scanner recordings keep **each individual response**, its command, decoded values and receipt timestamp. No previous readings are filled into later samples. Distance integrates measured vehicle speed over intervals of at most 10 seconds. Fuel totals require at least 80% measured fuel-rate time coverage; economy additionally requires 80% speed coverage and more than 0.1 km. Gaps are excluded. Fuel totals are unavailable when the adapter/vehicle lacks fuel rate.
+- **Keep the app visible for Wi-Fi OBD recording.** The screen stays awake during recording. Backgrounding saves the current recording and disconnects the scanner; this build does not claim background Wi-Fi acquisition. GPS is a separate source and is not simultaneously recorded with OBD in this version.
+- Finish saves atomically. Checkpoints are saved about every five seconds; a terminated app recovers the last saved draft exactly once. Failed saves leave the active draft available for retry. A scanner recording stops at 100,000 responses so a new recording can be started.
 
-## Connection status
+Trips include route maps when recorded, scanner response counts and saved readings, JSON import/export, and deletion. Queued originals cannot be deleted before processing acknowledgment. Vehicle pages show actual saved readings from the latest drive. The fuel log supports full/partial fills and tank-to-tank economy independently of OBD-derived drive totals.
 
-The CAN feed is explicitly a **sample feed**. GPS-only drives have no engine or fuel values. The Vehicle snapshot is explicitly sample recorded data. Bluetooth CAN transport and the Mac mini server API are not implemented in this first native port; Connect shows them as not configured, and transfer preferences are saved without claiming uploads occurred.
+## Transfer to your private Mac
 
-The existing Android recorder exports raw CAN CSV for decoder development. This iOS build imports the versioned CAN Connect **JSON** format described in `INTEGRATION.md`; it does not yet decode those raw CSV captures.
+Use the native Mac app's API v1 on `feature/mac-native-app`. Start its Server and explicitly enable local-network access on the Mac. This iOS work does not change your Mac's network configuration. A loopback-only Mac listener cannot be reached by a physical iPhone.
 
-## Tests
+1. Connect the phone to a network that can reach the Mac (often your home Wi-Fi after leaving the adapter Wi-Fi).
+2. In Connect, open Mac mini M4 / Server setup. Enter its private URL, e.g. `http://mac-mini.local:8765`, and the pairing token copied from the Mac. **Pair & test server** verifies the API and saves the token in Keychain, separately from application state and exports. HTTP uses an unencrypted trusted LAN; HTTPS is supported when configured on the server.
+3. Open Transfers → **Send / check recordings**. Real recordings with measured points/responses are queued durably and sent. Sample recordings are excluded. The phone creates a missing Mac vehicle profile or matches an existing ID/VIN without overwriting its details.
+4. A stored/queued Mac receipt means **awaiting processing**. The phone verifies SHA-256, byte count, vehicle and receipt identity, and marks completion only when the Mac reports a processed trip. Use the transfer queue to retry/check. A failed Mac import must be retried in the Mac app, then checked on the phone.
 
-Use **Product → Test** (⌘U). The project includes fourteen unit tests for GPS validation, recording source semantics, partial-fill economy, archive validation, persistence, and independent signal settings, including idempotent import and interrupted-session recovery, plus two UI smoke tests covering the original sample-recording flow and manual vehicle onboarding/switching.
+Transfers run while the app is open, on explicit action; no background uploader is claimed. Retries use frozen identical payload bytes, which the Mac deduplicates by content hash. Pending items retain their destination when server setup changes. Originals stay on the phone after success. Wi-Fi policy disables cellular access for full recordings; cellular is allowed only when Wi-Fi-only is off and cellular is enabled. Separate summary uploads are unavailable. Public hosts, embedded URL credentials, arbitrary paths and redirects are rejected. No cloud, tunnel, VPN or public server is configured.
 
-The repository's `iOS companion` GitHub Actions workflow builds and tests on a macOS iPhone simulator and saves the Xcode results bundle. Test launch data is isolated from normal app data.
+## Validation
 
-Command line on a Mac:
+Product → Test (⌘U), or from the repository root:
 
 ```sh
-xcodebuild test -project CANConnect.xcodeproj -scheme CANConnect \
-  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
+xcodebuild test -parallel-testing-enabled NO \
+  -project can-connect-ios/CANConnect.xcodeproj -scheme CANConnect \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro' CODE_SIGNING_ALLOWED=NO
 ```
 
-Choose an installed simulator name if yours differs. The optional `scripts/make_project.py` regenerates the checked-in project deterministically after adding source files; ordinary users do not need it.
+Choose an installed simulator. The suite covers decoder formulas and ambiguity, real loopback TCP prompt framing, VIN mismatches, freshness/disconnect, vehicle isolation, source semantics, recording checkpoints/recovery, fuel coverage, archive/persistence, transfer queue retention, private endpoint rules, HTTP failures, vehicle matching and receipt integrity. Native UI smoke tests exercise onboarding, navigation, sample recording and scanner recording through a loopback TCP fixture. **All scanner fixture data is synthetic; passing these tests is not vehicle acceptance.**
 
-## Design baseline and data
+The GitHub Actions iOS workflow builds/tests the project and retains the result bundle and screenshots. Optional `scripts/make_project.py` regenerates project references after adding source files; opening/building the checked-in project needs no generation step.
 
-Visual baseline v1.0, approved October 23, 2026: dark graphite, VW blue, compact metrics, phone-sized pages and fixed navigation. This port keeps that direction. Native permission prompts, file pickers and forms use iOS conventions.
+To test the same production transfer-client sources against the actual native Mac server using a temporary synthetic library:
 
-Sample trip names and Nanaimo road coverage are illustrative; they are not personal GPS recordings. No VIN, credentials or personal vehicle captures are included. Real records remain in the app's Application Support directory until you export or delete them. Removing the app removes its local data. Export recordings before uninstalling if you want to keep them. Server backup is not active.
+```sh
+python3 can-connect-ios/scripts/validate_mac_transfer.py /path/to/CANConnect.app/Contents/MacOS/CANConnect
+```
 
-Map attribution: City of Nanaimo open data (road, water and park geometry) and Apple Maps (expanded/native route maps). See `INTEGRATION.md` for source endpoints.
+For an iOS simulator check through the actual app's URLSession/ATS policy, pairing Keychain, durable queue, processing receipt and relaunch state, run `scripts/validate_ios_mac_queue.py MAC_BINARY XCTESTRUN SIMULATOR_UDID`. Use the `.xctestrun` generated by a normally signed Xcode build-for-testing (simulator ad-hoc signing works with `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`). Unsigned simulator builds can run the ordinary suite but cannot save pairing tokens to Keychain. The helper starts a temporary loopback-only Mac service and injects the synthetic endpoint into a temporary test-run configuration; it never uses your personal library or token. The native-Mac test is skipped by ordinary CI runs.
 
-## Vehicle onboarding and garage
+See [HARDWARE_VERIFICATION.md](HARDWARE_VERIFICATION.md) for outstanding acceptance checks and [INTEGRATION.md](INTEGRATION.md) for contracts. Bluetooth/MFi adapters, raw CAN, manufacturer-specific DPF/diagnostics, simultaneous GPS+OBD recording, automatic background transfer, charging/kWh logging and distribution signing remain unimplemented.
 
-The app now opens with vehicle setup. Add a car, pickup, motorcycle, van, or other vehicle. Use **Enter vehicle manually**, **Look up VIN**, or **Read from a scanner**, then review the details before saving. **Try the sample dashboard** keeps the original sample Jetta available without making it your real vehicle.
-
-- The header's vehicle menu switches profiles; **Manage vehicles** adds or edits profiles.
-- Trips, fuel entries, and dashboard signal/layout choices are separate for each vehicle. Switching is blocked during recording, and the recording keeps its original vehicle ID.
-- Existing v1 data migrates without loss. Real legacy records go to **Previous vehicle** for review; the app does not infer a real make/model from the old Jetta prototype.
-- New profiles show unavailable vehicle readings until a compatible data source supplies them. The sample Jetta's range and temperatures stay in the sample profile.
-- VIN lookup uses NHTSA vPIC after your explicit action. Details may be incomplete and must be reviewed; odometer and tank size are manual optional values.
-- Scanner assistance currently supports **ELM327-compatible Wi-Fi TCP adapters**. Join the adapter's Wi-Fi, enable ignition, and enter the local address and port from its instructions. The app requests local network permission at connection time. Identification reads Mode 09 VIN, protocol and supported standard Mode 01 PIDs. It does not clear faults, code modules, or implement continuous OBD streaming.
-- Bluetooth/MFi adapters (including the existing MX+ path) and the future dual-CAN recorder still need their respective transports. Scanner hardware compatibility has not been bench-tested here.
-- Diesel profiles keep the DPF page; other profiles show Health. Electric profiles show Energy/Powertrain, while charging/kWh logging remains future work.
-
-Recording exports include their vehicle profiles. Import matches existing profiles by VIN or ID and keeps other vehicles' trips separate. Older archives without a vehicle ID are assigned to the selected profile. VINs stay out of this public repository; exported archives may include the VIN you entered.
+Personal data stays in the app's Application Support directory; uninstalling removes it. Export/transfer before uninstalling. No personal VINs, captures or pairing credentials belong in Git. Map attribution: City of Nanaimo open data (bundled illustrative map) and Apple Maps (recorded route maps).

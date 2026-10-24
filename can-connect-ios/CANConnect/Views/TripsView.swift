@@ -12,7 +12,7 @@ struct TripsView: View {
             let rows = max(1,min(3,Int((geometry.size.height-110)/120)))
             let pages = max(1,Int(ceil(Double(filtered.count)/Double(rows))))
             VStack(alignment:.leading,spacing:13) {
-                PageControl(labels:["All trips","Phone GPS","Imported"],selection:$filter)
+                PageControl(labels:["All trips","Phone GPS","Vehicle data"],selection:$filter)
                 HStack { Text("\(filtered.count) trips").font(.system(size:16)); Spacer(); Text("\(filtered.reduce(0) { $0 + $1.distanceKM }.text()) km").captionStyle() }
                 if filtered.isEmpty { Spacer(); VStack(spacing:12) { Image(systemName:"point.topleft.down.to.point.bottomright.curvepath").font(.system(size:32)).foregroundStyle(Palette.blue); Text("No drives here yet").font(.system(size:18)); Text("Record a GPS drive or import a recording.").captionStyle() }.frame(maxWidth:.infinity); Spacer() }
                 else {
@@ -30,7 +30,7 @@ struct TripCard: View {
     var body: some View { Button(action:action) { VStack(alignment:.leading,spacing:9) {
         HStack { Text(trip.name).font(.system(size:14,weight:.medium)).lineLimit(1); Spacer(minLength:4); Image(systemName:"chevron.right").font(.system(size:10)).foregroundStyle(Palette.muted) }
         Text("\(trip.startedAt.formatted(date:.abbreviated,time:.shortened)) · \(trip.isSample ? "Sample · " : "")\(trip.source.title)").captionStyle().lineLimit(1).minimumScaleFactor(0.8)
-        HStack(spacing:12) { Text("\(trip.distanceKM.text()) km").fontWeight(.medium); Text(trip.durationText).foregroundStyle(Palette.muted); Spacer(minLength:0); Text(trip.economy.map { "\($0.text()) L/100 km" } ?? "GPS only").foregroundStyle(Palette.muted) }.font(.system(size:11)).lineLimit(1).minimumScaleFactor(0.8)
+        HStack(spacing:12) { Text("\(trip.distanceKM.text()) km").fontWeight(.medium); Text(trip.durationText).foregroundStyle(Palette.muted); Spacer(minLength:0); Text(trip.economy.map { "\($0.text()) L/100 km" } ?? (trip.source == .phoneGPS ? "GPS only" : "Fuel unavailable")).foregroundStyle(Palette.muted) }.font(.system(size:11)).lineLimit(1).minimumScaleFactor(0.8)
     }.card().foregroundStyle(Palette.text) }.buttonStyle(.plain) }
 }
 struct JSONDocument: FileDocument {
@@ -54,6 +54,15 @@ struct TripDetailView: View {
         HStack { Metric(title:"Distance",value:trip.distanceKM.text(),unit:"km"); Metric(title:"Duration",value:trip.durationText) }
         HStack { Metric(title:"Average fuel",value:trip.economy?.text() ?? "—",unit:"L/100 km"); Metric(title:"Fuel used",value:trip.fuelLitres?.text(2) ?? "—",unit:"L") }
         InfoNote(text:"\(trip.isSample ? "Sample data · " : "")\(trip.source.title) · Stored on this iPhone. \(trip.source == .phoneGPS ? "GPS does not provide engine or fuel readings." : "")")
+        if let samples = trip.samples, !samples.isEmpty {
+            DataRow(label:"Measured OBD responses",value:String(samples.count))
+            ForEach(OBDDecoder.definitions.filter { d in samples.contains(where:{$0.signals[d.key] != nil}) }, id:\.key) { definition in
+                if let sample = samples.last(where:{$0.signals[definition.key] != nil}), let value = sample.signals[definition.key] {
+                    let label = OBDDecoder.labels[definition.key]!
+                    DataRow(label:label.title,value:"\(value.text()) \(label.unit) · \(sample.timestamp.formatted(date:.omitted,time:.standard))")
+                }
+            }
+        }
         AppButton(title:"Export recording",icon:"square.and.arrow.up") { do { document = JSONDocument(data:try store.archive([trip]).encoded()); exporting = true } catch { store.error = error.localizedDescription } }
         Button("Delete recording",role:.destructive) { delete = true }.frame(maxWidth:.infinity).padding(.top,8)
     }.fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"CANConnect-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error) = result { store.error = error.localizedDescription } }

@@ -26,6 +26,7 @@ struct VehicleProfile: Codable, Identifiable, Equatable {
     var odometerKM: Double?
     var tankLitres: Double?
     var scannerProtocol: String?
+    var scannerConnection: ScannerSettings?
     var supportedPIDs: [Int] = []
     var identificationSource = "Manual entry"
     var isSample = false
@@ -69,13 +70,16 @@ struct ScannerIdentity {
 }
 
 extension StoredState {
-    private enum Keys: String, CodingKey { case schemaVersion, trips, fills, preferences, draft, vehicles, selectedVehicleID, onboardingCompleted }
+    private enum Keys: String, CodingKey { case schemaVersion, trips, fills, preferences, draft, vehicles, selectedVehicleID, onboardingCompleted, scanner, server, transfers }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy:Keys.self)
         schemaVersion = try c.decodeIfPresent(Int.self,forKey:.schemaVersion) ?? 1
         trips = try c.decodeIfPresent([Trip].self,forKey:.trips) ?? []
         fills = try c.decodeIfPresent([FuelEntry].self,forKey:.fills) ?? []
         preferences = try c.decodeIfPresent(Preferences.self,forKey:.preferences) ?? Preferences()
+        scanner = try c.decodeIfPresent(ScannerSettings.self,forKey:.scanner) ?? ScannerSettings()
+        server = try c.decodeIfPresent(ServerSettings.self,forKey:.server) ?? ServerSettings()
+        transfers = try c.decodeIfPresent([TransferItem].self,forKey:.transfers) ?? []
         draft = try c.decodeIfPresent(RecordingDraft.self,forKey:.draft)
         vehicles = try c.decodeIfPresent([VehicleProfile].self,forKey:.vehicles) ?? []
         selectedVehicleID = try c.decodeIfPresent(UUID.self,forKey:.selectedVehicleID)
@@ -95,6 +99,7 @@ extension StoredState {
             }
             schemaVersion = 2
         }
+        schemaVersion = 3
         if selectedVehicleID == nil || !vehicles.contains(where:{$0.id == selectedVehicleID}) { selectedVehicleID = vehicles.first?.id }
     }
 }

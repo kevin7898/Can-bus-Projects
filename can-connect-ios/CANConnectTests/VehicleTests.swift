@@ -30,7 +30,7 @@ final class VehicleTests: XCTestCase {
         object.removeValue(forKey:"vehicles"); object.removeValue(forKey:"selectedVehicleID"); object.removeValue(forKey:"onboardingCompleted")
         var decoded = try JSONDecoder().decode(StoredState.self,from:JSONSerialization.data(withJSONObject:object))
         decoded.migrateVehicles()
-        XCTAssertEqual(decoded.schemaVersion,2); XCTAssertEqual(decoded.trips.count,1)
+        XCTAssertEqual(decoded.schemaVersion,3); XCTAssertEqual(decoded.trips.count,1)
         XCTAssertEqual(decoded.vehicles.first?.title,"Previous vehicle"); XCTAssertEqual(decoded.vehicles.first?.make,"")
         XCTAssertEqual(decoded.trips[0].vehicleID,decoded.selectedVehicleID)
         XCTAssertFalse(decoded.onboardingCompleted)
@@ -43,6 +43,7 @@ final class VehicleTests: XCTestCase {
         var a = VehicleProfile(); a.make = "Honda"; a.model = "CB500X"; a.kind = .motorcycle
         var b = VehicleProfile(); b.make = "Ford"; b.model = "F-150"; b.kind = .pickup
         try store.saveVehicle(a); store.setSignal(.voltage,slot:"drive.0")
+        store.source = .demo // Explicit synthetic recording, independent of Core Location permission.
         store.startRecording(); XCTAssertEqual(store.state.draft?.vehicleID,a.id)
         XCTAssertThrowsError(try store.chooseVehicle(b.id))
         store.finishRecording()

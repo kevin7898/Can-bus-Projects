@@ -41,7 +41,14 @@ enum ELMIdentityParser {
 }
 
 @MainActor
-final class ELMWiFiSession {
+protocol ScannerTransport: AnyObject {
+    func open(host: String, port: UInt16) async throws -> ScannerIdentity
+    func command(_ text: String) async throws -> String
+    func disconnect()
+}
+
+@MainActor
+final class ELMWiFiSession: ScannerTransport {
     private var connection: NWConnection?
     private var opening: CheckedContinuation<Void, Error>?
     private var waiting: CheckedContinuation<String, Error>?
@@ -50,11 +57,17 @@ final class ELMWiFiSession {
     private var pendingCommand = ""
     private var ready = false
     func identify(host: String, port: UInt16) async throws -> ScannerIdentity {
+        defer { disconnect() }
+        return try await open(host:host,port:port)
+    }
+    func open(host: String, port: UInt16) async throws -> ScannerIdentity {
         guard Self.isLocalHost(host), port > 0 else { throw AppFailure("Enter the scanner's local IPv4 address (or .local hostname) and TCP port from its instructions.") }
         try await connect(host:host,port:port)
-        defer { disconnect() }
         let adapter = try await command("ATI")
-        for setting in ["ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0"] { _ = try await command(setting) }
+        for setting in ["ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0"] {
+            let response = try await command(setting)
+            guard response.uppercased().contains("OK") else { throw AppFailure("The adapter rejected configuration \(setting). Check ELM327 compatibility.") }
+        }
         let vinReply = try await command("0902")
         let vin = try ELMIdentityParser.vin(vinReply)
         var supported: [Int] = []
@@ -67,22 +80,29 @@ final class ELMWiFiSession {
         guard vin != nil || !supported.isEmpty else { throw AppFailure("The adapter replied, but the vehicle did not provide identification. Check ignition and connection, or continue manually.") }
         return ScannerIdentity(vin:vin,adapter:clean(adapter),vehicleProtocol:["ISO","CAN","J1850","SAE"].contains(where:{vehicleProtocol.uppercased().contains($0)}) ? clean(vehicleProtocol) : "Unknown",supportedPIDs:supported.filter {$0 % 32 != 0})
     }
-    static func isLocalHost(_ input: String) -> Bool {
+    nonisolated static func isLocalHost(_ input: String) -> Bool {
         let host = input.lowercased().trimmingCharacters(in:.whitespacesAndNewlines)
-        if host.hasSuffix(".local"), host.count < 254, host.allSatisfy({$0.isLetter || $0.isNumber || $0 == "." || $0 == "-"}) { return true }
-        let parts = host.split(separator:".").compactMap { Int($0) }
-        guard parts.count == 4, parts.allSatisfy({(0...255).contains($0)}), host.split(separator:".").count == 4 else { return false }
+        if host == "localhost" || host == "127.0.0.1" { return true }
+        if host.hasSuffix(".local"), host.count < 254 {
+            let labels = host.split(separator:".",omittingEmptySubsequences:false)
+            return labels.allSatisfy { !$0.isEmpty && $0.count <= 63 && $0.first != "-" && $0.last != "-" && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } }
+        }
+        let labels = host.split(separator:".",omittingEmptySubsequences:false)
+        guard labels.count == 4, labels.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }) else { return false }
+        let parts = labels.compactMap { Int($0) }
+        guard parts.count == 4, parts.allSatisfy({(0...255).contains($0)}) else { return false }
         return parts[0] == 10 || (parts[0] == 172 && (16...31).contains(parts[1])) || (parts[0] == 192 && parts[1] == 168) || (parts[0] == 169 && parts[1] == 254)
     }
     private func connect(host: String, port: UInt16) async throws {
         try Task.checkCancellation()
+        disconnect()
         let c = NWConnection(host:NWEndpoint.Host(host),port:NWEndpoint.Port(rawValue:port)!,using:.tcp)
         connection = c
         try await withCheckedThrowingContinuation { continuation in
             opening = continuation
             c.stateUpdateHandler = { [weak self] state in
                 Task { @MainActor in
-                    guard let self else { return }
+                    guard let self, self.connection === c else { return }
                     switch state {
                     case .ready: self.ready = true; self.timeout?.cancel(); let pending = self.opening; self.opening = nil; pending?.resume(); self.receive()
                     case .failed(let error): self.fail(error)
@@ -94,21 +114,22 @@ final class ELMWiFiSession {
             armTimeout(); c.start(queue:.main)
         }
     }
-    private func command(_ text: String) async throws -> String {
+    func command(_ text: String) async throws -> String {
         try Task.checkCancellation()
         guard ready, waiting == nil, let c = connection else { throw AppFailure("Scanner connection is unavailable.") }
         buffer = ""
         return try await withCheckedThrowingContinuation { continuation in
             waiting = continuation; pendingCommand = text; armTimeout()
             c.send(content:Data((text+"\r").utf8),completion:.contentProcessed { [weak self] error in
-                if let error { Task { @MainActor in self?.fail(error) } }
+                if let error { Task { @MainActor in if self?.connection === c { self?.fail(error) } } }
             })
         }
     }
     private func receive() {
-        connection?.receive(minimumIncompleteLength:1,maximumLength:4096) { [weak self] data,_,complete,error in
+        guard let c = connection else { return }
+        c.receive(minimumIncompleteLength:1,maximumLength:4096) { [weak self] data,_,complete,error in
             Task { @MainActor in
-                guard let self, self.connection != nil else { return }
+                guard let self, self.connection === c else { return }
                 if let data { self.buffer += String(decoding:data,as:UTF8.self) }
                 if self.buffer.count > 64_000 { self.fail(AppFailure("The adapter response was too large.")); return }
                 while let end = self.buffer.firstIndex(of:">") {

@@ -1,62 +1,55 @@
-# Recording format and next integration points
+# iOS data and connection contracts
 
-`TripArchive` is a JSON envelope with `schemaVersion: 1` and a `trips` array. Dates use ISO 8601 UTC strings (whole seconds). Export from the app to obtain a complete example. Import is limited to 20 MB / 500 trips, with up to 100,000 route points per trip, and rejects invalid coordinates, negative metrics, duplicate IDs within an archive and unsupported versions. Already stored IDs are skipped.
+## Phone state and trip archives
+
+Local state schema v3 adds remembered scanner/server settings and a durable transfer queue to v2's vehicles, trips, fills, dashboard preferences and recovery draft. v1/v2 history migrates without loss. Scanner endpoint settings may be remembered on a vehicle after identification. Pairing tokens are stored only in Keychain, keyed by normalized server endpoint; they never appear in the state file or trip archive.
+
+The JSON export envelope is still `schemaVersion: 1`, with `trips` and optional `vehicles`. Existing whole-second ISO-8601 dates remain accepted; exports include fractional seconds. Each trip has identity, vehicle ID, name, source, sample flag, start, duration, distance, optional fuel/economy and route. `source` is `phoneGPS`, `scanner`, `imported`, or `demo`. GPS route points carry latitude, longitude, timestamp, accuracy (metres), and optional speed (m/s). Scanner trips additionally carry optional `samples`:
 
 ```json
 {
-  "schemaVersion": 1,
-  "trips": [{
-    "id": "AC28048E-A5F1-4EFA-A727-54FD194DFA00",
-    "name": "Example imported recording",
-    "startedAt": "2026-10-23T08:00:00Z",
-    "duration": 600,
-    "distanceKM": 5.2,
-    "source": "imported",
-    "isSample": true,
-    "economy": 5.4,
-    "fuelLitres": 0.2808,
-    "route": []
-  }]
+  "timestamp": "2026-10-23T12:00:00.125Z",
+  "signals": {"rpm": 1726},
+  "command": "010C",
+  "reply": "41 0C 1A F8\r"
 }
 ```
 
-`source` is `phoneGPS`, `imported`, or `demo`. Each route point has `latitude`, `longitude`, `timestamp`, `accuracy` (metres) and optional `speed` (m/s). `economy` and `fuelLitres` may be absent/null. Missing signals remain unavailable. Do not infer vehicle fuel consumption from GPS speed alone.
+This is synthetic explanatory data. Each sample contains only the readings returned by that response. Receipt timestamps are phone wall-clock times; they are not ECU-generated timestamps. Local state and Mac wire payloads retain numeric timestamp precision. Export timestamps use ISO fractional-second precision. Do not interpret absent engine values as zero or copy earlier values into missing samples.
+
+Imports enforce a 20 MB / 500 trip / 500 profile limit, at most 100,000 route points and 200,000 OBD responses per trip, finite valid measurements and known schema/source semantics. Duplicate trip IDs within one archive are rejected; existing IDs are skipped. Vehicles map by ID/VIN; unknown IDs without profiles are rejected. Legacy archives without vehicle IDs bind to the selected profile. GPS-only trips cannot claim fuel/economy. Sample trips remain labelled. Scanner raw responses and original telemetry survive local export/import; the phone does not decode Android raw CSV or proprietary CAN captures.
+
+## ELM327 Wi-Fi
+
+`ELMWiFiSession` implements one TCP session with prompt buffering, per-command timeout, serial requests and explicit disconnect. Initialization sends `ATI`, `ATE0`, `ATL0`, `ATS1`, `ATH0`, `ATCAF1`, `ATSP0`, then Mode 09 VIN and supported standard PID pages, and reads `ATDP`. Required adapter settings must be acknowledged. No clearing faults, module coding, security access or bus monitoring is issued.
+
+`ScannerRecorder` keeps the identified connection open and serially polls only recognized, confirmed Mode 01 PIDs. `OBDDecoder` handles speed, RPM, coolant, absolute MAP/barometer, fuel rate/level, ambient temperature, ECU voltage, intake/oil temperatures and engine load in canonical units. With headers disabled, conflicting ECU replies are deliberately unavailable because their source cannot be attributed. Multiple distinct VINs are rejected. Unsupported commands, timeout, transport loss and empty polling cycles stop live acquisition; disconnect clears readings. Live values expire after ten seconds. Real vehicle/scanner compatibility remains unverified.
+
+Scanner endpoint validation accepts private/link-local IPv4 addresses, valid `.local` names and loopback for local protocol fixtures. There is no network sweep. VIN lookup is separate, explicit and ephemeral; it uses NHTSA vPIC suggestions for review, never inferred odometer/tank/DPF values.
+
+## Native Mac API v1
+
+The server implementation is on branch `feature/mac-native-app`, under `mac-app/`. The iOS branch consumes its contract without changing the Mac branch or LAN configuration. Requests carry `Authorization: Bearer …`. Redirects are refused; local-network HTTP is enabled via `NSAllowsLocalNetworking`, and public endpoints/credentials in URLs are rejected by the client.
+
+- `GET /v1/health`: validate schema 1, service `CAN CONNECT`, and ingestion running/paused.
+- `GET /v1/vehicles`: match ID or normalized VIN; conflicting identity fails. No name-based guessing.
+- `POST /v1/vehicles`: create a missing profile with the phone UUID and reviewed identity. Existing profiles are not overwritten.
+- `POST /v1/recordings?vehicleID=…`: canonical envelope `{schemaVersion:1, recordingID, name, source, samples}`. Scanner samples carry numeric Unix timestamps and canonical `signals`; source command/reply remain in the original upload. GPS points carry actual coordinates, accuracy, and `gpsSpeedMps`, with no invented OBD speed/fuel signals. GPS speed metadata remains in the preserved original; the current Mac importer derives its route from coordinates and does not plot GPS speed as vehicle speed.
+- `GET /v1/receipts/{id}`: verify receipt/vehicle identity, SHA-256, byte count and recognized processing status. Only `processed` with nonempty trip IDs completes a queue item. `queued`/`processing` remains awaiting acknowledgment; `failed` remains actionable.
+
+The stable recording payload is frozen when enqueued and persisted with its destination and vehicle snapshot. Interrupted or ambiguous requests retry the identical bytes; Mac content-hash deduplication prevents duplicate imports. Server receipt IDs and resolved vehicle IDs are checkpointed. Changing server setup does not silently redirect existing queue entries. Deleting an unacknowledged queued recording is blocked. The current manual queue retains originals and completed payloads; no automatic retention deletion is implemented.
+
+The Mac archives source bytes before its initial 202 receipt, then processes separately. An initial 202 is never called a completed backup. If processing fails, retry import in the Mac app, then check the existing receipt on the phone. Transfer errors and state-write failures preserve the local recording. The Mac import currently ignores unsupported signal names such as ambient temperature while preserving them in the archived original.
 
 ## Code boundaries
 
-- `Core/Models.swift`: portable values, JSON contract, recording acceptance and fuel calculations.
-- `Services/GPSRecorder.swift`: explicit Core Location session and permission lifecycle.
-- `Services/LocalStore.swift`: atomic Application Support state; format version guard.
-- `Services/AppStore.swift`: recording state, persisted preferences, import deduplication.
-- `Views/`: locked UI and native maps. Card settings use stable per-instance keys such as `drive.0` and `economy.3`.
+- `Core/Models.swift`, `VehicleProfile.swift`, `ScannerReadings.swift`: values, migrations, acceptance, standard decoding and source-aware derived totals.
+- `Services/GPSRecorder.swift`: Core Location lifecycle.
+- `Services/VehicleIdentification.swift`, `ScannerRecorder.swift`: TCP transport, reviewed identity and continuous acquisition.
+- `Services/LocalStore.swift`, `AppStore.swift`: atomic state, recovery, vehicle isolation and orchestration.
+- `Services/MacServer.swift`: Keychain, endpoint/API contract, stable payload and receipt validation.
+- `Views/`: existing locked tab/page/card design, native connection/setup sheets.
 
-## CAN recorder and Mac mini
+References: [ELM327L data sheet](https://www.elmelectronics.com/wp-content/uploads/2016/07/ELM327L_Data_Sheet.pdf), [NHTSA vPIC API](https://vpic.nhtsa.dot.gov/api/), [Apple local network privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy), [Apple local networking ATS key](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking).
 
-Before adding a real transport, agree on the device protocol, authentication, signal units, timestamps and freshness semantics. Feed live readings only while a source is connected; clear stale values after disconnect. Keep recorded snapshots separate from live values.
-
-A future upload queue must persist each item and retain originals until the server acknowledges durable storage. The first native version does not simulate that acknowledgment. The transfer switches are stored preferences for that implementation.
-
-Raw Android CAN/OBD captures require their own parser and decoder. The current raw `WebCanCsv` export is not the JSON trip archive and is not accepted by this importer.
-
-## Bundled sample map sources
-
-- https://nanmap.nanaimo.ca/arcgis/rest/services/NanMap/Lines/MapServer/4
-- https://nanmap.nanaimo.ca/arcgis/rest/services/NanMap/Basemap/MapServer/3
-- https://nanmap.nanaimo.ca/arcgis/rest/services/NanMap/Basemap/MapServer/5
-
-The bundled map is clipped to the Nanaimo sample area. Personal GPS routes use native MapKit, which can display routes elsewhere. Sample road highlights illustrate coverage; the illustrative sample trip polyline is not a claim of a measured journey.
-
-## Vehicle identity and storage v2
-
-State schema v2 adds `vehicles`, `selectedVehicleID`, and `onboardingCompleted`. `Trip`, `FuelEntry`, and `RecordingDraft` carry optional `vehicleID`. The migration assigns v1 history to one explicit legacy/sample profile; recovery preserves the draft's vehicle ID. Existing records are not assumed to belong to a particular real Jetta.
-
-The additive archive v1 envelope may now include `vehicles`. Export supplies profiles for its trips; import maps foreign IDs to a local profile with the same VIN or ID, creates other profiles as needed, and never overwrites an existing profile from imported suggestions. Missing vehicle IDs in old archives bind to the selected vehicle. An unknown vehicle ID without its profile is rejected instead of guessed. Recordings cannot change vehicles while active.
-
-`VehicleIdentification.swift` implements explicit local-network TCP ELM327 identification, prompt buffering/timeouts, formatted ISO/J1850 VIN parsing, supported-PID bitmaps, and NHTSA vPIC lookup. It reads only identification/capability commands. It does not provide live CAN transport, infer manufacturer DPF PIDs, or assume every scanner is accessible through Core Bluetooth.
-
-The setup workflow separates scanner facts from VIN-decoder suggestions and manual fields. Odometer, tank capacity and missing identity fields remain unknown until entered or provided by a compatible source. Decoder lookup is optional, user-initiated, and uses an ephemeral session. Scanner addresses are restricted to private/link-local IPv4 addresses and `.local` hostnames; the app does not sweep the network.
-
-Sources:
-- NHTSA vPIC flat VIN API: https://vpic.nhtsa.dot.gov/api/
-- ELM327L command and Mode 09 examples: https://www.elmelectronics.com/wp-content/uploads/2016/07/ELM327L_Data_Sheet.pdf
-- Apple local network privacy: https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy
+Bundled sample map sources: [roads](https://nanmap.nanaimo.ca/arcgis/rest/services/NanMap/Lines/MapServer/4), [water](https://nanmap.nanaimo.ca/arcgis/rest/services/NanMap/Basemap/MapServer/3), [parks](https://nanmap.nanaimo.ca/arcgis/rest/services/NanMap/Basemap/MapServer/5). Geometry is clipped to the Nanaimo sample area; illustrative highlights are not personal trip records. Real routes use native MapKit.
