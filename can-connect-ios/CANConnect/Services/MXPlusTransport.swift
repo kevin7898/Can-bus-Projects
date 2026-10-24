@@ -58,7 +58,9 @@ final class MXPlusAccessories: ObservableObject {
     func showPicker() {
         guard !showingPicker else { return }
         showingPicker = true; pickerMessage = nil
-        EAAccessoryManager.shared().showBluetoothAccessoryPicker(withNameFilter:NSPredicate(format:"SELF CONTAINS[cd] %@","OBDLink")) { [weak self] error in
+        // Discovery names can differ from the authenticated accessory identity.
+        // Show all compatible iAP accessories; refresh still validates MX+ and com.obdlink.
+        EAAccessoryManager.shared().showBluetoothAccessoryPicker(withNameFilter:nil) { [weak self] error in
             Task { @MainActor in
                 guard let self else { return }
                 self.showingPicker = false; self.refresh()

@@ -16,7 +16,7 @@ struct ScannerConnectionView: View {
         } else {
             InfoNote(text:"Plug in your OBDLink MX+, turn on ignition, and pair it in iPhone Settings → Bluetooth. Press its Connect button to enable pairing. Close other OBD apps before connecting here.")
             if accessories.items.isEmpty {
-                InfoNote(text:"No authenticated MX+ found. Pair the adapter, allow a few seconds, then refresh. Generic Bluetooth ELM327 and OBDLink CX are different transports.")
+                InfoNote(text:"No MX+ is connected to iOS. Press its Connect button, open Pair / reconnect MX+, and allow up to a minute. If the list stays empty, reconnect in Settings → Bluetooth. Refresh only lists connected adapters.")
             } else {
                 Picker("OBDLink MX+",selection:$selectedAccessoryID) {
                     Text("Choose adapter").tag(nil as Int?)
@@ -24,7 +24,7 @@ struct ScannerConnectionView: View {
                 }.accessibilityIdentifier("scanner.accessory")
             }
             Button("Pair / reconnect MX+") { accessories.showPicker() }.disabled(accessories.showingPicker).accessibilityIdentifier("scanner.pair")
-            Button("Refresh paired adapters") { refresh() }.accessibilityIdentifier("scanner.refresh")
+            Button("Refresh connected adapters") { refresh() }.accessibilityIdentifier("scanner.refresh")
             if let message = accessories.pickerMessage { InfoNote(text:message) }
         }
         DataRow(label:"Vehicle",value:store.activeVehicle?.title ?? "Choose a vehicle")
