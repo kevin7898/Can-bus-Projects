@@ -16,7 +16,7 @@ Toolchain: Xcode 27.2 (27B48), Icon Composer 27.2 (143). Installed simulator: iP
 - iOS core: 75 passed, 1 hardware-dependent test skipped. Includes nine new deterministic regeneration tests: completed/partial cycles, single-response blips, interrupted end, status gaps, duplicate replies/imports, stale metrics, baseline/vehicle isolation, live draft/recovery, and old-state decoding.
 - iOS UI: six passed; two opt-in Live Activity presentation checks skipped. Includes comparison navigation with zero invented sample cycles, unchanged soot-card bounds, onboarding and TCP scanner recording.
 - Signed build 15 installed on the existing iPhone bundle ID. Before first launch, all 22 trips, three vehicles, one fill, scanner/server settings, preferences and 15 transfer records matched the private pre-install backup. Launch was initially blocked by the locked phone.
-- Mac: 19 tests passed. API integration passed authentication, setup, upload, processing receipt, exact-byte deduplication, retrieval, vehicle validation and durable original storage.
+- Mac: 20 tests passed. Mixed scanner/GPS tests additionally verify coordinates and precise timestamps through import, export and library reload. The isolated receiver test uses separate GPS and OBD rows, verifies the imported route and readings, and compares the saved original with the exact upload. API integration passed authentication, setup, upload, processing receipt, exact-byte deduplication, retrieval, vehicle validation and durable original storage.
 
 ## Acceptance limits
 
