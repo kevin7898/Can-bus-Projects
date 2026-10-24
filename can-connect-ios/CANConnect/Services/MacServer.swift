@@ -26,7 +26,10 @@ enum MacRecording {
         guard trip.scannerTransport == nil || trip.source == .scanner else { throw AppFailure("Scanner transport metadata requires a scanner recording.") }
         guard !trip.isSample else { throw AppFailure("Sample recordings cannot be uploaded as real vehicle data.") }
         var samples: [[String:Any]] = (trip.samples ?? []).map {
-            ["timestamp":$0.timestamp.timeIntervalSince1970,"signals":$0.signals,"command":$0.command,"reply":$0.reply]
+            var row: [String:Any] = ["timestamp":$0.timestamp.timeIntervalSince1970,"signals":$0.signals,"command":$0.command,"reply":$0.reply]
+            if let header = $0.requestHeader { row["obdRequestHeader"] = header }
+            if let header = $0.responseHeader { row["obdResponseHeader"] = header }
+            return row
         }
         samples += trip.route.map { point in
             var row: [String:Any] = ["timestamp":point.timestamp.timeIntervalSince1970,"latitude":point.latitude,"longitude":point.longitude,"accuracy":point.accuracy]

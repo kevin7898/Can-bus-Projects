@@ -190,7 +190,7 @@ final class ELMAccessoryChannel {
                         buffer.removeSubrange(...end)
                         guard let pending = waiting, outgoing.isEmpty else { continue }
                         let normalized = response.uppercased().replacingOccurrences(of:pendingCommand,with:"").trimmingCharacters(in:.whitespacesAndNewlines)
-                        let configuration = pendingCommand.hasPrefix("AT") && !["ATI","ATDP"].contains(pendingCommand)
+                        let configuration = pendingCommand.hasPrefix("AT") && !["ATI","ATDP","ATZ"].contains(pendingCommand)
                         if !normalized.isEmpty && (!configuration || ["OK","?","ERROR"].contains(where:normalized.contains)) {
                             waiting = nil; deadline?.cancel(); pending.resume(returning:response)
                         }
@@ -212,7 +212,9 @@ final class ELMAccessoryChannel {
         deadline = Task { [weak self, timeoutNanoseconds] in
             try? await Task.sleep(nanoseconds:timeoutNanoseconds)
             guard !Task.isCancelled else { return }
-            self?.fail(AppFailure("MX+ timed out. Check power, Bluetooth pairing and ignition, and close other OBD apps."))
+            guard let self else { return }
+            let phase = self.opening != nil ? "opening the Bluetooth stream" : "waiting for \(self.pendingCommand)"
+            self.fail(AppFailure("MX+ timed out \(phase). Check power, Bluetooth pairing and ignition, and close other OBD apps."))
         }
     }
     private func fail(_ error: Error) {
@@ -229,19 +231,24 @@ final class ELMAccessoryChannel {
 final class ELMMXPlusSession: ScannerTransport {
     private let serial: String?
     private var channel: ELMAccessoryChannel?
-    init(serial: String?) { self.serial = serial }
+    private let journal: ScannerJournal?
+    init(serial: String?, journal: ScannerJournal? = nil) { self.serial = serial; self.journal = journal }
     func open(host: String, port: UInt16) async throws -> ScannerIdentity {
         disconnect()
         let stream = try MXPlusStreams(accessory:MXPlusAccessory.select(serial:serial))
         let connection = ELMAccessoryChannel(streams:stream); channel = connection
         do {
+            journal?.append(command:"SESSION",reply:"Opening Bluetooth streams")
             try await connection.open()
-            return try await ELMIdentification.read(command:connection.command)
-        } catch { disconnect(); throw error }
+            journal?.append(command:"SESSION",reply:"Bluetooth streams opened")
+            return try await ELMIdentification.read(command:command)
+        } catch { journal?.append(command:"ERROR",reply:error.localizedDescription); disconnect(); throw error }
     }
     func command(_ text: String) async throws -> String {
         guard let channel else { throw AppFailure("Connect the OBDLink MX+ first.") }
-        return try await channel.command(text)
+        let reply = try await channel.command(text)
+        journal?.append(command:text,reply:reply)
+        return reply
     }
     func disconnect() { channel?.disconnect(); channel = nil }
 }

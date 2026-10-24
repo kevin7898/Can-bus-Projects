@@ -249,12 +249,17 @@ final class AppStore: ObservableObject {
         case .outside: return reading("outsideC")?.text(0) ?? "—"
         case .voltage: return reading("voltage")?.text(1) ?? "—"
         case .boost:
-            guard let map = reading("mapKpa"), let baro = reading("barometricKpa") else { return "—" }
+            guard let map = reading("boostAbsoluteKpa") ?? reading("mapKpa"), let baro = reading("barometricKpa") else { return "—" }
             return ((map-baro)/100).text(2)
         case .fuel:
             guard let rate = reading("fuelRateLph"), let speed = reading("speedKph"), speed > 5 else { return "—" }
             return (rate*100/speed).text(1)
         case .economy: return "—"
+        case .regenActive:
+            return reading("dpfRegenActive").map { $0 == 1 ? "Active" : "Inactive" } ?? "—"
+        case .regenType:
+            return reading("dpfRegenType").map { $0 == 1 ? "Active" : "Passive" } ?? "—"
+        default: return signal.readingKey.flatMap { reading($0) }?.text(1) ?? "—"
         }
     }
     var scannerTitle: String { (activeVehicle?.scannerConnection ?? state.scanner).kind.shortTitle }

@@ -6,10 +6,37 @@ enum TripSource: String, Codable, CaseIterable { case demo, phoneGPS, scanner, i
 }
 enum Signal: String, Codable, CaseIterable, Identifiable {
     case rpm, coolant, boost, fuel, economy, outside, voltage
+    case fuelRate, boostAbsolute, boostCommanded, intake, oil, load, airflow, fuelLevel
+    case egt1, egt2, egt3, egt4, dpfPressure, dpfInlet, dpfOutlet, regenActive, regenType, regenTrigger, regenMinutes, regenKM
+    var readingKey: String? {
+        switch self {
+        case .fuelRate: return "fuelRateLph"
+        case .boostAbsolute: return "boostAbsoluteKpa"
+        case .boostCommanded: return "boostCommandedKpa"
+        case .intake: return "intakeC"
+        case .oil: return "oilC"
+        case .load: return "engineLoad"
+        case .airflow: return "mafGps"
+        case .fuelLevel: return "fuelPercent"
+        case .egt1: return "egt1C"
+        case .egt2: return "egt2C"
+        case .egt3: return "egt3C"
+        case .egt4: return "egt4C"
+        case .dpfPressure: return "dpfDifferentialKpa"
+        case .dpfInlet: return "dpfInletKpa"
+        case .dpfOutlet: return "dpfOutletKpa"
+        case .regenActive: return "dpfRegenActive"
+        case .regenType: return "dpfRegenType"
+        case .regenTrigger: return "dpfRegenTrigger"
+        case .regenMinutes: return "dpfAverageRegenMinutes"
+        case .regenKM: return "dpfAverageRegenKM"
+        default: return nil
+        }
+    }
     var id: String { rawValue }
-    var title: String { switch self { case .rpm: return "Engine speed"; case .coolant: return "Coolant"; case .boost: return "Boost"; case .fuel: return "Fuel use"; case .economy: return "Average fuel"; case .outside: return "Outside temp"; case .voltage: return "System voltage" } }
-    var unit: String { switch self { case .rpm: return "rpm"; case .coolant, .outside: return "°C"; case .boost: return "bar"; case .fuel, .economy: return "L/100 km"; case .voltage: return "V" } }
-    var sample: String { switch self { case .rpm: return "1840"; case .coolant: return "89"; case .boost: return "0.42"; case .fuel: return "4.8"; case .economy: return "5.4"; case .outside: return "12"; case .voltage: return "13.9" } }
+    var title: String { switch self { case .rpm: return "Engine speed"; case .coolant: return "Coolant"; case .boost: return "Boost"; case .fuel: return "Fuel use"; case .economy: return "Average fuel"; case .outside: return "Outside temp"; case .voltage: return "System voltage"; default: return OBDDecoder.labels[readingKey ?? ""]?.title ?? "Signal" } }
+    var unit: String { switch self { case .rpm: return "rpm"; case .coolant, .outside: return "°C"; case .boost: return "bar"; case .fuel, .economy: return "L/100 km"; case .voltage: return "V"; default: return OBDDecoder.labels[readingKey ?? ""]?.unit ?? "" } }
+    var sample: String { switch self { case .rpm: return "1840"; case .coolant: return "89"; case .boost: return "0.42"; case .fuel: return "4.8"; case .economy: return "5.4"; case .outside: return "12"; case .voltage: return "13.9"; default: return "—" } }
 }
 struct RoutePoint: Codable, Equatable {
     var latitude: Double

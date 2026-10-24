@@ -51,6 +51,8 @@ protocol ScannerTransport: AnyObject {
 @MainActor
 enum ELMIdentification {
     static func read(command: (String) async throws -> String) async throws -> ScannerIdentity {
+        // Reset adapter state left by an interrupted app/session before identification.
+        _ = try await command("ATZ")
         let adapter = try await command("ATI")
         for setting in ["ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0"] {
             let response = try await command(setting)
@@ -59,7 +61,7 @@ enum ELMIdentification {
         let vinReply = try await command("0902")
         let vin = try ELMIdentityParser.vin(vinReply)
         var supported: [Int] = []
-        for base in [0,32,64] {
+        for base in stride(from:0,through:224,by:32) {
             if base != 0 && !supported.contains(base) { break }
             let response = try await command(String(format:"01%02X",base))
             supported += ELMIdentityParser.supportedPIDs(response,base:base)
@@ -145,7 +147,7 @@ final class ELMWiFiSession: ScannerTransport {
                     let response = String(self.buffer[..<end])
                     self.buffer = String(self.buffer[self.buffer.index(after:end)...])
                     let normalized = response.uppercased().replacingOccurrences(of:self.pendingCommand,with:"").trimmingCharacters(in:.whitespacesAndNewlines)
-                    let configuration = self.pendingCommand.hasPrefix("AT") && self.pendingCommand != "ATI" && self.pendingCommand != "ATDP"
+                    let configuration = self.pendingCommand.hasPrefix("AT") && !["ATI","ATDP","ATZ"].contains(self.pendingCommand)
                     let accepted = !normalized.isEmpty && (!configuration || normalized.contains("OK") || normalized.contains("?") || normalized.contains("ERROR"))
                     if accepted, let pending = self.waiting {
                         self.waiting = nil; self.timeout?.cancel(); pending.resume(returning:response)
