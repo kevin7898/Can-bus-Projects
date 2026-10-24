@@ -10,9 +10,16 @@ final class ELMTransportTests: XCTestCase {
         parameters.requiredLocalEndpoint = .hostPort(host:"127.0.0.1",port:.any)
         let listener = try NWListener(using:parameters)
         let ready = expectation(description:"loopback ELM fixture ready")
+        var listenerError: NWError?
         var received: [String] = []
         var connections: [NWConnection] = []
-        listener.stateUpdateHandler = { state in if case .ready = state { ready.fulfill() } }
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready: ready.fulfill()
+            case .failed(let error): listenerError = error; ready.fulfill()
+            default: break
+            }
+        }
         listener.newConnectionHandler = { connection in
             connections.append(connection); connection.start(queue:.main)
             var buffer = ""
@@ -42,7 +49,10 @@ final class ELMTransportTests: XCTestCase {
         }
         listener.start(queue:.main)
         defer { listener.cancel(); connections.forEach {$0.cancel()} }
-        await fulfillment(of:[ready],timeout:3)
+        // A cold hosted simulator can take longer than three seconds to bind.
+        // Keep the real TCP exchange mandatory and surface listener failures directly.
+        await fulfillment(of:[ready],timeout:15)
+        if let listenerError { throw listenerError }
         let session = ELMWiFiSession(); defer { session.disconnect() }
         let identity = try await session.open(host:"127.0.0.1",port:try XCTUnwrap(listener.port?.rawValue))
         XCTAssertEqual(identity.supportedPIDs,[12,13]); XCTAssertNil(identity.vin)
