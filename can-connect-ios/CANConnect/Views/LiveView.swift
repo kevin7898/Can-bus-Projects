@@ -33,8 +33,40 @@ struct LiveView: View {
         } }
     }
     private func drive(compact: Bool) -> some View {
+        GeometryReader { geometry in
+            ScrollView {
+                driveContent(compact:compact)
+                    .frame(minHeight:geometry.size.height)
+            }.scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier("live.drive.content")
+        }
+    }
+    private func driveContent(compact: Bool) -> some View {
         VStack(spacing:compact ? 9 : 16) {
             Spacer(minLength:0)
+            if let draft = store.state.draft, draft.source != .demo || !draft.route.isEmpty {
+                Group {
+                    if let fix = draft.route.last {
+                        NativeRouteMap(route:draft.route, isLive:true, isSample:store.source == .demo)
+                            .overlay(alignment:.topLeading) {
+                                HStack(spacing:4) {
+                                    Text(store.source == .demo ? "Sample route" : "GPS fix")
+                                    Text(fix.timestamp, style:.time)
+                                }.font(.system(size:9)).foregroundStyle(Palette.text)
+                                    .padding(6).background(Palette.background.opacity(0.85), in:RoundedRectangle(cornerRadius:5)).padding(7)
+                                    .allowsHitTesting(false)
+                            }
+                    } else {
+                        VStack(spacing:8) {
+                            Image(systemName:"location").foregroundStyle(Palette.blue)
+                            Text("Waiting for GPS location").font(.system(size:12))
+                            Text(store.gps.status).font(.system(size:10)).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
+                        }.padding(12).frame(maxWidth:.infinity,maxHeight:.infinity)
+                            .background(Palette.surface).accessibilityIdentifier("live.route.waiting")
+                    }
+                }.frame(height:compact ? 140 : 180)
+                    .clipShape(RoundedRectangle(cornerRadius:14))
+            }
             VStack(spacing:3) { Eyebrow(text:store.source == .demo ? "Sample CAN · Preview" : store.source == .scanner ? "\(store.scannerTitle) · Vehicle speed" : "iPhone GPS · Speed")
                 Text(store.speedText).font(.system(size:compact ? 64 : 80, weight:.regular)).monospacedDigit().minimumScaleFactor(0.6)
                 Text("km/h").font(.system(size:13)).foregroundStyle(Palette.muted)
@@ -90,4 +122,5 @@ struct SignalPicker: View {
 
 #if DEBUG
 #Preview("Live · Sample data") { DriveLineCanvas(tab:.live) }
+#Preview("Live · Recording route") { DriveLineCanvas(tab:.live, recording:true) }
 #endif

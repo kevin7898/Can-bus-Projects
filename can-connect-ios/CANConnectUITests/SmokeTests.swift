@@ -165,7 +165,38 @@ final class SmokeTests: XCTestCase {
         locate(49.0004)
         try await Task.sleep(for:.seconds(2))
         app.activate()
+        let drivePage = app.buttons["Drive"]
+        XCTAssertTrue(drivePage.waitForExistence(timeout:5))
+        // The simulator can cache a stale hit point after foregrounding.
+        drivePage.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        let selectedDrive = XCTNSPredicateExpectation(predicate:NSPredicate(format:"selected == true"),object:drivePage)
+        await fulfillment(of:[selectedDrive],timeout:5)
+        let liveMap = app.otherElements["live.route"]
+        XCTAssertTrue(liveMap.waitForExistence(timeout:5))
+        let routeGrew = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
+            let count = (liveMap.value as? String)?.split(separator:" ").first.flatMap { Int($0) } ?? 0
+            return count >= 3
+        },object:nil)
+        await fulfillment(of:[routeGrew],timeout:10)
+        XCTAssertTrue(liveMap.otherElements["Latest recorded location"].exists || liveMap.descendants(matching:.any).matching(NSPredicate(format:"label CONTAINS %@","Latest recorded location")).firstMatch.exists)
         let finish = app.buttons["Finish & save recording"]
+        let finishFrame = finish.frame
+        XCTAssertLessThan(liveMap.frame.maxY,finishFrame.minY)
+        let liveShot = XCTAttachment(screenshot:app.screenshot()); liveShot.name = "Live route and latest GPS fix — synthetic scanner recording"; liveShot.lifetime = .keepAlways; add(liveShot)
+        let content = app.scrollViews["live.drive.content"]
+        // Scroll outside the interactive map. Cards remain reachable while the
+        // recording controls stay fixed, including on compact iPhones.
+        for _ in 0..<3 {
+            let card = app.buttons["signal-card.drive.0"]
+            if card.exists && card.isHittable && content.frame.contains(card.frame) { break }
+            content.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.9)).press(forDuration:0.05,thenDragTo:content.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.25)))
+        }
+        XCTAssertTrue(app.buttons["signal-card.drive.0"].isHittable)
+        XCTAssertTrue(app.buttons["signal-card.drive.1"].isHittable)
+        XCTAssertTrue(content.frame.contains(app.buttons["signal-card.drive.0"].frame))
+        XCTAssertTrue(content.frame.contains(app.buttons["signal-card.drive.1"].frame))
+        XCTAssertEqual(finish.frame.minY,finishFrame.minY,accuracy:1)
+        let cardsShot = XCTAttachment(screenshot:app.screenshot()); cardsShot.name = "Live cards and fixed Finish control with recording map"; cardsShot.lifetime = .keepAlways; add(cardsShot)
         XCTAssertTrue(finish.waitForExistence(timeout:5))
         XCTAssertTrue(finish.isHittable)
         // After foregrounding, the hosted simulator returned a stale hit point

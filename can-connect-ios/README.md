@@ -8,7 +8,7 @@ Xcode and the desktop coding assistant edit the same local checkout. Use `codex/
 
 Before starting, check `git status` and fetch the branch. If the working tree is clean and the local branch has no divergent commits, `git pull --ff-only origin codex/ios-companion` brings down remote changes. Preserve unfinished edits before integrating remote work; do not force-reset the checkout or switch branches over local changes. Review and stage only intended files, commit, then push `codex/ios-companion`. Keep private recordings, credentials and generated build directories outside commits.
 
-Open RootView, OverviewView, TripsView, LiveView, VehicleView or ConnectView and select **Editor → Canvas** for an interactive preview. Restart the canvas if paused. RootView offers all five starting tabs. Debug-only preview stores use separate temporary sample data, disabled GPS/scanner services and no Live Activities; they never load the personal recording library. Changes to the real view code appear in the preview without changing the approved design. Previews do not verify Bluetooth, GPS or Mac delivery.
+Open RootView, OverviewView, TripsView, LiveView, VehicleView or ConnectView and select **Editor → Canvas** for an interactive preview. Restart the canvas if paused. RootView offers all five starting tabs. LiveView also offers a **Live · Recording route** preview with an explicitly synthetic route and location marker. Debug-only preview stores use separate temporary sample data, disabled GPS/scanner services and no Live Activities; they never load the personal recording library. Changes to the real view code appear in the preview without changing the approved design. Previews do not verify Bluetooth, GPS or Mac delivery.
 
 ## Use your vehicle
 

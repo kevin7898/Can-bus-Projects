@@ -32,34 +32,66 @@ struct RoadMap: View {
         .accessibilityLabel("Nanaimo road map with sample driven corridors highlighted in blue")
     }
 }
+/// Live maps use the same accepted GPS fixes as the recording, so the marker
+/// cannot imply coverage that was never saved or start another location service.
 struct NativeRouteMap: UIViewRepresentable {
     var route: [RoutePoint]
+    var isLive = false
+    var isSample = false
+
     func makeUIView(context: Context) -> MKMapView {
         let view = MKMapView(); view.overrideUserInterfaceStyle = .dark; view.delegate = context.coordinator
-        view.accessibilityIdentifier = "recorded.route"
         view.showsCompass = true; view.pointOfInterestFilter = .excludingAll
         return view
     }
     func updateUIView(_ view: MKMapView, context: Context) {
-        guard context.coordinator.points != route || !context.coordinator.configured else { return }
-        context.coordinator.points = route; context.coordinator.configured = true
-        view.removeOverlays(view.overlays)
-        let coords = route.map { CLLocationCoordinate2D(latitude:$0.latitude, longitude:$0.longitude) }
-        if coords.count > 1 {
+        context.coordinator.update(view, route:route, isLive:isLive, isSample:isSample)
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, MKMapViewDelegate {
+        private var points: [RoutePoint]?
+        private var live = false
+        private var sample = false
+        private let location = MKPointAnnotation()
+
+        func update(_ view: MKMapView, route: [RoutePoint], isLive: Bool, isSample: Bool) {
+            guard points != route || live != isLive || sample != isSample else { return }
+            points = route; live = isLive; sample = isSample
+            view.accessibilityIdentifier = isLive ? "live.route" : "recorded.route"
+            view.accessibilityLabel = isLive ? "Recording route and latest GPS location" : "Recorded route"
+            view.accessibilityValue = "\(route.count) GPS points"
+            view.removeOverlays(view.overlays)
             for segment in RoutePoint.segments(route) where segment.count > 1 {
                 let positions = segment.map { CLLocationCoordinate2D(latitude:$0.latitude, longitude:$0.longitude) }
                 view.addOverlay(MKPolyline(coordinates:positions,count:positions.count))
             }
-            let bounds = MKPolyline(coordinates:coords,count:coords.count).boundingMapRect
-            view.setVisibleMapRect(bounds, edgePadding:UIEdgeInsets(top:45,left:35,bottom:45,right:35), animated:false)
-        } else if let coordinate = coords.first {
-            view.setRegion(MKCoordinateRegion(center:coordinate, latitudinalMeters:1500, longitudinalMeters:1500), animated:false)
-        } else { view.setRegion(MKCoordinateRegion(center:CLLocationCoordinate2D(latitude:49.185, longitude:-123.96), latitudinalMeters:10000, longitudinalMeters:10000), animated:false) }
-    }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator: NSObject, MKMapViewDelegate {
-        var points: [RoutePoint] = []
-        var configured = false
+            if isLive, let last = route.last {
+                location.coordinate = CLLocationCoordinate2D(latitude:last.latitude, longitude:last.longitude)
+                location.title = isSample ? "Sample location" : "Latest recorded location"
+                location.subtitle = last.timestamp.formatted(date:.omitted,time:.standard)
+                if !view.annotations.contains(where:{ $0 === location }) { view.addAnnotation(location) }
+            } else { view.removeAnnotation(location) }
+
+            guard let first = route.first else { return }
+            let coords = route.map { CLLocationCoordinate2D(latitude:$0.latitude,longitude:$0.longitude) }
+            // Keep both the latest fix and the recorded route visible. A minimum
+            // extent avoids extreme zoom for stationary or near-identical fixes.
+            let origin = MKMapPoint(CLLocationCoordinate2D(latitude:first.latitude,longitude:first.longitude))
+            let radius = 250 * MKMapPointsPerMeterAtLatitude(first.latitude)
+            let minimum = MKMapRect(x:origin.x-radius,y:origin.y-radius,width:radius*2,height:radius*2)
+            let bounds = MKPolyline(coordinates:coords,count:coords.count).boundingMapRect.union(minimum)
+            view.setVisibleMapRect(bounds,edgePadding:UIEdgeInsets(top:35,left:25,bottom:35,right:25),animated:false)
+        }
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard annotation === location else { return nil }
+            let view = (mapView.dequeueReusableAnnotationView(withIdentifier:"recording.location") as? MKMarkerAnnotationView)
+                ?? MKMarkerAnnotationView(annotation:annotation,reuseIdentifier:"recording.location")
+            view.annotation = annotation; view.markerTintColor = UIColor(red:88/255,green:167/255,blue:1,alpha:1)
+            view.glyphImage = UIImage(systemName:"location.fill"); view.canShowCallout = true
+            view.displayPriority = .required
+            return view
+        }
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay:overlay) }
             let renderer = MKPolylineRenderer(polyline:line); renderer.strokeColor = UIColor(red:88/255,green:167/255,blue:1,alpha:1); renderer.lineWidth = 4; return renderer

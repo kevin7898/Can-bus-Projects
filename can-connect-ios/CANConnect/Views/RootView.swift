@@ -67,11 +67,11 @@ func importRecording(_ result: Result<URL, Error>, store: AppStore) {
 struct DriveLineCanvas: View {
     @StateObject private var store: AppStore
 
-    init(tab: AppTab = .overview) {
-        _store = StateObject(wrappedValue:Self.makeStore(tab:tab))
+    init(tab: AppTab = .overview, recording: Bool = false) {
+        _store = StateObject(wrappedValue:Self.makeStore(tab:tab, recording:recording))
     }
 
-    static func makeStore(tab: AppTab = .overview) -> AppStore {
+    static func makeStore(tab: AppTab = .overview, recording: Bool = false) -> AppStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("DriveLinePreviews/\(UUID().uuidString)/state.json")
         let store = AppStore(disk:LocalStore(url:url),
@@ -80,6 +80,14 @@ struct DriveLineCanvas: View {
                              scannerAvailable:{ _ in false })
         store.state.onboardingCompleted = true
         store.selectedTab = tab
+        if recording {
+            let start = Date().addingTimeInterval(-140)
+            let points = SampleData.routeCoordinates.enumerated().map { i, c in
+                RoutePoint(latitude:c[0],longitude:c[1],timestamp:start.addingTimeInterval(Double(i)*20),accuracy:5,speed:18)
+            }
+            store.state.draft = RecordingDraft(vehicleID:store.state.selectedVehicleID,source:.demo,
+                                               startedAt:start,updatedAt:Date(),distanceKM:4,route:points)
+        }
         return store
     }
 

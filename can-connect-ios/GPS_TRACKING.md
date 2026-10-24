@@ -1,6 +1,6 @@
 # GPS routes with scanner recordings
 
-Automatic and manually started scanner recordings now start the iPhone's Core Location recorder alongside OBD polling. Both streams belong to the same saved trip. Connect → Devices → This iPhone shows location status during scanner recording as well as phone-only recording. The existing screens, card layout, colours and soot percentage are unchanged.
+Automatic and manually started scanner recordings now start the iPhone's Core Location recorder alongside OBD polling. Both streams belong to the same saved trip. Connect → Devices → This iPhone shows location status during scanner recording as well as phone-only recording. The existing cards, colours and soot percentage are unchanged; build 25 adds the requested map within Live → Drive.
 
 For an automatic scanner trip that begins while locked or another app is open, Always location authorization is required. In Connect → Devices, tap the existing This iPhone card to request it; Precise Location should be enabled. While Using remains supported for sessions started with DriveLine open, and those sessions can continue into the background. The app does not silently upgrade authorization.
 
@@ -38,3 +38,12 @@ Engine-off is inferred only from repeated zero-RPM responses spanning at least t
 The screens, card layout, soot percentage, app identity and saved recordings remain unchanged. Physical acceptance requires a running-engine start, a short MX+ outage and return with the same trip ID/GPS trace, confirmed engine shutdown, and a subsequent locked-screen engine start. The app cannot force iOS to reconnect an unavailable Bluetooth Classic accessory. A running engine and configured scanner remain required for automatic starts even with Always location access.
 
 Validation for build 22: the full local Xcode suite passed 97 tests with three hardware/opt-in checks skipped. The signed device build passed and installation/launch preserved all 32 saved recordings, vehicle profiles, transfer state, server settings and regeneration baseline. The user is away from the car, so same-trip MX+ reconnection and physical engine-off boundaries remain unverified. Test fixtures exercise GPS retention, unchanged trip identity, recovery, expired gaps, wrong/unknown VIN rejection, no automatic start for ignition-only responses, engine-off confirmation and starting a separate trip afterward. No screen-layout or reading-card changes were made.
+
+
+## Live recording map (build 25)
+
+Live → Drive shows the active recording's route and a blue marker at the latest accepted GPS fix. Both come from the same draft that is saved and transferred; the map does not run an independent location manager or imply that rejected/missing fixes were recorded. The fix time remains visible, and tapping the marker identifies it as the latest recorded location. Before the first accepted fix, the same space shows the GPS recorder's waiting/status text. Sample preview coordinates are labelled separately.
+
+The camera frames the recorded route and latest fix together, with a minimum extent for stationary fixes. It does not combine user-follow mode with repeated route fitting. Missing coverage still breaks the line after 30 seconds. New fixes and resumed background recordings update the existing map. The Drive content scrolls if needed while the source/page controls, Finish button and bottom navigation remain fixed. Existing reading cards, soot percentage, colours and other pages retain their design.
+
+Automated coverage exercises empty/single/growing routes, location marker movement, GPS gaps, history marker removal, and a real Core Location simulator feed alongside a synthetic TCP scanner. The UI check verifies route growth through background/foreground delivery, visible location annotation, reachable reading cards, fixed Finish placement, saving and the recorded trip map. Physical moving GPS reception and MX+ behavior remain hardware checks; simulator fixtures do not establish those results.

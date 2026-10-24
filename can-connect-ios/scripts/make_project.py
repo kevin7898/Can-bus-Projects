@@ -54,9 +54,9 @@ for name, files in [('CANConnect',appfiles),('CANConnectTests',testfiles),('CANC
     fwPhase = add(name+':frameworks','PBXFrameworksBuildPhase','buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')
     settings={'PRODUCT_NAME':'$(TARGET_NAME)','PRODUCT_BUNDLE_IDENTIFIER':'com.canconnect.'+('companion' if name=='CANConnect' else name.lower()),'CODE_SIGN_STYLE':'Automatic','TARGETED_DEVICE_FAMILY':'1','SUPPORTED_PLATFORMS':'iphoneos iphonesimulator','SUPPORTS_MACCATALYST':'NO','LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks','GENERATE_INFOPLIST_FILE':'YES'}
     dependencies=[]
-    if name=='CANConnect': settings.update({'GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'CANConnect/Info.plist','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'24','ENABLE_PREVIEWS':'YES','ASSETCATALOG_COMPILER_APPICON_NAME':'DriveLine'})
+    if name=='CANConnect': settings.update({'GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'CANConnect/Info.plist','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'25','ENABLE_PREVIEWS':'YES','ASSETCATALOG_COMPILER_APPICON_NAME':'DriveLine'})
     elif name=='CANConnectLiveActivity':
-        settings.update({'INFOPLIST_FILE':'CANConnectLiveActivity/Info.plist','PRODUCT_BUNDLE_IDENTIFIER':'com.canconnect.companion.recording','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'24','APPLICATION_EXTENSION_API_ONLY':'YES','SKIP_INSTALL':'YES'})
+        settings.update({'INFOPLIST_FILE':'CANConnectLiveActivity/Info.plist','PRODUCT_BUNDLE_IDENTIFIER':'com.canconnect.companion.recording','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'25','APPLICATION_EXTENSION_API_ONLY':'YES','SKIP_INSTALL':'YES'})
     else:
         proxy=add(name+':proxy','PBXContainerItemProxy',f'containerPortal = {uid("project")}; proxyType = 1; remoteGlobalIDString = {uid("target:CANConnect")}; remoteInfo = CANConnect;')
         dependencies.append(add(name+':dependency','PBXTargetDependency',f'target = {uid("target:CANConnect")}; targetProxy = {proxy};'))
