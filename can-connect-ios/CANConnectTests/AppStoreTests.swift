@@ -2,6 +2,42 @@ import XCTest
 @testable import CANConnect
 
 final class AppStoreTests: XCTestCase {
+    func testTodayPresentationExcludesSampleDataAndKeepsLatestRealEntitiesIndependent() throws {
+        var calendar=Calendar(identifier:.gregorian);calendar.timeZone=try XCTUnwrap(TimeZone(secondsFromGMT:0))
+        let now=try XCTUnwrap(ISO8601DateFormatter().date(from:"2026-10-25T18:00:00Z"))
+        var vehicle=VehicleProfile();vehicle.nickname="Real Jetta"
+        let real=Trip(vehicleID:vehicle.id,name:"Morning drive",startedAt:now.addingTimeInterval(-3600),duration:1800,distanceKM:22,
+                      source:.scanner,isSample:false,economy:5,fuelLitres:1.1)
+        let noFuel=Trip(vehicleID:vehicle.id,name:"Lunch drive",startedAt:now.addingTimeInterval(-900),duration:600,distanceKM:8,
+                        source:.phoneGPS,isSample:false,economy:nil,fuelLitres:nil)
+        let sample=Trip(vehicleID:vehicle.id,name:"Newer sample",startedAt:now.addingTimeInterval(-60),duration:999,distanceKM:999,
+                        source:.demo,isSample:true,economy:1,fuelLitres:99)
+        let realFill=FuelEntry(vehicleID:vehicle.id,date:now.addingTimeInterval(-7200),litres:42,costCAD:70,odometerKM:200_000,full:true)
+        let sampleFill=FuelEntry(vehicleID:vehicle.id,date:now.addingTimeInterval(-30),litres:100,costCAD:0,odometerKM:1,full:true,isSample:true)
+        var state=StoredState();state.vehicles=[vehicle];state.selectedVehicleID=vehicle.id
+        state.trips=[sample,real,noFuel];state.fills=[sampleFill,realFill]
+
+        let value=PhoneTodayPresentation.make(state:state,now:now,calendar:calendar,gpsStatus:"Ready",scannerStatus:"Not connected",scannerConnected:false,scannerConnecting:false)
+
+        XCTAssertEqual(value.todayDriveCount,2)
+        XCTAssertEqual(value.todayDistanceKM,30,accuracy:0.000_001)
+        XCTAssertEqual(value.todayDuration,2400,accuracy:0.000_001)
+        XCTAssertEqual(value.todayFuelLitres,1.1)
+        XCTAssertEqual(value.todayFuelDriveCount,1)
+        XCTAssertEqual(value.latestTrip?.id,noFuel.id)
+        XCTAssertEqual(value.latestFill?.id,realFill.id)
+    }
+
+    func testTodayPresentationDoesNotRenderUnavailableFuelAsZero() {
+        var vehicle=VehicleProfile();vehicle.nickname="GPS vehicle"
+        let now=Date()
+        let trip=Trip(vehicleID:vehicle.id,name:"GPS drive",startedAt:now,duration:60,distanceKM:1,
+                      source:.phoneGPS,isSample:false,economy:nil,fuelLitres:nil)
+        var state=StoredState();state.vehicles=[vehicle];state.selectedVehicleID=vehicle.id;state.trips=[trip]
+        let value=PhoneTodayPresentation.make(state:state,now:now,gpsStatus:"Ready",scannerStatus:"Not connected",scannerConnected:false,scannerConnecting:false)
+        XCTAssertNil(value.todayFuelLitres)
+    }
+
     @MainActor
     func testRecordingDeepLinkSelectsRecordDestination() throws {
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

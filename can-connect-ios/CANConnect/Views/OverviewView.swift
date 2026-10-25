@@ -3,58 +3,135 @@ import SwiftUI
 struct OverviewView: View {
     @EnvironmentObject private var store: AppStore
     @Binding var page: Int
-    @State private var map = false
-    @State private var customize = false
-    @State private var latestTrip: Trip?
+    @State private var selectedTrip: Trip?
+
+    private var presentation: PhoneTodayPresentation {
+        .make(state:store.state, now:store.now, gpsStatus:store.gps.status,
+              scannerStatus:store.scanner.status, scannerConnected:store.scanner.connected,
+              scannerConnecting:store.scanner.connecting)
+    }
+
     var body: some View {
-        VStack(spacing:12) {
-            PageControl(labels:["Your roads","Summary"], selection:$page)
-            TabView(selection:$page) {
-                roads.tag(0)
-                summary.tag(1)
-            }.tabViewStyle(.page(indexDisplayMode:.never))
-        }.sheet(isPresented:$map) { SheetShell(title:"Your roads") {
-            NativeRouteMap(route:store.latest?.route ?? []).frame(height:420).clipShape(RoundedRectangle(cornerRadius:16))
-            InfoNote(text:store.latest?.isSample == true ? "Illustrative sample route near Nanaimo. The overview highlights sample road corridors." : "Latest saved route. Pinch to zoom and drag to explore.")
-            Text(store.latest?.name ?? "No recorded drives yet").font(.headline)
-        } }.sheet(isPresented:$customize) { CustomizeSummary() }.sheet(item:$latestTrip) { TripDetailView(trip:$0) }
-    }
-    private var roads: some View {
-        VStack(alignment:.leading,spacing:12) {
-            HStack { VStack(alignment:.leading,spacing:4) { Text("Driving history").font(.system(size:17)); Text(store.latest?.isSample == false ? "Latest recorded route · kept on iPhone" : store.activeVehicle?.isSample == true ? "Sample roads · Nanaimo, BC" : "No saved drives for this vehicle").captionStyle() }; Spacer(); Button { map = true } label: { Image(systemName:"arrow.up.left.and.arrow.down.right").frame(width:36,height:36).background(Palette.surface,in:Circle()) }.accessibilityLabel("Expand map").disabled(store.latest == nil) }
-            Group {
-                if let trip = store.latest, !trip.isSample { NativeRouteMap(route:trip.route).clipShape(RoundedRectangle(cornerRadius:14)) }
-                else if store.activeVehicle?.isSample == true { RoadMap() }
-                else { VStack(spacing:14) { Image(systemName:"map").font(.system(size:34)).foregroundStyle(Palette.blue); Text("Your roads start here").font(.system(size:19)); Text("Record a drive to build this vehicle's history.").captionStyle(); AppButton(title:"Open Record",icon:"location",secondary:true) { store.selectedTab = .record }.padding(.horizontal,24) }.frame(maxWidth:.infinity,maxHeight:.infinity).background(Palette.surface,in:RoundedRectangle(cornerRadius:14)) }
-            }.frame(maxWidth:.infinity,maxHeight:.infinity).overlay(alignment:.topLeading) { Text(store.latest?.isSample == false ? "RECORDED ROUTE" : store.activeVehicle?.isSample == true ? "SAMPLE COVERAGE" : "READY TO RECORD").font(.system(size:9,weight:.medium)).tracking(1).padding(9).background(Palette.background.opacity(0.88),in:Capsule()).padding(12) }
-            HStack(spacing:14) { Circle().fill(Palette.blue).frame(width:7,height:7); Text(store.latest?.isSample == false ? "Recorded GPS route" : store.activeVehicle?.isSample == true ? "Driven roads · sample" : "No route recorded yet").captionStyle(); Spacer(); Text("Saved locally").captionStyle() }
-            Button { map = true } label: { HStack { Image(systemName:"mappin.and.ellipse").foregroundStyle(Palette.blue); VStack(alignment:.leading,spacing:4) { Text(store.latest?.name ?? "Your next drive starts here").font(.system(size:13)).foregroundStyle(Palette.text).lineLimit(1); Text(store.latest.map { $0.startedAt.formatted(date:.abbreviated,time:.shortened) } ?? "Start a recording from Live").captionStyle() }; Spacer(); Image(systemName:"chevron.right").font(.system(size:11)).foregroundStyle(Palette.muted) }.card() }
-            Text("Recorded history stays separate from Live.").captionStyle()
-        }.padding(.horizontal,1).padding(.bottom,2)
-    }
-    private var summary: some View {
         GeometryReader { geometry in
-            VStack(alignment:.leading,spacing:geometry.size.height < 470 ? 10 : 16) {
-                HStack { Text("At a glance").font(.system(size:17)); Spacer(); Button("Customize") { customize = true }.font(.system(size:11)) }
-                ForEach(store.dashboard.summaryOrder, id:\.self) { key in
-                    switch key {
-                    case "week": VStack(alignment:.leading,spacing:12) { Text("This week").captionStyle(); HStack { Metric(title:"Distance",value:store.weekKM.text(0),unit:"km"); Metric(title:"Drives",value:String(store.weekTrips.count)); Metric(title:"Avg. fuel",value:store.weekEconomy?.text() ?? "—",unit:"L/100") } }.card()
-                    case "fuel": HStack { Image(systemName:"fuelpump").foregroundStyle(Palette.blue); VStack(alignment:.leading,spacing:6) { Text(store.activeVehicle?.isSample == true ? "Fuel & range · sample" : "Fuel & range").captionStyle(); Text(store.activeVehicle?.isSample == true ? "620 km" : "— km").font(.system(size:26)); Text(store.activeVehicle?.isSample == true ? "62% tank · 5.4 L/100 km" : "Waiting for vehicle data").captionStyle() }; Spacer(); Button { store.connectPage=2;store.selectedTab = .more } label: { Image(systemName:"chevron.right").frame(width:44,height:44) }.accessibilityLabel("Open vehicle data in More") }.card()
-                    default: if let trip = store.latest { Button { latestTrip = trip } label: { VStack(alignment:.leading,spacing:9) { HStack { Text("Latest drive").captionStyle(); Spacer(); if trip.isSample { Text("Sample").captionStyle() } }; Text(trip.name).font(.system(size:14,weight:.medium)).foregroundStyle(Palette.text).lineLimit(1); HStack { Text("\(trip.distanceKM.text()) km").foregroundStyle(Palette.text); Spacer(); Text(trip.durationText).foregroundStyle(Palette.muted) }.font(.system(size:12)) }.card() } }
-                    }
-                }
-                Spacer(minLength:0)
-                HStack(spacing:8) { Image(systemName:"externaldrive").foregroundStyle(Palette.muted); Text("On this iPhone · server not configured").captionStyle() }
-            }.padding(.horizontal,1).padding(.vertical,2)
+            ScrollView {
+                VStack(alignment:.leading,spacing:12) {
+                    dateHeader
+                    readinessCard
+                    todayTotals
+                    latestDrive
+                    latestFill
+                }.padding(.horizontal,1).padding(.bottom,8)
+                    .frame(maxWidth:.infinity,minHeight:geometry.size.height,alignment:.top)
+            }.scrollBounceBehavior(.basedOnSize)
+        }.sheet(item:$selectedTrip) { TripDetailView(trip:$0) }
+            .accessibilityIdentifier("today.content")
+    }
+
+    private var dateHeader: some View {
+        VStack(alignment:.leading,spacing:3) {
+            Text(presentation.date.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+                .font(.title2.weight(.semibold)).minimumScaleFactor(0.8)
+            Text(presentation.vehicleTitle ?? "No vehicle selected").font(.subheadline).foregroundStyle(Palette.secondaryText)
+        }.accessibilityElement(children:.combine)
+    }
+
+    private var readinessCard: some View {
+        SectionCard(title:readinessTitle,icon:readinessIcon) {
+            VStack(alignment:.leading,spacing:10) {
+                Text(readinessMessage).font(.subheadline).foregroundStyle(Palette.secondaryText)
+                HStack(spacing:8) {
+                    StatusPill(state:gpsState,text:"GPS")
+                    StatusPill(state:scannerState,text:scannerLabel)
+                    StatusPill(state:.healthy,text:"Local")
+                }.accessibilityElement(children:.contain)
+                if presentation.queuedTransfers > 0 { StatusPill(state:.queued,text:"\(presentation.queuedTransfers) queued") }
+            }
         }
     }
-}
-struct CustomizeSummary: View {
-    @EnvironmentObject private var store: AppStore
-    @Environment(\.dismiss) private var dismiss
-    var body: some View { NavigationStack { List { Section("Drag to reorder your summary") { ForEach(store.dashboard.summaryOrder,id:\.self) { key in Text(key == "week" ? "Week summary" : key == "fuel" ? "Fuel & range" : "Latest drive") }.onMove { from,to in store.dashboard.summaryOrder.move(fromOffsets:from,toOffset:to); store.save() } } }.environment(\.editMode,.constant(.active)).scrollContentBackground(.hidden).background(Palette.background).navigationTitle("Customize").navigationBarTitleDisplayMode(.inline).toolbar { Button("Done") { dismiss() } } } }
+
+    private var todayTotals: some View {
+        SectionCard(title:"Today",icon:"road.lanes") {
+            if presentation.todayDriveCount == 0 {
+                HStack(spacing:12) {
+                    Image(systemName:"road.lanes").foregroundStyle(Palette.unavailable)
+                    VStack(alignment:.leading,spacing:3) {
+                        Text("No real drives recorded today").font(.subheadline.weight(.semibold))
+                        Text("Sample drives never contribute to these totals.").font(.caption).foregroundStyle(Palette.secondaryText)
+                    }
+                }
+            } else {
+                LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:10) {
+                    MetricTile(title:"Distance",value:presentation.todayDistanceKM.text(1),unit:"km",source:"Recorded")
+                    MetricTile(title:"Duration",value:duration(presentation.todayDuration),source:"Recorded")
+                    MetricTile(title:"Drives",value:String(presentation.todayDriveCount),source:"Saved locally")
+                    MetricTile(title:"Trip fuel",value:presentation.todayFuelLitres?.text(2),unit:"L",
+                               state:presentation.todayFuelLitres == nil ? .unavailable:.healthy,source:"Measured")
+                }
+                if presentation.todayFuelDriveCount < presentation.todayDriveCount {
+                    Text("Trip fuel is shown only for \(presentation.todayFuelDriveCount) of \(presentation.todayDriveCount) drives with measured fuel coverage.")
+                        .font(.caption).foregroundStyle(Palette.secondaryText)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var latestDrive: some View {
+        if let trip = presentation.latestTrip {
+            SectionCard(title:"Most recent drive",icon:"clock.arrow.circlepath") {
+                Button { selectedTrip=trip } label: {
+                    VStack(alignment:.leading,spacing:9) {
+                        HStack { Text(trip.name).font(.headline);Spacer();Image(systemName:"chevron.right") }
+                        Text(trip.startedAt.formatted(date:.abbreviated,time:.shortened)).font(.caption).foregroundStyle(Palette.secondaryText)
+                        if !trip.route.isEmpty { NativeRouteMap(route:trip.route).frame(height:150).clipShape(RoundedRectangle(cornerRadius:Palette.Radius.medium)) }
+                        HStack { Text("\(trip.distanceKM.text(1)) km");Spacer();Text(duration(trip.duration)) }.font(.subheadline).monospacedDigit()
+                        SourceBadge(source:trip.source.title,verified:true)
+                    }.foregroundStyle(Palette.primaryText).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityIdentifier("today.latest-drive")
+            }
+        } else {
+            EmptyStateCard(icon:"road.lanes",title:"Your next drive starts here",
+                           message:"Record with iPhone GPS or a configured scanner. Missing signals will remain unavailable.",
+                           actionTitle:"Open Record") { store.selectedTab = .record }
+        }
+    }
+
+    @ViewBuilder private var latestFill: some View {
+        if let fill = presentation.latestFill {
+            SectionCard(title:"Latest fill",icon:"fuelpump.fill") {
+                HStack(alignment:.firstTextBaseline) {
+                    VStack(alignment:.leading,spacing:4) {
+                        Text(fill.stationName ?? "Fuel fill").font(.subheadline.weight(.semibold))
+                        Text(fill.date.formatted(date:.abbreviated,time:.shortened)).font(.caption).foregroundStyle(Palette.secondaryText)
+                    }
+                    Spacer();Text("\(fill.litres.text(1)) L").font(.headline).monospacedDigit()
+                }
+                Text("Purchased fill quantity; it is never counted as trip fuel consumed.").font(.caption).foregroundStyle(Palette.secondaryText)
+            }
+        } else {
+            SectionCard(title:"Latest fill",icon:"fuelpump") { Text("No real fuel entries for this vehicle.").font(.subheadline).foregroundStyle(Palette.secondaryText) }
+        }
+    }
+
+    private var readinessTitle:String {
+        switch presentation.readiness { case .ready:return "Ready to record";case .needsVehicle:return "Choose a vehicle";case .sampleVehicle:return "Sample vehicle selected" }
+    }
+    private var readinessMessage:String {
+        switch presentation.readiness {
+        case .ready:return "Recordings save locally first. Scanner telemetry is optional."
+        case .needsVehicle:return "Add or select a real vehicle before recording."
+        case .sampleVehicle:return "Sample data is isolated and never contributes to real totals."
+        }
+    }
+    private var readinessIcon:String { presentation.readiness == .ready ? "checkmark.circle.fill":"exclamationmark.circle" }
+    private var gpsState:DriveLineSemanticState { store.gps.lastFix == nil ? .stale:.healthy }
+    private var scannerState:DriveLineSemanticState { presentation.scannerConnected ? .healthy:(presentation.scannerConnecting ? .stale:.unavailable) }
+    private var scannerLabel:String { presentation.scannerConnected ? "Scanner":(presentation.scannerConnecting ? "Connecting":"No scanner") }
+    private func duration(_ seconds:TimeInterval)->String {
+        let minutes=max(0,Int(seconds)/60);return minutes>=60 ? "\(minutes/60) h \(minutes%60) m":"\(minutes) min"
+    }
 }
 
 #if DEBUG
-#Preview("Today · Sample data") { DriveLineCanvas(tab:.today) }
+#Preview("Today · Light") { DriveLineCanvas(tab:.today,scheme:.light) }
+#Preview("Today · Dark") { DriveLineCanvas(tab:.today,scheme:.dark) }
 #endif
