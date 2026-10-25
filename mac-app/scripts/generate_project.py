@@ -19,7 +19,10 @@ product=obj('product','{isa = PBXFileReference; explicitFileType = wrapper.appli
 products=obj('products','{isa = PBXGroup; children = ('+product+',); name = Products; sourceTree = "<group>"; }')
 main=obj('group','{isa = PBXGroup; children = ('+','.join(refs+[products])+',); sourceTree = "<group>"; }')
 sources=obj('sources','{isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ('+','.join(builds)+',); runOnlyForDeploymentPostprocessing = 0; }')
-frameworks=obj('frameworks','{isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; }')
+package_ref=obj('package:DriveLineShared','{isa = XCLocalSwiftPackageReference; relativePath = "../shared/DriveLineShared"; }')
+package_product=obj('package-product:DriveLineShared','{isa = XCSwiftPackageProductDependency; package = '+package_ref+'; productName = DriveLineShared; }')
+package_build=obj('package-build:DriveLineShared','{isa = PBXBuildFile; productRef = '+package_product+'; }')
+frameworks=obj('frameworks','{isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ('+package_build+',); runOnlyForDeploymentPostprocessing = 0; }')
 resources=obj('resources','{isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ('+iconBuild+',); runOnlyForDeploymentPostprocessing = 0; }')
 common='MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES;'
 target_common=common+' ASSETCATALOG_COMPILER_APPICON_NAME = DriveLine; PRODUCT_NAME = CANConnect; PRODUCT_BUNDLE_IDENTIFIER = ca.canconnect.mac; INFOPLIST_FILE = Info.plist; GENERATE_INFOPLIST_FILE = NO; CODE_SIGN_STYLE = Manual; CODE_SIGN_IDENTITY = "-"; ENABLE_HARDENED_RUNTIME = NO; ENABLE_APP_SANDBOX = NO; SWIFT_EMIT_LOC_STRINGS = YES; OTHER_LDFLAGS = ("$(inherited)", "-lsqlite3"); LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");'
@@ -29,8 +32,8 @@ for owner,settings in [('project',common),('target',target_common)]:
   extra=' SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;' if config=='Debug' else ' SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";'
   cs.append(obj(owner+config,'{isa = XCBuildConfiguration; buildSettings = {'+settings+extra+'}; name = '+config+'; }'))
  obj(owner+'configs','{isa = XCConfigurationList; buildConfigurations = ('+','.join(cs)+',); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; }')
-target=obj('target','{isa = PBXNativeTarget; buildConfigurationList = '+uid('targetconfigs')+'; buildPhases = ('+','.join([sources,frameworks,resources])+',); buildRules = (); dependencies = (); name = CANConnect; productName = CANConnect; productReference = '+product+'; productType = "com.apple.product-type.application"; }')
-project=obj('project','{isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600;}; buildConfigurationList = '+uid('projectconfigs')+'; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = '+main+'; productRefGroup = '+products+'; projectDirPath = ""; projectRoot = ""; targets = ('+target+',); }')
+target=obj('target','{isa = PBXNativeTarget; buildConfigurationList = '+uid('targetconfigs')+'; buildPhases = ('+','.join([sources,frameworks,resources])+',); buildRules = (); dependencies = (); name = CANConnect; packageProductDependencies = ('+package_product+',); productName = CANConnect; productReference = '+product+'; productType = "com.apple.product-type.application"; }')
+project=obj('project','{isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600;}; buildConfigurationList = '+uid('projectconfigs')+'; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = '+main+'; packageReferences = ('+package_ref+',); productRefGroup = '+products+'; projectDirPath = ""; projectRoot = ""; targets = ('+target+',); }')
 folder=root/'CANConnect.xcodeproj';folder.mkdir(exist_ok=True)
 (folder/'project.pbxproj').write_text('// !$*UTF8*$!\n{archiveVersion = 1; classes = {}; objectVersion = 56; objects = {\n'+''.join(k+' = '+v+';\n' for k,v in objects.items())+'}; rootObject = '+project+'; }\n')
 scheme='''<?xml version="1.0" encoding="UTF-8"?>
