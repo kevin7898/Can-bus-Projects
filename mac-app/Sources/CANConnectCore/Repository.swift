@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(DriveLineShared)
 import DriveLineShared
+#endif
 
 public final class LibraryRepository {
     public let root: URL
@@ -12,8 +14,9 @@ public final class LibraryRepository {
     public func load() throws -> LibraryState {
         guard FileManager.default.fileExists(atPath: manifest.path) else { return LibraryState() }
         let result = try Self.decoder().decode(LibraryState.self, from: Data(contentsOf: manifest))
-        guard result.schemaVersion == 1 else { throw CANError.invalid("This library uses an unsupported schema. Keep the original file and update the app.") }
-        return result
+        guard (1...2).contains(result.schemaVersion) else { throw CANError.invalid("This library uses an unsupported schema. Keep the original file and update the app.") }
+        var migrated=result;migrated.schemaVersion=2
+        return migrated
     }
     public func save(_ state: LibraryState) throws {
         let data = try Self.encoder().encode(state)
@@ -34,16 +37,22 @@ public final class LibraryRepository {
 }
 
 public enum TripExport {
-    public static func json(_ trip: Trip) throws -> Data {
+    public static func json(_ trip: Trip, fuelEntries:[FuelEntry] = []) throws -> Data {
         var recording = trip.sharedRecording
         recording.coverage = DriveLineMetricPolicy.coverageSummaries(recording)
         let sources = recording.sourceIDs.map { id -> DriveLineSourceDescriptor in
             if id == "gps" { return DriveLineSourceDescriptor(id:id,kind:.gps,name:"Recorded GPS") }
             return DriveLineSourceDescriptor(id:id,kind:.obd,name:"Recorded vehicle signals",detail:trip.source)
         }
+        let fills=fuelEntries.filter { $0.vehicleID == trip.vehicleID }.map {
+            DriveLineFuelEntry(id:$0.id,vehicleID:$0.vehicleID,date:$0.date,litresPurchased:$0.litresPurchased,
+                               totalCost:$0.totalCost,currencyCode:$0.currencyCode,odometerKm:$0.odometerKm,
+                               isFullFill:$0.isFullFill,stationName:$0.stationName,notes:$0.notes,receipt:$0.receipt,isSample:$0.isDemo)
+        }
         return try DriveLineArchive(producer:DriveLineProducer(app:"DriveLine Mac",version:"2",platform:"macOS"),
                                     sources:sources,
-                                    recordings:[recording]).encoded()
+                                    vehicles:[DriveLineVehicle(id:trip.vehicleID,name:"Recorded vehicle")],
+                                    recordings:[recording],fuelEntries:fills).encoded()
     }
     public static func csv(_ trip: Trip) -> Data {
         let keys = trip.availableSignals

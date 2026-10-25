@@ -77,10 +77,10 @@ final class JettaReadingsTests: XCTestCase {
         draft.accept(sample)
         let trip = draft.trip(endedAt:sample.timestamp.addingTimeInterval(1))
         XCTAssertEqual(try TripArchive.decode(TripArchive(trips:[trip]).encoded()).trips.first?.samples?.first,sample)
-        let wire = try XCTUnwrap(JSONSerialization.jsonObject(with:MacRecording.encode(trip)) as? [String:Any])
-        let row = try XCTUnwrap((wire["samples"] as? [[String:Any]])?.first)
-        XCTAssertEqual(row["obdResponseHeader"] as? String,"7E8")
-        XCTAssertEqual((row["signals"] as? [String:Double])?["dpfRegenTrigger"],100)
+        let wire = try DriveLineArchive.decoded(MacRecording.encode(trip))
+        let row = try XCTUnwrap(wire.recordings.first?.signalSamples.first)
+        XCTAssertEqual(row.responseHeader,"7E8")
+        XCTAssertEqual(row.values["dpfRegenTrigger"],100)
     }
 }
 
@@ -116,17 +116,17 @@ extension JettaReadingsTests {
         let fixture = TargetedJettaFixture(); let scanner = ScannerRecorder(makeSession:{fixture})
         let store = AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),scanner:scanner,gps:GPSFixture(),scannerAvailable:{_ in false})
         store.source = .scanner
-        XCTAssertEqual(store.sootFullnessText,"—")
+        XCTAssertEqual(store.regenTriggerText,"—")
         let ready = expectation(description:"ECU trigger received")
         scanner.onSample = { if $0.signals["dpfRegenTrigger"] != nil { ready.fulfill() } }
         var vehicle = VehicleProfile(); vehicle.make="Volkswagen";vehicle.model="Jetta";vehicle.year=2014;vehicle.engine="TDI";vehicle.transmission="DSG"
         scanner.connect(settings:ScannerSettings(transport:.obdLinkMXPlus),vehicle:vehicle)
         await fulfillment(of:[ready],timeout:3)
         scanner.onSample = nil
-        XCTAssertEqual(store.sootFullnessText,"100")
+        XCTAssertEqual(store.regenTriggerText,"100")
         XCTAssertEqual(store.signalText(.sootMass),"—","Percent must not invent grams")
-        store.source = .phoneGPS; XCTAssertEqual(store.sootFullnessText,"—")
-        store.source = .scanner; scanner.disconnect(); XCTAssertEqual(store.sootFullnessText,"—")
+        store.source = .phoneGPS; XCTAssertEqual(store.regenTriggerText,"—")
+        store.source = .scanner; scanner.disconnect(); XCTAssertEqual(store.regenTriggerText,"—")
     }
     @MainActor
     func testMatchingProfileSelectsEngineAndPollsAdvertisedExtendedReadings() async throws {

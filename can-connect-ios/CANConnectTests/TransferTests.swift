@@ -31,10 +31,13 @@ final class TransferTests: XCTestCase {
     }
     func testWireFormatPreservesGPSProvenanceAndPreciseTimestamps() throws {
         let trip = trip(); let bytes = try MacRecording.encode(trip)
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with:bytes) as? [String:Any])
-        let rows = try XCTUnwrap(object["samples"] as? [[String:Any]])
-        XCTAssertEqual(rows.first?["timestamp"] as? Double,trip.startedAt.timeIntervalSince1970)
-        XCTAssertNil(rows.first?["signals"]); XCTAssertEqual(rows.first?["gpsSpeedMps"] as? Double,10)
+        let archive = try DriveLineArchive.decoded(bytes)
+        let recording = try XCTUnwrap(archive.recordings.first)
+        XCTAssertEqual(recording.recordingID,trip.id)
+        XCTAssertEqual(recording.vehicleID,UUID(uuidString:"00000000-0000-0000-0000-000000000000"))
+        XCTAssertNil(try TripArchive.decode(bytes).trips.first?.vehicleID)
+        XCTAssertEqual(recording.gpsPoints.first?.timestamp,trip.startedAt)
+        XCTAssertEqual(recording.gpsPoints.first?.speedMps,10)
         XCTAssertEqual(try MacRecording.encode(trip),bytes)
         var sample = trip; sample.isSample = true; XCTAssertThrowsError(try MacRecording.encode(sample))
         sample = trip; sample.route = []; XCTAssertThrowsError(try MacRecording.encode(sample))
@@ -66,7 +69,7 @@ final class TransferTests: XCTestCase {
         HTTPFixture.handler = { _ in (200,Data(#"{"status":"ok"}"#.utf8)) }
         do { _ = try await client().health(); XCTFail("Wrong server contract accepted") } catch {}
     }
-    func testRemoteVINMapsToExistingProfileWithoutOverwriting() async throws {
+    func testRemoteVINRequiresTheSameStableVehicleIdentity() async throws {
         defer { HTTPFixture.handler = nil }
         var vehicle = VehicleProfile(); vehicle.vin = "1D4GP00R55B123456"
         let remote = RemoteVehicle(id:UUID(),name:"Existing Mac profile",year:"",make:"",model:"",vin:vehicle.vin!,notes:"")
@@ -74,7 +77,11 @@ final class TransferTests: XCTestCase {
             XCTAssertEqual(request.httpMethod,"GET"); XCTAssertEqual(request.url?.path,"/v1/vehicles")
             return (200,try JSONEncoder().encode([remote]))
         }
-        let resolved = try await client().resolve(vehicle); XCTAssertEqual(resolved,remote.id)
+        do { _ = try await client().resolve(vehicle);XCTFail("Conflicting stable vehicleID accepted") } catch {}
+        let matching=RemoteVehicle(id:vehicle.id,name:"Matching profile",year:"",make:"",model:"",vin:vehicle.vin!,notes:"")
+        HTTPFixture.handler = { _ in (200,try JSONEncoder().encode([matching])) }
+        let resolved=try await client().resolve(vehicle)
+        XCTAssertEqual(resolved,vehicle.id)
     }
     func testProcessingReceiptPollsWithoutUploadingAgain() async throws {
         defer { HTTPFixture.handler = nil }

@@ -20,6 +20,9 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(metrics.distanceSource, "gps")
         XCTAssertEqual(try DriveLineArchive.decoded(archive.encoded()), archive)
         XCTAssertEqual(try archive.encoded(), try archive.encoded())
+        var precise=archive
+        precise.recordings[0].startedAt=Date(timeIntervalSince1970:1_700_000_000.123456)
+        XCTAssertEqual(try DriveLineArchive.decoded(precise.encoded()).recordings[0].startedAt,precise.recordings[0].startedAt)
     }
 
     func testVersion1MigrationPreservesStableIdentityAndPrecision() throws {
@@ -65,5 +68,17 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(DriveLineMetricPolicy.tankToTankEconomy([first, partial, last, sample])), 5, accuracy: 0.000_001)
         XCTAssertEqual(DriveLineMetricPolicy.normalizedDPFRegenTrigger(43), 43)
         XCTAssertNil(DriveLineMetricPolicy.normalizedDPFRegenTrigger(101))
+    }
+
+    func testCoverageCountsStationaryGPSAndNegativeSignalsWithoutBridgingGaps() {
+        let start=Date(timeIntervalSince1970:1_767_268_800)
+        let vehicleID=UUID(),recordingID=UUID()
+        let gps=[0.0,10.0,50.0].map { DriveLineGPSPoint(timestamp:start.addingTimeInterval($0),latitude:49,longitude:-124,horizontalAccuracyM:5) }
+        let signals=[0.0,10.0,30.0].map { DriveLineSignalSample(timestamp:start.addingTimeInterval($0),values:["outsideC":-5]) }
+        let recording=DriveLineRecording(recordingID:recordingID,vehicleID:vehicleID,name:"Coverage",startedAt:start,
+                                         endedAt:start.addingTimeInterval(50),sourceIDs:["gps","obd"],gpsPoints:gps,signalSamples:signals)
+        let coverage=DriveLineMetricPolicy.coverageSummaries(recording)
+        XCTAssertEqual(coverage.first(where:{$0.key == "gps"})?.observedSeconds,10)
+        XCTAssertEqual(coverage.first(where:{$0.key == "outsideC"})?.observedSeconds,10)
     }
 }

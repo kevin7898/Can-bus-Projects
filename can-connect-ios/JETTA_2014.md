@@ -71,7 +71,7 @@ Synthetic transport checks cover immediate slow readings, repeated fast RPM with
 
 ## Build 14: combined soot card
 
-At the user's request, the existing soot-mass card also shows the ECU's `dpfRegenTrigger` under the label **% full**. Grams and percentage remain separately sourced; the picker and accessibility label identify the percentage as the ECU regeneration trigger. There is no inferred soot-capacity denominator and no display clamp. The currently verified Mode 01 field itself encodes only 0–100%; a physically meaningful value above 100% would require a separately verified reference threshold. Each reading retains its own freshness window and unavailable state. Card dimensions, default choices and surrounding layout stay unchanged.
+The existing soot-mass card also shows the ECU's normalized `dpfRegenTrigger` percentage under the label **Regen trigger**. Grams and the trigger indicator remain separately sourced; the picker and accessibility label explicitly say that the trigger is not physical filter fullness. There is no inferred soot-capacity denominator. Values outside the verified 0–100 range are treated as unavailable. Each reading retains its own freshness window and unavailable state. Card dimensions, default choices and surrounding layout stay unchanged.
 
 ## Build 23: recover enhanced readings within the same trip
 

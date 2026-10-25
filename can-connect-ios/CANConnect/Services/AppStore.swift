@@ -3,7 +3,6 @@ import SwiftUI
 import Combine
 import UIKit
 import ExternalAccessory
-import DriveLineShared
 
 @MainActor
 final class AppStore: ObservableObject {
@@ -314,7 +313,8 @@ final class AppStore: ObservableObject {
     }
     func archive(_ trips: [Trip]) -> TripArchive {
         let ids = Set(trips.compactMap(\.vehicleID))
-        return TripArchive(vehicles:state.vehicles.filter {ids.contains($0.id)},trips:trips)
+        return TripArchive(vehicles:state.vehicles.filter {ids.contains($0.id)},trips:trips,
+                           fills:state.fills.filter { $0.vehicleID.map(ids.contains) ?? false })
     }
     func importTrips(_ data: Data) throws {
         guard canWrite else { throw AppFailure("Saved data is unavailable.") }
@@ -324,8 +324,15 @@ final class AppStore: ObservableObject {
         var next = state; var mapping: [UUID:UUID] = [:]
         for foreign in archive.vehicles ?? [] {
             let incoming = try foreign.validated(requireIdentity:false)
-            if let match = next.vehicles.first(where: { $0.id == incoming.id || (incoming.vin != nil && $0.vin == incoming.vin) }) { mapping[incoming.id] = match.id }
-            else { next.vehicles.append(incoming); mapping[incoming.id] = incoming.id }
+            if let match=next.vehicles.first(where:{$0.id == incoming.id}) {
+                guard match.vin == nil || incoming.vin == nil || match.vin == incoming.vin else { throw AppFailure("The archive vehicleID belongs to a different VIN.") }
+                mapping[incoming.id]=match.id
+            } else {
+                if let vin=incoming.vin,next.vehicles.contains(where:{$0.vin == vin && $0.id != incoming.id}) {
+                    throw AppFailure("This VIN already belongs to a different stable vehicleID.")
+                }
+                next.vehicles.append(incoming);mapping[incoming.id]=incoming.id
+            }
         }
         let known = Set(next.trips.map(\.id))
         var additions: [Trip] = []
@@ -339,6 +346,15 @@ final class AppStore: ObservableObject {
             additions.append(trip)
         }
         next.trips += additions
+        let knownFills=Set(next.fills.map(\.id))
+        for original in archive.fills where !knownFills.contains(original.id) {
+            var fill=original
+            if let vehicleID=fill.vehicleID {
+                guard let localID=mapping[vehicleID] ?? next.vehicles.first(where:{$0.id == vehicleID})?.id else { throw AppFailure("This fuel entry has no matching vehicle profile.") }
+                fill.vehicleID=localID
+            } else { fill.vehicleID=next.selectedVehicleID }
+            next.fills.append(fill)
+        }
         let importedIDs = Set(additions.compactMap(\.vehicleID))
         if importedIDs.count == 1 { next.selectedVehicleID = importedIDs.first }
         try disk.save(next); state = next; tripPage = 0
@@ -448,7 +464,7 @@ final class AppStore: ObservableObject {
         for trip in state.trips where !trip.isSample && !state.transfers.contains(where:{$0.tripID == trip.id && $0.endpoint == endpoint}) {
             guard let vehicle = state.vehicles.first(where:{$0.id == trip.vehicleID}), !vehicle.isSample,
                   !trip.route.isEmpty || trip.samples?.isEmpty == false else { continue }
-            let payload = try MacRecording.encode(trip)
+            let payload = try MacRecording.encode(trip,fills:state.fills)
             next.transfers.append(TransferItem(tripID:trip.id,name:trip.name,endpoint:endpoint,vehicle:vehicle,payload:payload)); count += 1
         }
         try disk.save(next); state = next

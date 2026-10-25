@@ -2,7 +2,9 @@ import Foundation
 import SwiftUI
 import AppKit
 import CryptoKit
+#if canImport(DriveLineShared)
 import DriveLineShared
+#endif
 
 @MainActor final class AppStore: ObservableObject {
     @Published private(set) var state = LibraryState()
@@ -29,7 +31,8 @@ import DriveLineShared
     }
     var realFilteredTrips: [Trip] { filteredTrips.filter { !$0.isDemo } }
     func latestObservation(_ signal: Signal) -> DriveLineObservation? {
-        DriveLineMetricPolicy.latestObservations(vehicleTrips.map(\.sharedRecording))[signal.rawValue]
+        let observations=DriveLineMetricPolicy.latestObservations(vehicleTrips.map(\.sharedRecording))
+        return signal == .boostKpa ? DriveLineMetricPolicy.boostGaugeKpa(observations:observations) : observations[signal.rawValue]
     }
     var libraryURL: URL { repository?.root ?? FileManager.default.homeDirectoryForCurrentUser }
     var receiptList: [ImportReceipt] { state.receipts.sorted { $0.createdAt>$1.createdAt } }
@@ -137,6 +140,9 @@ import DriveLineShared
                     let stableIDs = Set(result.trips.map(\.id))
                     state.trips.removeAll { $0.receiptID==receipt.id || stableIDs.contains($0.id) }
                     state.trips.append(contentsOf:result.trips)
+                    let incomingFillIDs=Set(result.fuelEntries.map(\.id))
+                    state.fuelEntries.removeAll { incomingFillIDs.contains($0.id) }
+                    state.fuelEntries.append(contentsOf:result.fuelEntries)
                     if let i = state.receipts.firstIndex(where:{$0.id==receipt.id}) {
                         state.receipts[i].status = .processed; state.receipts[i].message = result.message; state.receipts[i].completedAt = Date(); state.receipts[i].tripIDs = result.trips.map(\.id)
                     }
@@ -177,7 +183,7 @@ import DriveLineShared
     func export(_ trip:Trip,asJSON:Bool = true) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "CAN-Connect-"+trip.id.uuidString+(asJSON ? ".json" : ".csv")
         guard panel.runModal() == .OK,let url = panel.url else { return }
-        perform { let data = asJSON ? try TripExport.json(trip) : TripExport.csv(trip); try data.write(to:url,options:.atomic); notice = "Recording exported." }
+        perform { let data = asJSON ? try TripExport.json(trip,fuelEntries:state.fuelEntries) : TripExport.csv(trip); try data.write(to:url,options:.atomic); notice = "Recording exported." }
     }
     func loadDemo() {
         perform {
@@ -232,7 +238,7 @@ import DriveLineShared
                 return HTTPResponse(receipt.status == .processed ? 200 : 202,data:try LibraryRepository.encoder().encode(receipt))
             default:
                 if request.method=="GET",request.path.hasPrefix("/v1/receipts/"),let id = UUID(uuidString:String(request.path.dropFirst("/v1/receipts/".count))),let receipt = state.receipts.first(where:{$0.id==id}) { return HTTPResponse(200,data:try LibraryRepository.encoder().encode(receipt)) }
-                if request.method=="GET",request.path.hasPrefix("/v1/trips/"),let id = UUID(uuidString:String(request.path.dropFirst("/v1/trips/".count))),let trip = state.trips.first(where:{$0.id==id}) { return HTTPResponse(200,data:try TripExport.json(trip)) }
+                if request.method=="GET",request.path.hasPrefix("/v1/trips/"),let id = UUID(uuidString:String(request.path.dropFirst("/v1/trips/".count))),let trip = state.trips.first(where:{$0.id==id}) { return HTTPResponse(200,data:try TripExport.json(trip,fuelEntries:state.fuelEntries)) }
                 return HTTPResponse(404,json:["error":"Route not found"])
             }
         } catch { return HTTPResponse(422,json:["error":error.localizedDescription]) }

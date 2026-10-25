@@ -125,8 +125,8 @@ final class ScannerTests: XCTestCase {
         XCTAssertTrue(trip.samples?.contains(where:{$0.command == "010C" && $0.reply == "41 0C 1A F8\r>"}) ?? false)
         let archive = try TripArchive.decode(store.archive([trip]).encoded())
         XCTAssertEqual(archive.trips.first?.scannerTransport,.obdLinkMXPlus)
-        let wire = try JSONSerialization.jsonObject(with:MacRecording.encode(trip)) as? [String:Any]
-        XCTAssertEqual(wire?["source"] as? String,"OBDLink MX+ · Bluetooth")
+        let wire = try DriveLineArchive.decoded(MacRecording.encode(trip))
+        XCTAssertEqual(wire.recordings.first?.metadata["scannerTransport"],ScannerConnectionKind.obdLinkMXPlus.rawValue)
         XCTAssertEqual(try disk.load()?.vehicles.last?.scannerConnection?.kind,.obdLinkMXPlus)
     }
 

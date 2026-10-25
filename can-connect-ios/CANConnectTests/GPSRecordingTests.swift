@@ -35,21 +35,19 @@ final class GPSRecordingTests: XCTestCase {
         draft.accept(point(6,49.0006)) // out-of-order GPS is rejected
         draft.accept(point(10,49.002)) // duplicate timestamp is rejected
         XCTAssertEqual(draft.route.count,2)
-        XCTAssertEqual(draft.distanceKM,0.05,accuracy:0.000001,"GPS must not add a second distance on top of OBD")
+        XCTAssertEqual(draft.distanceKM,0.1112,accuracy:0.002,"The canonical policy prefers observed GPS distance without adding OBD distance")
         let trip = draft.trip(endedAt:start.addingTimeInterval(10))
         let restored = try XCTUnwrap(TripArchive.decode(TripArchive(trips:[trip]).encoded()).trips.first)
         XCTAssertEqual(restored.route,trip.route); XCTAssertEqual(restored.samples,trip.samples)
         let payload = try MacRecording.encode(restored)
         let attachment = XCTAttachment(data:payload,uniformTypeIdentifier:"public.json")
         attachment.name = "Synthetic mixed scanner GPS upload"; attachment.lifetime = .keepAlways; add(attachment)
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with:payload) as? [String:Any])
-        let rows = try XCTUnwrap(object["samples"] as? [[String:Any]])
-        let gps = rows.filter { $0["latitude"] != nil }, obd = rows.filter { $0["signals"] != nil }
-        XCTAssertEqual(gps.count,2); XCTAssertEqual(obd.count,2)
-        XCTAssertEqual(gps[1]["latitude"] as? Double,49.001)
-        XCTAssertEqual(gps[1]["timestamp"] as? Double,start.addingTimeInterval(10).timeIntervalSince1970)
-        XCTAssertNil(gps[1]["signals"],"Do not turn GPS speed into an ECU measurement")
-        XCTAssertEqual(rows.compactMap {$0["timestamp"] as? Double},rows.compactMap {$0["timestamp"] as? Double}.sorted())
+        let wire = try DriveLineArchive.decoded(payload)
+        let recording = try XCTUnwrap(wire.recordings.first)
+        XCTAssertEqual(recording.gpsPoints.count,2); XCTAssertEqual(recording.signalSamples.count,2)
+        XCTAssertEqual(recording.gpsPoints[1].latitude,49.001)
+        XCTAssertEqual(recording.gpsPoints[1].timestamp,start.addingTimeInterval(10))
+        XCTAssertNil(recording.signalSamples.first?.values["gpsSpeedMps"],"Do not turn GPS speed into an ECU measurement")
         XCTAssertEqual(try MacRecording.encode(restored),payload,"Transfer retries must use the same payload")
     }
     func testRouteMapSeparatesOutagesInsteadOfDrawingAnInventedRoad() {

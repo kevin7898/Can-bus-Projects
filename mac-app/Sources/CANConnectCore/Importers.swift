@@ -1,10 +1,13 @@
 import Foundation
+#if canImport(DriveLineShared)
 import DriveLineShared
+#endif
 
 public struct ImportResult {
     public var trips: [Trip]
+    public var fuelEntries:[FuelEntry]
     public var message: String
-    public init(trips: [Trip], message: String) { self.trips = trips; self.message = message }
+    public init(trips: [Trip], fuelEntries:[FuelEntry] = [], message: String) { self.trips = trips; self.fuelEntries=fuelEntries; self.message = message }
 }
 
 public enum RecordingImporter {
@@ -64,16 +67,27 @@ public enum RecordingImporter {
         let envelope = object as? [String:Any]
         if let schema = envelope?["schemaVersion"] as? Int, schema == 2 {
             let archive = try DriveLineArchive.decoded(data,fallbackVehicleID:vehicleID)
-            guard archive.recordings.allSatisfy({$0.vehicleID == vehicleID}) else { throw CANError.invalid("The archive vehicleID does not match the selected vehicle.") }
+            guard archive.recordings.allSatisfy({$0.vehicleID == vehicleID}),
+                  archive.fuelEntries.allSatisfy({$0.vehicleID == vehicleID}) else {
+                throw CANError.invalid("The archive vehicleID does not match the selected vehicle.")
+            }
             let trips = archive.recordings.map { recording in
                 let gps = recording.gpsPoints.map { TelemetrySample(timestamp:$0.timestamp,latitude:$0.latitude,longitude:$0.longitude) }
-                let signals = recording.signalSamples.map { TelemetrySample(timestamp:$0.timestamp,signals:$0.values) }
+                let signals = recording.signalSamples.map { TelemetrySample(timestamp:$0.timestamp,signals:$0.values,command:$0.command,
+                    reply:$0.reply,requestHeader:$0.requestHeader,responseHeader:$0.responseHeader) }
                 return Trip(id:recording.recordingID,vehicleID:recording.vehicleID,receiptID:receiptID,name:recording.name,
                             source:archive.sources.filter { recording.sourceIDs.contains($0.id) }.map(\.name).joined(separator:" + "),
-                            samples:gps+signals,isDemo:recording.isSample)
+                            samples:gps+signals,isDemo:recording.isSample,recordedStartedAt:recording.startedAt,recordedEndedAt:recording.endedAt,
+                            recordedDistanceKm:recording.recordedDistanceKm,
+                            tripFuelLitres:recording.tripFuelLitres)
+            }
+            let fills=archive.fuelEntries.map { fill in
+                FuelEntry(id:fill.id,vehicleID:fill.vehicleID,date:fill.date,litresPurchased:fill.litresPurchased,totalCost:fill.totalCost,
+                          currencyCode:fill.currencyCode,odometerKm:fill.odometerKm,isFullFill:fill.isFullFill,stationName:fill.stationName,
+                          notes:fill.notes,receipt:fill.receipt,isDemo:fill.isSample)
             }
             guard !trips.isEmpty else { throw CANError.invalid("DriveLine archive contains no recordings.") }
-            return ImportResult(trips:trips,message:"Imported \(trips.count) DriveLine version-2 recording\(trips.count == 1 ? "" : "s") with stable identities.")
+            return ImportResult(trips:trips,fuelEntries:fills,message:"Imported \(trips.count) DriveLine version-2 recording\(trips.count == 1 ? "" : "s") and \(fills.count) fuel entr\(fills.count == 1 ? "y" : "ies") with stable identities.")
         }
         if let schema = envelope?["schemaVersion"] as? Int, schema != 1 { throw CANError.invalid("Unsupported recording schema version.") }
         let rows = (envelope?["samples"] as? [[String:Any]]) ?? (object as? [[String:Any]]) ?? []
@@ -87,7 +101,10 @@ public enum RecordingImporter {
                 if let value = values[key.rawValue] as? NSNumber, value.doubleValue.isFinite { signals[key.rawValue] = value.doubleValue }
             }
             if signals[Signal.boostKpa.rawValue] == nil, let map = signals[Signal.mapKpa.rawValue], let baro = signals[Signal.barometricKpa.rawValue] { signals[Signal.boostKpa.rawValue] = map-baro }
-            samples.append(validSample(date,latitude:(row["latitude"] as? NSNumber)?.doubleValue,longitude:(row["longitude"] as? NSNumber)?.doubleValue,signals:signals))
+            var sample=validSample(date,latitude:(row["latitude"] as? NSNumber)?.doubleValue,longitude:(row["longitude"] as? NSNumber)?.doubleValue,signals:signals)
+            sample.command=row["command"] as? String;sample.reply=row["reply"] as? String
+            sample.requestHeader=row["obdRequestHeader"] as? String;sample.responseHeader=row["obdResponseHeader"] as? String
+            samples.append(sample)
         }
         guard !samples.isEmpty else { throw CANError.invalid("No valid absolute timestamps found in JSON samples.") }
         if let wireVehicle = (envelope?["vehicleID"] as? String).flatMap(UUID.init(uuidString:)), wireVehicle != vehicleID {

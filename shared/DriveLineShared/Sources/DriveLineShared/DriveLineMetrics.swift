@@ -48,7 +48,8 @@ public enum DriveLineMetricPolicy {
         let duration = max(0, recording.endedAt.timeIntervalSince(recording.startedAt))
         let gpsDistance = distanceFromGPS(recording.gpsPoints)
         let speed = integral("speedKph", samples: recording.signalSamples)
-        let distance = gpsDistance ?? speed.map { $0.value / 3600 }
+        let speedDistance = speed.map { $0.value / 3600 }
+        let distance = gpsDistance ?? speedDistance ?? recording.recordedDistanceKm
         let fuel = integral("fuelRateLph", samples: recording.signalSamples)
         let measuredFuel = fuel.flatMap { duration > 0 && $0.coverage / duration >= requiredFuelCoverage ? $0.value / 3600 : nil }
         let tripFuel = measuredFuel ?? recording.tripFuelLitres
@@ -58,7 +59,8 @@ public enum DriveLineMetricPolicy {
         }
         return DriveLineMetrics(distanceKm: distance, durationSeconds: duration,
             tripFuelLitres: tripFuel, economyL100Km: economy,
-            coverage: coverageSummaries(recording), distanceSource: gpsDistance == nil ? (speed == nil ? nil : "speedKph") : "gps")
+            coverage: coverageSummaries(recording),
+            distanceSource:gpsDistance != nil ? "gps" : speedDistance != nil ? "speedKph" : recording.recordedDistanceKm != nil ? "recorded" : nil)
     }
 
     public static func routeSegments(_ points: [DriveLineGPSPoint]) -> [[DriveLineGPSPoint]] {
@@ -108,15 +110,18 @@ public enum DriveLineMetricPolicy {
         let keys = Set(recording.signalSamples.flatMap { $0.values.keys })
         for key in keys.sorted() {
             let observations = recording.signalSamples.filter { $0.values[key] != nil }.sorted { $0.timestamp < $1.timestamp }
-            let observed = integral(key, samples: recording.signalSamples)?.coverage ?? 0
+            let observed = observationCoverage(observations.map(\.timestamp),maximumGap:maximumSignalGap)
             result.append(DriveLineCoverageSummary(key: key, observedSeconds: observed, recordingSeconds: duration,
                 fraction: duration > 0 ? min(1, observed / duration) : 0,
                 firstObservation: observations.first?.timestamp, lastObservation: observations.last?.timestamp,
                 sourceIDs: Array(Set(observations.map(\.sourceID))).sorted()))
         }
-        let gpsSegments = routeSegments(recording.gpsPoints)
-        let gpsSeconds = gpsSegments.reduce(0) { total, segment in
-            total + zip(segment, segment.dropFirst()).reduce(0) { $0 + $1.1.timestamp.timeIntervalSince($1.0.timestamp) }
+        let acceptedGPS=recording.gpsPoints.filter(accepts).sorted { $0.timestamp < $1.timestamp }
+        var gpsSeconds=0.0
+        for (a,b) in zip(acceptedGPS,acceptedGPS.dropFirst()) {
+            let elapsed=b.timestamp.timeIntervalSince(a.timestamp)
+            let speed=elapsed > 0 ? haversineMetres(a,b)/elapsed*3.6 : .infinity
+            if elapsed <= maximumGPSGap,speed <= maximumPlausibleSpeedKph { gpsSeconds += elapsed }
         }
         if !recording.gpsPoints.isEmpty {
             result.append(DriveLineCoverageSummary(key: "gps", observedSeconds: gpsSeconds, recordingSeconds: duration,
@@ -167,6 +172,13 @@ public enum DriveLineMetricPolicy {
 
     public static let dpfRegenTriggerLabel = "DPF regeneration trigger"
     public static let dpfRegenTriggerExplanation = "Normalized ECU trigger indicator; not physical DPF fullness."
+
+    private static func observationCoverage(_ timestamps:[Date],maximumGap:TimeInterval) -> TimeInterval {
+        zip(timestamps,timestamps.dropFirst()).reduce(0) { total,pair in
+            let elapsed=pair.1.timeIntervalSince(pair.0)
+            return total+(elapsed > 0 && elapsed <= maximumGap ? elapsed : 0)
+        }
+    }
 
     private static func accepts(_ point: DriveLineGPSPoint) -> Bool {
         point.isValid && (point.horizontalAccuracyM.map { $0 <= maximumHorizontalAccuracyM } ?? true)

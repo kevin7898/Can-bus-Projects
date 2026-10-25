@@ -24,26 +24,41 @@ with tempfile.TemporaryDirectory() as directory:
   assert call('/v1/vehicles',auth=False)[0]==401
   vehicle={'id':str(uuid.uuid4()),'name':'Synthetic API vehicle','year':'2026','make':'Test','model':'Fixture','vin':'','notes':''}
   assert call('/v1/vehicles',vehicle)[0]==201
-  recording={'schemaVersion':1,'vehicleID':vehicle['id'],'name':'Synthetic upload','source':'OBDLink MX+ · Bluetooth','samples':[{'timestamp':'2026-10-23T12:00:00.125Z','latitude':49.1,'longitude':-123.9,'accuracy':5,'gpsSpeedMps':10},{'timestamp':'2026-10-23T12:00:01.125Z','latitude':49.1001,'longitude':-123.9,'accuracy':5,'gpsSpeedMps':11}]}
-  recording['samples'] += [{'timestamp':'2026-10-23T12:00:00.125Z','signals':{'speedKph':60,'rpm':832}},{'timestamp':'2026-10-23T12:00:01.125Z','signals':{'speedKph':61,'rpm':840}}]
-  status,receipt=call('/v1/recordings',recording);assert status==202
+  recording_id=str(uuid.uuid4());fill_id=str(uuid.uuid4())
+  recording={'schemaVersion':2,'producer':{'app':'API integration fixture','version':'2','platform':'test'},
+             'sources':[{'id':'gps','kind':'gps','name':'Synthetic GPS'},{'id':'obd','kind':'obd','name':'Synthetic OBD'}],
+             'vehicles':[{'id':vehicle['id'],'name':vehicle['name'],'year':'2026','make':'Test','model':'Fixture'}],
+             'recordings':[{'recordingID':recording_id,'vehicleID':vehicle['id'],'name':'Synthetic upload',
+               'startedAt':'2026-10-23T12:00:00.125Z','endedAt':'2026-10-23T12:00:01.125Z','sourceIDs':['gps','obd'],
+               'gpsPoints':[{'timestamp':'2026-10-23T12:00:00.125Z','latitude':49.1,'longitude':-123.9,'horizontalAccuracyM':5,'speedMps':10,'sourceID':'gps'},{'timestamp':'2026-10-23T12:00:01.125Z','latitude':49.1001,'longitude':-123.9,'horizontalAccuracyM':5,'speedMps':11,'sourceID':'gps'}],
+               'signalSamples':[{'timestamp':'2026-10-23T12:00:00.125Z','values':{'speedKph':60,'rpm':832},'sourceID':'obd'},{'timestamp':'2026-10-23T12:00:01.125Z','values':{'speedKph':61,'rpm':840},'sourceID':'obd'}],
+               'events':[],'coverage':[],'isSample':False}],
+             'fuelEntries':[{'id':fill_id,'vehicleID':vehicle['id'],'date':'2026-10-24T12:00:00.000Z','litresPurchased':40,'totalCost':60,'currencyCode':'CAD','odometerKm':12000,'isFullFill':True,'isSample':False,
+               'receipt':{'fileName':'synthetic-receipt.jpg','mediaType':'image/jpeg','byteCount':1234,'sha256':'a'*64}}]}
+  upload_path='/v1/recordings?vehicleID='+vehicle['id']
+  status,receipt=call(upload_path,recording);assert status==202
   for _ in range(80):
    status,processed=call('/v1/receipts/'+receipt['id'])
    if processed['status']=='processed':break
    if processed['status']=='failed':raise AssertionError(processed)
    time.sleep(.1)
   else:raise AssertionError('Receipt did not finish')
-  status,duplicate=call('/v1/recordings',recording);assert status==200 and duplicate['id']==receipt['id']
+  status,duplicate=call(upload_path,recording);assert status==200 and duplicate['id']==receipt['id']
+  changed=json.loads(json.dumps(recording));changed['recordings'][0]['name']='Conflicting bytes'
+  assert call(upload_path,changed)[0]==409
   status,trips=call('/v1/trips');assert len(trips['trips'])==1
-  _,trip=call('/v1/trips/'+trips['trips'][0]['id']);assert trip['samples'][0]['signals']['speedKph']==60
-  coordinates=[s for s in trip['samples'] if s.get('latitude') is not None]
-  assert [(s['latitude'],s['longitude']) for s in coordinates]==[(49.1,-123.9),(49.1001,-123.9)]
-  assert [s['signals']['rpm'] for s in trip['samples'] if 'rpm' in s['signals']]==[832,840]
-  assert call('/v1/recordings',dict(recording,vehicleID=str(uuid.uuid4())))[0]==422
-  manifest=json.loads((pathlib.Path(directory)/'library.json').read_text());assert len(manifest['receipts'])==1
+  _,archive=call('/v1/trips/'+trips['trips'][0]['id']);trip=archive['recordings'][0]
+  assert archive['schemaVersion']==2 and trip['recordingID'].lower()==recording_id.lower()
+  assert trip['signalSamples'][0]['values']['speedKph']==60
+  assert [(s['latitude'],s['longitude']) for s in trip['gpsPoints']]==[(49.1,-123.9),(49.1001,-123.9)]
+  assert [s['values']['rpm'] for s in trip['signalSamples']]==[832,840]
+  assert archive['fuelEntries'][0]['receipt']['sha256']=='a'*64
+  assert call('/v1/recordings?vehicleID='+str(uuid.uuid4()),recording)[0]==422
+  manifest=json.loads((pathlib.Path(directory)/'library.json').read_text());assert manifest['schemaVersion']==2 and len(manifest['receipts'])==1
+  assert manifest['fuelEntries'][0]['id'].lower()==fill_id.lower() and manifest['fuelEntries'][0]['receipt']['sha256']=='a'*64
   assert len(list((pathlib.Path(directory)/'Originals').iterdir()))==1
   original=next((pathlib.Path(directory)/'Originals').iterdir()); assert json.loads(original.read_text())==recording
-  print('API integration passed: mixed GPS/OBD route and exact original preserved, auth, vehicle setup, upload, processing receipt, byte deduplication, trip retrieval, vehicle validation, durable original.')
+  print('API integration passed: v2 mixed GPS/OBD and fill receipt, stable IDs, exact original, auth, processing receipt, hash deduplication/conflict, trip retrieval, vehicle validation.')
  finally:
   p.terminate()
   try:p.wait(timeout=5)

@@ -1,9 +1,9 @@
 name: CAN CONNECT Mac
 on:
   push:
-    paths: ['mac-app/**', 'branding/driveline/**', '.github/workflows/mac-app.yml']
+    paths: ['mac-app/**', 'shared/**', 'branding/driveline/**', '.github/workflows/mac-app.yml']
   pull_request:
-    paths: ['mac-app/**', 'branding/driveline/**', '.github/workflows/mac-app.yml']
+    paths: ['mac-app/**', 'shared/**', 'branding/driveline/**', '.github/workflows/mac-app.yml']
   workflow_dispatch:
 permissions:
   contents: read

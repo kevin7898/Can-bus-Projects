@@ -14,7 +14,7 @@ public enum DriveLineJSON {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(timestamp(date))
+            try container.encode(date.timeIntervalSince1970)
         }
         return encoder
     }
@@ -130,11 +130,21 @@ public struct DriveLineSignalSample: Codable, Equatable, Sendable {
     public var timestamp: Date
     public var values: [String: Double]
     public var sourceID: String
+    public var command: String?
+    public var reply: String?
+    public var requestHeader: String?
+    public var responseHeader: String?
 
-    public init(timestamp: Date, values: [String: Double], sourceID: String = "obd") {
+    public init(timestamp: Date, values: [String: Double], sourceID: String = "obd",
+                command: String? = nil, reply: String? = nil,
+                requestHeader: String? = nil, responseHeader: String? = nil) {
         self.timestamp = timestamp
         self.values = values
         self.sourceID = sourceID
+        self.command = command
+        self.reply = reply
+        self.requestHeader = requestHeader
+        self.responseHeader = responseHeader
     }
 }
 
@@ -234,14 +244,16 @@ public struct DriveLineRecording: Codable, Equatable, Identifiable, Sendable {
     public var signalSamples: [DriveLineSignalSample]
     public var notes: String?
     public var events: [DriveLineTripEvent]
+    public var recordedDistanceKm: Double?
     public var tripFuelLitres: Double?
     public var coverage: [DriveLineCoverageSummary]
     public var isSample: Bool
+    public var metadata: [String: String]
 
     public init(recordingID: UUID, vehicleID: UUID, name: String, startedAt: Date,
                 endedAt: Date, sourceIDs: [String], gpsPoints: [DriveLineGPSPoint] = [],
                 signalSamples: [DriveLineSignalSample] = [], notes: String? = nil,
-                events: [DriveLineTripEvent] = [], tripFuelLitres: Double? = nil,
+                events: [DriveLineTripEvent] = [], recordedDistanceKm: Double? = nil, tripFuelLitres: Double? = nil,
                 coverage: [DriveLineCoverageSummary] = [], isSample: Bool = false) {
         self.recordingID = recordingID
         self.vehicleID = vehicleID
@@ -253,9 +265,35 @@ public struct DriveLineRecording: Codable, Equatable, Identifiable, Sendable {
         self.signalSamples = signalSamples
         self.notes = notes
         self.events = events
+        self.recordedDistanceKm = recordedDistanceKm
         self.tripFuelLitres = tripFuelLitres
         self.coverage = coverage
         self.isSample = isSample
+        self.metadata = [:]
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case recordingID, vehicleID, name, startedAt, endedAt, sourceIDs, gpsPoints, signalSamples
+        case notes, events, recordedDistanceKm, tripFuelLitres, coverage, isSample, metadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy:CodingKeys.self)
+        recordingID = try values.decode(UUID.self,forKey:.recordingID)
+        vehicleID = try values.decode(UUID.self,forKey:.vehicleID)
+        name = try values.decode(String.self,forKey:.name)
+        startedAt = try values.decode(Date.self,forKey:.startedAt)
+        endedAt = try values.decode(Date.self,forKey:.endedAt)
+        sourceIDs = try values.decodeIfPresent([String].self,forKey:.sourceIDs) ?? []
+        gpsPoints = try values.decodeIfPresent([DriveLineGPSPoint].self,forKey:.gpsPoints) ?? []
+        signalSamples = try values.decodeIfPresent([DriveLineSignalSample].self,forKey:.signalSamples) ?? []
+        notes = try values.decodeIfPresent(String.self,forKey:.notes)
+        events = try values.decodeIfPresent([DriveLineTripEvent].self,forKey:.events) ?? []
+        recordedDistanceKm = try values.decodeIfPresent(Double.self,forKey:.recordedDistanceKm)
+        tripFuelLitres = try values.decodeIfPresent(Double.self,forKey:.tripFuelLitres)
+        coverage = try values.decodeIfPresent([DriveLineCoverageSummary].self,forKey:.coverage) ?? []
+        isSample = try values.decodeIfPresent(Bool.self,forKey:.isSample) ?? false
+        metadata = try values.decodeIfPresent([String:String].self,forKey:.metadata) ?? [:]
     }
 }
 
@@ -268,16 +306,34 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
     public var vehicles: [DriveLineVehicle]
     public var recordings: [DriveLineRecording]
     public var fuelEntries: [DriveLineFuelEntry]
+    public var extensionData: [String: Data]
 
     public init(schemaVersion: Int = currentSchemaVersion, producer: DriveLineProducer,
                 sources: [DriveLineSourceDescriptor], vehicles: [DriveLineVehicle] = [],
-                recordings: [DriveLineRecording], fuelEntries: [DriveLineFuelEntry] = []) {
+                recordings: [DriveLineRecording], fuelEntries: [DriveLineFuelEntry] = [],
+                extensionData: [String: Data] = [:]) {
         self.schemaVersion = schemaVersion
         self.producer = producer
         self.sources = sources
         self.vehicles = vehicles
         self.recordings = recordings
         self.fuelEntries = fuelEntries
+        self.extensionData = extensionData
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, producer, sources, vehicles, recordings, fuelEntries, extensionData
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy:CodingKeys.self)
+        schemaVersion = try values.decode(Int.self,forKey:.schemaVersion)
+        producer = try values.decode(DriveLineProducer.self,forKey:.producer)
+        sources = try values.decodeIfPresent([DriveLineSourceDescriptor].self,forKey:.sources) ?? []
+        vehicles = try values.decodeIfPresent([DriveLineVehicle].self,forKey:.vehicles) ?? []
+        recordings = try values.decodeIfPresent([DriveLineRecording].self,forKey:.recordings) ?? []
+        fuelEntries = try values.decodeIfPresent([DriveLineFuelEntry].self,forKey:.fuelEntries) ?? []
+        extensionData = try values.decodeIfPresent([String:Data].self,forKey:.extensionData) ?? [:]
     }
 
     public func encoded() throws -> Data {
@@ -308,10 +364,20 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
             throw DriveLineContractError.invalid("Unsupported DriveLine archive schema version \(schemaVersion).")
         }
         guard Set(recordings.map(\.recordingID)).count == recordings.count,
-              Set(fuelEntries.map(\.id)).count == fuelEntries.count else {
+              Set(fuelEntries.map(\.id)).count == fuelEntries.count,
+              Set(vehicles.map(\.id)).count == vehicles.count,
+              Set(sources.map(\.id)).count == sources.count else {
             throw DriveLineContractError.invalid("Duplicate stable identifiers in DriveLine archive.")
         }
-        let vehicleIDs = Set(vehicles.map(\.id)).union(recordings.map(\.vehicleID)).union(fuelEntries.map(\.vehicleID))
+        let vehicleIDs = Set(vehicles.map(\.id))
+        let sourceIDs = Set(sources.map(\.id))
+        guard recordings.allSatisfy({ vehicleIDs.contains($0.vehicleID) }),
+              fuelEntries.allSatisfy({ vehicleIDs.contains($0.vehicleID) }),
+              recordings.allSatisfy({ Set($0.sourceIDs).isSubset(of:sourceIDs) &&
+                  Set($0.gpsPoints.map(\.sourceID)).isSubset(of:sourceIDs) &&
+                  Set($0.signalSamples.map(\.sourceID)).isSubset(of:sourceIDs) }) else {
+            throw DriveLineContractError.invalid("Every recording, fuel entry, and observation must reference declared stable identities.")
+        }
         for recording in recordings {
             guard vehicleIDs.contains(recording.vehicleID), !recording.name.isEmpty,
                   recording.endedAt >= recording.startedAt,
@@ -320,6 +386,7 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
                       sample.timestamp.timeIntervalSince1970.isFinite && !sample.values.isEmpty &&
                       sample.values.allSatisfy { !$0.key.isEmpty && $0.value.isFinite }
                   }),
+                  recording.recordedDistanceKm.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   recording.tripFuelLitres.map({ $0.isFinite && $0 >= 0 }) ?? true else {
                 throw DriveLineContractError.invalid("Invalid recording values in DriveLine archive.")
             }
@@ -328,6 +395,11 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
             guard fill.litresPurchased.isFinite, fill.litresPurchased > 0,
                   fill.totalCost.isFinite, fill.totalCost >= 0,
                   fill.odometerKm.isFinite, fill.odometerKm >= 0,
+                  fill.date.timeIntervalSince1970.isFinite,
+                  fill.receipt.map({ receipt in
+                      receipt.byteCount >= 0 && !receipt.fileName.isEmpty && !receipt.mediaType.isEmpty &&
+                      receipt.sha256.count == 64 && receipt.sha256.allSatisfy(\.isHexDigit)
+                  }) ?? true,
                   !fill.currencyCode.isEmpty else {
                 throw DriveLineContractError.invalid("Invalid fuel entry in DriveLine archive.")
             }
@@ -358,17 +430,23 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
                         horizontalAccuracyM: number(row["accuracy"]), speedMps: number(row["gpsSpeedMps"])))
                 }
                 let values = (row["signals"] as? [String: Any] ?? [:]).compactMapValues(number)
-                if !values.isEmpty { signals.append(DriveLineSignalSample(timestamp: timestamp, values: values)) }
+                if !values.isEmpty {
+                    signals.append(DriveLineSignalSample(timestamp:timestamp,values:values,command:row["command"] as? String,
+                                                         reply:row["reply"] as? String,requestHeader:row["obdRequestHeader"] as? String,
+                                                         responseHeader:row["obdResponseHeader"] as? String))
+                }
             }
             let started = timestamp(trip["startedAt"]) ?? (gps.map(\.timestamp) + signals.map(\.timestamp)).min() ?? .distantPast
             let duration = number(trip["duration"]) ?? 0
             let ended = timestamp(trip["endedAt"]) ?? (gps.map(\.timestamp) + signals.map(\.timestamp)).max() ?? started.addingTimeInterval(duration)
             let source = trip["source"] as? String ?? "Version 1 import"
+            let sourceIDs=Array(Set((gps.isEmpty ? [] : ["gps"])+(signals.isEmpty ? [] : ["obd"]))).sorted()
             var recording = DriveLineRecording(recordingID: recordingID, vehicleID: vehicleID,
                 name: trip["name"] as? String ?? "Imported recording", startedAt: started, endedAt: max(started, ended),
-                sourceIDs: [source.lowercased().contains("gps") ? "gps" : "obd"], gpsPoints: gps,
-                signalSamples: signals, tripFuelLitres: number(trip["fuelLitres"]),
+                sourceIDs:sourceIDs, gpsPoints: gps,
+                signalSamples: signals, recordedDistanceKm:number(trip["distanceKM"]),tripFuelLitres: number(trip["fuelLitres"]),
                 isSample: trip["isSample"] as? Bool ?? false)
+            recording.metadata["legacySource"]=source
             recording.coverage = DriveLineMetricPolicy.coverageSummaries(recording)
             recordings.append(recording)
         }
@@ -377,8 +455,11 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
             DriveLineSourceDescriptor(id: id, kind: id == "gps" ? .gps : .obd,
                                       name: id == "gps" ? "iPhone GPS" : "OBD scanner")
         }
+        let vehicles = Set(recordings.map(\.vehicleID)).sorted { $0.uuidString < $1.uuidString }.map {
+            DriveLineVehicle(id:$0,name:"Migrated vehicle")
+        }
         let archive = DriveLineArchive(producer: DriveLineProducer(app: "DriveLine legacy importer", version: "1", platform: "legacy"),
-                                       sources: sources, recordings: recordings)
+                                       sources: sources, vehicles:vehicles, recordings: recordings)
         try archive.validate()
         return archive
     }

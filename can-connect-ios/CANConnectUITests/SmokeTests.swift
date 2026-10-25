@@ -55,7 +55,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["Logbook"].isSelected)
     }
     @MainActor
-    func testSootCardIncludesFullnessWithoutChangingCardSize() async {
+    func testSootCardExplainsRegenTriggerWithoutChangingCardSize() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))
         app.buttons["Live"].tap()
@@ -70,11 +70,11 @@ final class SmokeTests: XCTestCase {
         }
         XCTAssertTrue(choice.waitForExistence(timeout:3)); choice.tap()
         XCTAssertTrue(card.waitForExistence(timeout:5))
-        XCTAssertTrue(card.label.contains("percent full"))
         XCTAssertTrue(card.label.contains("ECU regeneration trigger"))
+        XCTAssertTrue(card.label.contains("not physical filter fullness"))
         XCTAssertEqual(card.frame.height,original.height,accuracy:1)
         XCTAssertEqual(card.frame.width,original.width,accuracy:1)
-        let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "Soot grams and fullness in existing card — unavailable sample values"; shot.lifetime = .keepAlways; add(shot)
+        let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "Soot grams and normalized regen trigger — unavailable sample values"; shot.lifetime = .keepAlways; add(shot)
     }
     @MainActor
     func testManualVehicleOnboardingAndVehicleSwitch() async {

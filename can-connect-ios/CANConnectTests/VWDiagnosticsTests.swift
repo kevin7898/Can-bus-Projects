@@ -291,11 +291,11 @@ final class VWDiagnosticsTests: XCTestCase {
         var draft = RecordingDraft(source:.scanner,startedAt:sample.timestamp,updatedAt:sample.timestamp,scannerTransport:.obdLinkMXPlus)
         draft.accept(sample); let trip = draft.trip(endedAt:sample.timestamp.addingTimeInterval(1))
         XCTAssertEqual(try TripArchive.decode(TripArchive(trips:[trip]).encoded()).trips.first?.samples?.first,sample)
-        let wire = try XCTUnwrap(JSONSerialization.jsonObject(with:MacRecording.encode(trip)) as? [String:Any])
-        let row = try XCTUnwrap((wire["samples"] as? [[String:Any]])?.first)
-        XCTAssertEqual(row["obdResponseHeader"] as? String,"300")
-        XCTAssertEqual(row["obdRequestHeader"] as? String,"760")
-        XCTAssertEqual((row["signals"] as? [String:Double])?["dsgFluidC"],80)
+        let wire = try DriveLineArchive.decoded(MacRecording.encode(trip))
+        let row = try XCTUnwrap(wire.recordings.first?.signalSamples.first)
+        XCTAssertEqual(row.responseHeader,"300")
+        XCTAssertEqual(row.requestHeader,"760")
+        XCTAssertEqual(row.values["dsgFluidC"],80)
     }
     @MainActor
     func testTwoControllersUnsupportedBlocksAndStandardAdapterRestoration() async throws {

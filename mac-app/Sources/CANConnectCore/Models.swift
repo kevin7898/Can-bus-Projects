@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(DriveLineShared)
 import DriveLineShared
+#endif
 
 public enum Signal: String, Codable, CaseIterable, Identifiable {
     case speedKph, rpm, coolantC, boostKpa, mapKpa, barometricKpa, fuelRateLph, fuelPercent, voltage, intakeC, oilC, engineLoad
@@ -84,9 +86,15 @@ public struct TelemetrySample: Codable, Identifiable, Equatable {
     public var latitude: Double?
     public var longitude: Double?
     public var signals: [String: Double]
+    public var command:String?
+    public var reply:String?
+    public var requestHeader:String?
+    public var responseHeader:String?
     public var id: Date { timestamp }
-    public init(timestamp: Date, latitude: Double? = nil, longitude: Double? = nil, signals: [String: Double] = [:]) {
+    public init(timestamp: Date, latitude: Double? = nil, longitude: Double? = nil, signals: [String: Double] = [:],
+                command:String?=nil,reply:String?=nil,requestHeader:String?=nil,responseHeader:String?=nil) {
         self.timestamp = timestamp; self.latitude = latitude; self.longitude = longitude; self.signals = signals
+        self.command=command;self.reply=reply;self.requestHeader=requestHeader;self.responseHeader=responseHeader
     }
     public var hasCoordinate: Bool {
         guard let lat = latitude, let lon = longitude else { return false }
@@ -106,13 +114,19 @@ public struct Trip: Codable, Identifiable {
     public var arbitrationIDs: [String: Int]
     public var diagnosticResponseCount: Int
     public var isDemo: Bool
-    public init(id: UUID = UUID(), vehicleID: UUID, receiptID: UUID = UUID(), name: String, source: String, samples: [TelemetrySample], rawFrameCount: Int = 0, arbitrationIDs: [String: Int] = [:], diagnosticResponseCount: Int = 0, isDemo: Bool = false) {
+    public var recordedStartedAt:Date?
+    public var recordedEndedAt:Date?
+    public var recordedDistanceKm: Double?
+    public var tripFuelLitres: Double?
+    public init(id: UUID = UUID(), vehicleID: UUID, receiptID: UUID = UUID(), name: String, source: String, samples: [TelemetrySample], rawFrameCount: Int = 0, arbitrationIDs: [String: Int] = [:], diagnosticResponseCount: Int = 0, isDemo: Bool = false, recordedStartedAt:Date?=nil,recordedEndedAt:Date?=nil,recordedDistanceKm:Double? = nil, tripFuelLitres:Double? = nil) {
         self.id = id; self.vehicleID = vehicleID; self.receiptID = receiptID; self.name = name; self.source = source
         self.samples = Self.merge(samples); self.rawFrameCount = rawFrameCount; self.arbitrationIDs = arbitrationIDs
         self.diagnosticResponseCount = diagnosticResponseCount; self.isDemo = isDemo
+        self.recordedStartedAt=recordedStartedAt;self.recordedEndedAt=recordedEndedAt
+        self.recordedDistanceKm=recordedDistanceKm;self.tripFuelLitres=tripFuelLitres
     }
-    public var start: Date { samples.first?.timestamp ?? Date(timeIntervalSince1970: 0) }
-    public var end: Date { samples.last?.timestamp ?? start }
+    public var start: Date { recordedStartedAt ?? samples.first?.timestamp ?? Date(timeIntervalSince1970: 0) }
+    public var end: Date { recordedEndedAt ?? samples.last?.timestamp ?? start }
     public var duration: TimeInterval { max(0, end.timeIntervalSince(start)) }
     public var coordinates: [TelemetrySample] { samples.filter(\.hasCoordinate) }
     public var availableSignals: [Signal] { Signal.allCases.filter { key in samples.contains { $0.value(key) != nil } } }
@@ -158,6 +172,10 @@ public struct Trip: Codable, Identifiable {
             var target = merged[s.timestamp] ?? TelemetrySample(timestamp: s.timestamp)
             if s.hasCoordinate { target.latitude = s.latitude; target.longitude = s.longitude }
             for (k,v) in s.signals where v.isFinite { target.signals[k] = v }
+            if s.command != nil { target.command=s.command }
+            if s.reply != nil { target.reply=s.reply }
+            if s.requestHeader != nil { target.requestHeader=s.requestHeader }
+            if s.responseHeader != nil { target.responseHeader=s.responseHeader }
             merged[s.timestamp] = target
         }
         return merged.values.sorted { $0.timestamp < $1.timestamp }
@@ -168,11 +186,13 @@ public struct Trip: Codable, Identifiable {
             return DriveLineGPSPoint(timestamp:sample.timestamp,latitude:sample.latitude!,longitude:sample.longitude!,sourceID:"gps")
         }
         let readings = samples.compactMap { sample -> DriveLineSignalSample? in
-            sample.signals.isEmpty ? nil : DriveLineSignalSample(timestamp:sample.timestamp,values:sample.signals,sourceID:"obd")
+            sample.signals.isEmpty ? nil : DriveLineSignalSample(timestamp:sample.timestamp,values:sample.signals,sourceID:"obd",
+                command:sample.command,reply:sample.reply,requestHeader:sample.requestHeader,responseHeader:sample.responseHeader)
         }
         return DriveLineRecording(recordingID:id,vehicleID:vehicleID,name:name,startedAt:start,endedAt:end,
                                   sourceIDs:Array(Set((gps.isEmpty ? [] : ["gps"])+(readings.isEmpty ? [] : ["obd"]))).sorted(),
-                                  gpsPoints:gps,signalSamples:readings,isSample:isDemo)
+                                  gpsPoints:gps,signalSamples:readings,recordedDistanceKm:recordedDistanceKm,
+                                  tripFuelLitres:tripFuelLitres,isSample:isDemo)
     }
 }
 
@@ -180,6 +200,27 @@ public struct SignalTracePoint:Identifiable {
     public var sample:TelemetrySample
     public var segment:Int
     public var id:Date { sample.timestamp }
+}
+
+public struct FuelEntry:Codable,Identifiable,Equatable {
+    public var id:UUID
+    public var vehicleID:UUID
+    public var date:Date
+    public var litresPurchased:Double
+    public var totalCost:Double
+    public var currencyCode:String
+    public var odometerKm:Double
+    public var isFullFill:Bool
+    public var stationName:String?
+    public var notes:String?
+    public var receipt:DriveLineReceiptMetadata?
+    public var isDemo:Bool
+    public init(id:UUID = UUID(),vehicleID:UUID,date:Date,litresPurchased:Double,totalCost:Double,currencyCode:String="CAD",
+                odometerKm:Double,isFullFill:Bool,stationName:String?=nil,notes:String?=nil,receipt:DriveLineReceiptMetadata?=nil,isDemo:Bool=false) {
+        self.id=id;self.vehicleID=vehicleID;self.date=date;self.litresPurchased=litresPurchased;self.totalCost=totalCost
+        self.currencyCode=currencyCode;self.odometerKm=odometerKm;self.isFullFill=isFullFill;self.stationName=stationName
+        self.notes=notes;self.receipt=receipt;self.isDemo=isDemo
+    }
 }
 
 public enum ReceiptStatus: String, Codable { case queued, processing, processed, failed }
@@ -228,20 +269,36 @@ public struct VehiclePreferences: Codable {
     public init() {}
 }
 public struct LibraryState: Codable {
-    public var schemaVersion = 1
+    public var schemaVersion = 2
     public var vehicles: [Vehicle] = []
     public var trips: [Trip] = []
     public var receipts: [ImportReceipt] = []
+    public var fuelEntries:[FuelEntry] = []
     public var selectedVehicleID: UUID?
     public var preferences: [String: VehiclePreferences] = [:]
     public var serverPort: UInt16 = 8765
     public var allowLAN = false
     public var autoStartServer = false
     public init() {}
+    private enum CodingKeys:String,CodingKey { case schemaVersion,vehicles,trips,receipts,fuelEntries,selectedVehicleID,preferences,serverPort,allowLAN,autoStartServer }
+    public init(from decoder:Decoder) throws {
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        schemaVersion=try values.decodeIfPresent(Int.self,forKey:.schemaVersion) ?? 1
+        vehicles=try values.decodeIfPresent([Vehicle].self,forKey:.vehicles) ?? []
+        trips=try values.decodeIfPresent([Trip].self,forKey:.trips) ?? []
+        receipts=try values.decodeIfPresent([ImportReceipt].self,forKey:.receipts) ?? []
+        fuelEntries=try values.decodeIfPresent([FuelEntry].self,forKey:.fuelEntries) ?? []
+        selectedVehicleID=try values.decodeIfPresent(UUID.self,forKey:.selectedVehicleID)
+        preferences=try values.decodeIfPresent([String:VehiclePreferences].self,forKey:.preferences) ?? [:]
+        serverPort=try values.decodeIfPresent(UInt16.self,forKey:.serverPort) ?? 8765
+        allowLAN=try values.decodeIfPresent(Bool.self,forKey:.allowLAN) ?? false
+        autoStartServer=try values.decodeIfPresent(Bool.self,forKey:.autoStartServer) ?? false
+    }
     public mutating func removeDemoData() {
         let demoVehicleIDs = Set(trips.filter(\.isDemo).map(\.vehicleID))
         trips.removeAll { $0.isDemo }
-        let retainedIDs = Set(trips.map(\.vehicleID)).union(receipts.map(\.vehicleID))
+        fuelEntries.removeAll { $0.isDemo }
+        let retainedIDs = Set(trips.map(\.vehicleID)).union(receipts.map(\.vehicleID)).union(fuelEntries.map(\.vehicleID))
         let removedIDs = demoVehicleIDs.subtracting(retainedIDs)
         vehicles.removeAll { removedIDs.contains($0.id) }
         for id in removedIDs { preferences.removeValue(forKey:id.uuidString) }

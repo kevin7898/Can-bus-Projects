@@ -1,5 +1,4 @@
 import Foundation
-import DriveLineShared
 
 enum ScannerConnectionKind: String, Codable, CaseIterable, Identifiable {
     case wifi, obdLinkMXPlus

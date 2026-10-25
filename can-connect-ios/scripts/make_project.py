@@ -12,7 +12,8 @@ def add(name, isa, body):
     return uid(name)
 def array(items): return '(' + ', '.join(items) + (',' if items else '') + ')'
 sharedfiles = sorted((ROOT/'Shared').glob('*.swift'))
-appfiles = sorted((ROOT/'CANConnect').rglob('*.swift')) + sharedfiles
+contractfiles = sorted((ROOT.parent/'shared/DriveLineShared/Sources/DriveLineShared').glob('*.swift'))
+appfiles = sorted((ROOT/'CANConnect').rglob('*.swift')) + sharedfiles + contractfiles
 widgetfiles = sorted((ROOT/'CANConnectLiveActivity').glob('*.swift')) + sharedfiles
 testfiles = sorted((ROOT/'CANConnectTests').glob('*.swift'))
 uifiles = sorted((ROOT/'CANConnectUITests').glob('*.swift'))
@@ -48,15 +49,10 @@ def configlist(name, settings):
         ids.append(add(name+':'+mode,'XCBuildConfiguration',f'buildSettings = {{{body}}}; name = {mode};'))
     return add(name+':configs','XCConfigurationList',f'buildConfigurations = {array(ids)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
 projectConfigs = configlist('project',projectSettings)
-packageRef = add('package:DriveLineShared','XCLocalSwiftPackageReference','relativePath = "../shared/DriveLineShared";')
 for name, files in [('CANConnect',appfiles),('CANConnectTests',testfiles),('CANConnectUITests',uifiles),('CANConnectLiveActivity',widgetfiles)]:
     sourcePhase = add(name+':sources','PBXSourcesBuildPhase',f'buildActionMask = 2147483647; files = {array([buildIDs[relative(f)] for f in files])}; runOnlyForDeploymentPostprocessing = 0;')
     resPhase = add(name+':resources','PBXResourcesBuildPhase',f'buildActionMask = 2147483647; files = {array([buildIDs[relative(f)] for f in resources] if name=="CANConnect" else [])}; runOnlyForDeploymentPostprocessing = 0;')
     packageDependencies=[]; frameworkFiles=[]
-    if name in ['CANConnect','CANConnectTests']:
-        packageProduct=add(name+':package-product:DriveLineShared','XCSwiftPackageProductDependency',f'package = {packageRef}; productName = DriveLineShared;')
-        packageDependencies.append(packageProduct)
-        frameworkFiles.append(add(name+':package-build:DriveLineShared','PBXBuildFile',f'productRef = {packageProduct};'))
     fwPhase = add(name+':frameworks','PBXFrameworksBuildPhase',f'buildActionMask = 2147483647; files = {array(frameworkFiles)}; runOnlyForDeploymentPostprocessing = 0;')
     settings={'PRODUCT_NAME':'$(TARGET_NAME)','PRODUCT_BUNDLE_IDENTIFIER':'com.canconnect.'+('companion' if name=='CANConnect' else name.lower()),'CODE_SIGN_STYLE':'Automatic','TARGETED_DEVICE_FAMILY':'1','SUPPORTED_PLATFORMS':'iphoneos iphonesimulator','SUPPORTS_MACCATALYST':'NO','LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks','GENERATE_INFOPLIST_FILE':'YES'}
     dependencies=[]
@@ -79,7 +75,7 @@ for name, files in [('CANConnect',appfiles),('CANConnectTests',testfiles),('CANC
     ptype = 'com.apple.product-type.application' if name=='CANConnect' else 'com.apple.product-type.bundle.unit-test' if name=='CANConnectTests' else 'com.apple.product-type.app-extension' if name=='CANConnectLiveActivity' else 'com.apple.product-type.bundle.ui-testing'
     add('target:'+name,'PBXNativeTarget',f'buildConfigurationList = {configs}; buildPhases = {array(phases)}; buildRules = (); dependencies = {array(dependencies)}; name = {name}; packageProductDependencies = {array(packageDependencies)}; productName = {name}; productReference = {productIDs[name]}; productType = {q(ptype)};')
 attrs = ' '.join(f'{uid("target:"+n)} = {{CreatedOnToolsVersion = 16.0;'+(f'TestTargetID = {uid("target:CANConnect")};' if n in ['CANConnectTests','CANConnectUITests'] else '')+'};' for n in productIDs)
-add('project','PBXProject',f'attributes = {{BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = {{{attrs}}};}}; buildConfigurationList = {projectConfigs}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = {mainGroup}; packageReferences = {array([packageRef])}; productRefGroup = {products}; projectDirPath = ""; projectRoot = ""; targets = {array([uid("target:"+n) for n in productIDs])};')
+add('project','PBXProject',f'attributes = {{BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = {{{attrs}}};}}; buildConfigurationList = {projectConfigs}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = {mainGroup}; packageReferences = (); productRefGroup = {products}; projectDirPath = ""; projectRoot = ""; targets = {array([uid("target:"+n) for n in productIDs])};')
 project = '// !$*UTF8*$!\n{archiveVersion = 1; classes = {}; objectVersion = 56; objects = {\n' + '\n'.join(f'{k} = {{{v}}};' for k,v in sorted(objects.items())) + f'\n}}; rootObject = {uid("project")};}}\n'
 (ROOT/'CANConnect.xcodeproj/project.pbxproj').write_text(project)
 def ref(n): return f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{uid("target:"+n)}" BuildableName="{n}.{"app" if n=="CANConnect" else "xctest"}" BlueprintName="{n}" ReferencedContainer="container:CANConnect.xcodeproj"/>'
