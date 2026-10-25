@@ -61,6 +61,9 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(58)).state,.complete)
         XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(95)).state,.readOnly)
         XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(95)).wording.contains("never replaced"))
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(11)).platform,.mac)
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(12)).platform,.iPhone)
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(110)).platform,.mac)
     }
 
     func testPhase8MatrixNeverUsesMisleadingGenericStatusWords() {

@@ -43,7 +43,7 @@ public enum DriveLineRecoveryAction: String, CaseIterable, Sendable, Codable {
     case chooseCorrectVehicle, restoreBackup, openPreservedOriginal
     case chooseWritableLocation, resumeIngestion, fitAvailableRoute
     case viewCoverageDetails, addFuel, attachReceipt, addRecording
-    case configureDestination, reconnectScanner, reviewSuggestion
+    case configureDestination, reconnectScanner, reviewSuggestion, retryImport
 
     public var title: String {
         switch self {
@@ -68,6 +68,7 @@ public enum DriveLineRecoveryAction: String, CaseIterable, Sendable, Codable {
         case .configureDestination: "Configure Mac destination"
         case .reconnectScanner: "Reconnect scanner"
         case .reviewSuggestion: "Review suggestion"
+        case .retryImport: "Retry import"
         }
     }
 }
@@ -175,7 +176,12 @@ public enum DriveLineStateMatrix {
             (118,"LAN access unavailable",.offline),(119,"Local-only server available",.ready)
         ])
         return rows.sorted { $0.2.0 < $1.2.0 }.map { category, platform, row in
-            descriptor(id: row.0, title: row.1, state: row.2, category: category, platform: platform)
+            let exactPlatform: DriveLineStatePlatform = switch row.0 {
+            case 11,61...77,110...119: .mac
+            case 12,13...42: .iPhone
+            default: platform
+            }
+            return descriptor(id: row.0, title: row.1, state: row.2, category: category, platform: exactPlatform)
         }
     }()
 
@@ -297,14 +303,13 @@ public enum DriveLineStateMatrix {
         case 13...15,21,110,117,118: [.openSettings]
         case 18,19,22: [.retryConnection,.continueGPSOnly]
         case 24,68,107,108: [.chooseCorrectVehicle]
-        case 25,101...103,109: [.chooseWritableLocation]
         case 27...30,33,35,36: [.finishRecording]
         case 42: [.retrySave]
-        case 97...100,106: [.restoreBackup,.retrySave]
+        case 97,98: [.restoreBackup]
         case 43,45...48,52,60: [.retryTransfer]
         case 44: [.configureDestination]
         case 49...51,53...55: [.checkProcessingReceipt]
-        case 57,62,63,66,67,70,73: [.openPreservedOriginal]
+        case 62,67,70,73: [.retryImport]
         case 76,114: [.resumeIngestion]
         default: []
         }

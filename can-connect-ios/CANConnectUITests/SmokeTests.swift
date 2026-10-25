@@ -184,7 +184,6 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Degraded"].exists)
         XCTAssertTrue(app.staticTexts["Processing"].exists)
         XCTAssertTrue(app.staticTexts["Complete"].exists)
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS[c] %@","preserved")).firstMatch.exists)
         let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Phase 8 iPhone degraded transfer recovery states";shot.lifetime = .keepAlways;add(shot)
     }
     @MainActor

@@ -154,14 +154,18 @@ struct Phase8StateEvidenceView:View {
                 }
             }
             ScrollView {
-                LazyVStack(spacing:12) {
+                VStack(spacing:12) {
                     ForEach(states) { item in
                         SectionCard(title:item.title,icon:item.state.icon) {
                             HStack { StatusPill(state:item.state);Spacer();Text(item.platform.rawValue).font(.caption2).foregroundStyle(Palette.tertiaryText) }
                             Text(item.wording).font(.subheadline).foregroundStyle(Palette.primaryText)
                             VStack(alignment:.leading,spacing:5) {
-                                Label("Safe: \(item.persistedEvidence)",systemImage:"lock.shield").accessibilityLabel("Persisted evidence. \(item.persistedEvidence)")
-                                Label(item.recoveryResult,systemImage:"arrow.counterclockwise").accessibilityLabel("Recovery result. \(item.recoveryResult)")
+                                Label("Safe: \(item.persistedEvidence)",systemImage:"lock.shield")
+                                    .accessibilityLabel("Persisted evidence. \(item.persistedEvidence)")
+                                    .accessibilityIdentifier("phase8.state.\(item.id).evidence")
+                                Label(item.recoveryResult,systemImage:"arrow.counterclockwise")
+                                    .accessibilityLabel("Recovery result. \(item.recoveryResult)")
+                                    .accessibilityIdentifier("phase8.state.\(item.id).recovery")
                             }.font(.caption).foregroundStyle(Palette.secondaryText)
                             if !item.actions.isEmpty {
                                 HStack { ForEach(item.actions.prefix(2),id:\.self) { action in Button(action.title) {}.buttonStyle(.bordered).disabled(true) } }
