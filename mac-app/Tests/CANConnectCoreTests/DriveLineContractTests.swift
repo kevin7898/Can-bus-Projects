@@ -113,4 +113,43 @@ final class DriveLineContractTests:XCTestCase {
         XCTAssertNil(restored.receiptData(metadata),"Missing receipt bytes remain unavailable while library metadata is retained")
         XCTAssertEqual(try restored.load().fuelEntries.first?.receipt,metadata)
     }
+
+    func testPhase6MacPreferencesMigrateStableSignalKeysAndKeepDuplicates() throws {
+        var legacy=VehiclePreferences()
+        legacy.signalKeys=nil
+        let encoded=try JSONEncoder().encode(legacy)
+        var object=try XCTUnwrap(JSONSerialization.jsonObject(with:encoded) as? [String:Any])
+        object.removeValue(forKey:"signalKeys")
+        let decoded=try JSONDecoder().decode(VehiclePreferences.self,from:JSONSerialization.data(withJSONObject:object))
+        XCTAssertEqual(decoded.resolvedSignalKeys,legacy.signals.map(\.rawValue))
+
+        var configured=decoded
+        configured.signalKeys=["rpm","rpm","vendor.unknown","gps.speedKph","boostKpa","dpfRegenTrigger"]
+        let restored=try JSONDecoder().decode(VehiclePreferences.self,from:JSONEncoder().encode(configured))
+        XCTAssertEqual(restored.resolvedSignalKeys[0],"rpm")
+        XCTAssertEqual(restored.resolvedSignalKeys[1],"rpm","Duplicate lane selections are intentional")
+        XCTAssertEqual(restored.resolvedSignalKeys[2],"vendor.unknown")
+    }
+
+    func testPhase6MacAdapterUsesSharedSignalStatisticsAndUnknownMetadataPolicy() throws {
+        let start=Date(timeIntervalSince1970:1_700_000_000),vehicle=Vehicle(name:"Synthetic")
+        let trip=Trip(vehicleID:vehicle.id,name:"Signals",source:"Sanitized fixture",samples:[
+            TelemetrySample(timestamp:start,signals:["rpm":1_000,"vendor.pid":7]),
+            TelemetrySample(timestamp:start.addingTimeInterval(4),signals:["rpm":2_000,"vendor.pid":9]),
+            TelemetrySample(timestamp:start.addingTimeInterval(30),signals:["rpm":9_000])
+        ],isDemo:true,recordedStartedAt:start,recordedEndedAt:start.addingTimeInterval(30))
+        let recording=trip.sharedRecording
+        let series=DriveLineJourneyPolicy.signalSeries("rpm",unit:"rpm",recording:recording)
+        let stats=DriveLineJourneyPolicy.signalStatistics(series,at:start.addingTimeInterval(4),
+            visibleRange:DateInterval(start:start,end:start.addingTimeInterval(10)))
+        XCTAssertEqual(stats.observationCount,2)
+        XCTAssertEqual(stats.recordedObservationAverage,1_500)
+        XCTAssertEqual(stats.current?.value,2_000)
+        XCTAssertEqual(series.segments.count,2)
+        let unknown=DriveLineJourneyPolicy.signalDescriptor("vendor.pid",recording:recording)
+        XCTAssertEqual(unknown.displayName,"vendor.pid")
+        XCTAssertNil(unknown.unit)
+        XCTAssertEqual(unknown.group,.otherUnknown)
+        XCTAssertTrue(recording.isSample)
+    }
 }

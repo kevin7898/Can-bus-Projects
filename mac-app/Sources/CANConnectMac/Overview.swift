@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import Charts
 
 struct OverviewView:View {
     @EnvironmentObject var store:AppStore
@@ -118,52 +119,388 @@ struct OverviewView:View {
     }
     func latest(_ key:Signal) -> Double? { store.latestObservation(key)?.value }
 }
+private enum SignalChartInteraction:String,CaseIterable,Identifiable {
+    case scrub,pan
+    var id:String { rawValue }
+    var title:String { rawValue.capitalized }
+}
+
 struct SignalsView:View {
-    @EnvironmentObject var store:AppStore
+    @EnvironmentObject private var store:AppStore
     @State private var selectedDate:Date?
-    @State private var availableWidth:CGFloat = 0
     @State private var viewport=MapViewport()
+    @State private var search=""
+    @State private var targetLane=0
+    @State private var alignment=DriveLineSignalAlignment.elapsedTime
+    @State private var visibleRange:ClosedRange<Double> = 0...1
+    @State private var interaction=SignalChartInteraction.scrub
+    @State private var comparing=CommandLine.arguments.contains("--phase6-compare")
+    @State private var comparisonID:UUID?
+
+    private var trip:Trip? { store.selectedTrip }
+    private var comparison:Trip? {
+        guard comparing,let trip else { return nil }
+        return store.vehicleTrips.first { $0.id == comparisonID && DriveLineJourneyPolicy.comparisonIneligibility(primary:trip.sharedRecording,candidate:$0.sharedRecording) == nil }
+    }
+    private var laneKeys:[String] { store.preferences.resolvedSignalKeys }
+    private var evidenceRender:Bool {
+        #if DEBUG
+        CommandLine.arguments.contains("--phase6-render-directory")
+        #else
+        false
+        #endif
+    }
+
     var body:some View {
-        if let trip = store.selectedTrip {
+        if let trip {
             VStack(alignment:.leading,spacing:14) {
-                HStack { Label("Historical recording · \(trip.source)",systemImage:"clock").foregroundStyle(Theme.muted);Spacer();Picker("Recording",selection:Binding(get:{Optional(trip.id)},set:{store.selectedTripID = $0})) { ForEach(store.vehicleTrips) { item in Text(item.name).tag(Optional(item.id)) } }.frame(maxWidth:340) }.font(.system(size:12))
-                MapPanel(trips:[trip],viewport:$viewport,style:store.preferences.mapStyle,height:240,marker:playbackSample(trip))
-                LazyVGrid(columns:Array(repeating:GridItem(.flexible(minimum:290)),count:availableWidth>1050 ? 3:2),spacing:14) {
-                    ForEach(Array(store.preferences.signals.enumerated()),id:\.offset) { index,signal in
-                        Panel(title:"Signal card \(index+1)",icon:"slider.horizontal.3") {
-                            Picker("Reading",selection:Binding(get:{store.preferences.signals[index]},set:{value in store.changePreferences{$0.signals[index] = value}})) { ForEach(Signal.allCases) { s in Text(s.title).tag(s) } }.accessibilityLabel("Reading for signal card \(index+1)").padding(12)
-                            HStack(alignment:.firstTextBaseline) { Text(number(value(trip,signal),digits:signal == .rpm ? 0:1)).font(.system(size:30,weight:.medium,design:.monospaced));Text(signal.unit).font(.system(size:11)).foregroundStyle(Theme.muted);Spacer();Text(selectedDate?.formatted(date:.omitted,time:.standard) ?? "Select a chart time").font(.system(size:9)).foregroundStyle(Theme.tertiaryText) }.frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,14)
-                            SignalChart(trip:trip,signal:signal,selectedDate:$selectedDate,height:150)
+                controls(trip)
+                if alignment == .travelledDistance || !distanceAvailability(trip).isAvailable {
+                    Label(distanceAvailability(trip).explanation,systemImage:distanceAvailability(trip).isAvailable ? "point.bottomleft.forward.to.point.topright.scurvepath":"location.slash")
+                        .font(.system(size:10)).foregroundStyle(distanceAvailability(trip).isAvailable ? Theme.secondaryText:Theme.fuelAttention)
+                }
+                if evidenceRender {
+                    SignalsEvidenceRoutePanel(trips:[trip]+(comparison.map{[$0]} ?? []),marker:playbackSample(trip)).frame(height:245)
+                } else {
+                    MapPanel(trips:[trip]+(comparison.map{[$0]} ?? []),viewport:$viewport,style:store.preferences.mapStyle,
+                             height:245,marker:playbackSample(trip))
+                }
+                HStack(alignment:.top,spacing:14) {
+                    signalBrowser(trip).frame(width:270)
+                    LazyVGrid(columns:[GridItem(.adaptive(minimum:430),spacing:14)],spacing:14) {
+                        ForEach(Array(laneKeys.enumerated()),id:\.offset) { index,key in
+                            MacSignalLane(index:index,key:key,trip:trip,comparison:comparison,alignment:alignment,
+                                          visibleRange:$visibleRange,selectedDate:$selectedDate,interaction:interaction)
+                                .onTapGesture { targetLane=index }
                         }
-                    }
+                    }.frame(maxWidth:.infinity)
                 }
                 if let raw=rawEvidence(trip) {
-                    DisclosureGroup("Raw evidence at shared cursor") { VStack(alignment:.leading,spacing:6) { Text(raw.command ?? "Command unavailable").font(.system(size:10,weight:.semibold,design:.monospaced));Text(raw.reply ?? "Reply unavailable").font(.system(size:9,design:.monospaced)).textSelection(.enabled);Text("Observed \(raw.timestamp.formatted(date:.omitted,time:.standard)); no interpolation applied.").font(.system(size:9)).foregroundStyle(Theme.secondaryText) }.padding(12) }
+                    DisclosureGroup("Raw diagnostic evidence at shared cursor") {
+                        VStack(alignment:.leading,spacing:6) {
+                            Text(raw.command ?? "Command unavailable").font(.system(size:10,weight:.semibold,design:.monospaced))
+                            Text(raw.reply ?? "Reply unavailable").font(.system(size:9,design:.monospaced)).textSelection(.enabled)
+                            Text("Observed \(raw.timestamp.formatted(date:.omitted,time:.standard)); no interpolation or credential data added.").font(.system(size:9)).foregroundStyle(Theme.secondaryText)
+                        }.padding(12)
+                    }
                 }
-                Text("Cards are independent and can show duplicate signals. Drag the chart to inspect a timestamp; values are not carried across recording gaps.").font(.system(size:11)).foregroundStyle(Theme.muted)
-            }.onAppear { viewport=RouteMap.fitted([trip]);selectedDate=selectedDate ?? trip.start }
-                .onChange(of:trip.id) { _,_ in viewport=RouteMap.fitted([trip]);selectedDate=trip.start }
-                .background {
-                GeometryReader { geometry in Color.clear.onAppear { availableWidth = geometry.size.width }.onChange(of:geometry.size.width) { _,width in availableWidth = width } }
+                Text("Six independent lanes may intentionally repeat a signal. Statistics use finite observations in the visible range; ‘average’ means arithmetic mean of recorded observations, never a time-weighted estimate. Gaps remain gaps.")
+                    .font(.system(size:11)).foregroundStyle(Theme.muted)
             }
-        } else { EmptyPanel(title:"No signals recorded yet",message:"Import a diagnostic or telemetry recording. Raw CAN requires a decoder before it can provide vehicle readings.") }
+            .onAppear { initialize(trip,fitMap:true) }
+            .onChange(of:trip.id) { _,_ in initialize(trip,fitMap:true) }
+            .onChange(of:alignment) { _,_ in resetRange(trip) }
+            .onChange(of:comparing) { _,enabled in
+                if enabled,comparisonID == nil {
+                    comparisonID=store.vehicleTrips.first(where:{$0.id != trip.id})?.id
+                }
+                resetRange(trip)
+            }
+            .onChange(of:comparisonID) { _,_ in resetRange(trip) }
+            .accessibilityIdentifier("mac.signals.workspace")
+        } else {
+            EmptyPanel(title:"No signals recorded yet",message:"Import a diagnostic, GPS, or telemetry recording. Unknown stable identifiers remain visible; unsupported metadata stays unavailable.")
+        }
     }
-    func value(_ trip:Trip,_ key:Signal) -> Double? {
-        let points=DriveLineJourneyPolicy.signalSeries(key.rawValue,unit:key.unit,recording:trip.sharedRecording).segments.flatMap{$0}
-        guard let date=selectedDate else { return points.last?.value }
-        guard let nearest=points.min(by:{abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date))}),abs(nearest.timestamp.timeIntervalSince(date))<=DriveLineMetricPolicy.maximumSignalGap else { return nil }
-        return nearest.value
+
+    @ViewBuilder private func controls(_ trip:Trip)->some View {
+        VStack(alignment:.leading,spacing:10) {
+            HStack(spacing:10) {
+                if evidenceRender {
+                    Label(trip.name,systemImage:"record.circle").padding(.horizontal,10).padding(.vertical,6).background(Theme.fieldSurface,in:RoundedRectangle(cornerRadius:6))
+                    StatusPill(state:comparing ? .queued:.healthy,text:comparing ? "Comparison active":"Single recording")
+                    if let comparison { Label(comparison.name,systemImage:"rectangle.on.rectangle").foregroundStyle(Theme.fuelAttention) }
+                } else {
+                    Picker("Recording",selection:Binding(get:{Optional(trip.id)},set:{store.selectedTripID=$0})) {
+                        ForEach(store.vehicleTrips) { item in Text(item.name+" · "+item.start.formatted(date:.abbreviated,time:.shortened)).tag(Optional(item.id)) }
+                    }.frame(maxWidth:330).accessibilityIdentifier("mac.signals.recording")
+                    Toggle("Compare",isOn:$comparing).toggleStyle(.switch).accessibilityIdentifier("mac.signals.compare")
+                    if comparing {
+                        Picker("Comparison",selection:$comparisonID) {
+                            Text("Choose recording").tag(nil as UUID?)
+                            ForEach(store.vehicleTrips.filter{$0.id != trip.id}) { item in Text(item.name+" · "+item.start.formatted(date:.abbreviated,time:.shortened)).tag(Optional(item.id)) }
+                        }.frame(maxWidth:300).accessibilityIdentifier("mac.signals.comparison-recording")
+                    }
+                }
+                Spacer()
+                Text(selectedDate?.formatted(date:.omitted,time:.standard) ?? "No cursor").monospacedDigit().foregroundStyle(Theme.secondaryText)
+            }.font(.system(size:11))
+            HStack(spacing:8) {
+                ForEach(DriveLineSignalAlignment.allCases) { mode in
+                    Button(mode.title) { alignment=mode }
+                        .buttonStyle(.borderedProminent).tint(alignment == mode ? Theme.cobalt:Theme.unavailable)
+                        .disabled(mode == .travelledDistance && !distanceAvailability(trip).isAvailable)
+                        .accessibilityIdentifier("mac.signals.alignment.\(mode.rawValue)")
+                }
+                Divider().frame(height:20)
+                if evidenceRender {
+                    Label("Scrub linked cursor",systemImage:"timeline.selection").padding(.horizontal,8).padding(.vertical,5).background(Theme.fieldSurface,in:RoundedRectangle(cornerRadius:6))
+                } else {
+                    Picker("Chart gesture",selection:$interaction) { ForEach(SignalChartInteraction.allCases) { Text($0.title).tag($0) } }
+                        .pickerStyle(.segmented).frame(width:150)
+                }
+                Button { zoom(0.65,trip:trip) } label:{Image(systemName:"plus.magnifyingglass")}.help("Zoom in")
+                Button { zoom(1.5,trip:trip) } label:{Image(systemName:"minus.magnifyingglass")}.help("Zoom out")
+                Button("Reset range") { resetRange(trip) }.accessibilityIdentifier("mac.signals.reset-range")
+                Button("Pan back") { pan(-0.3,trip:trip) }
+                Button("Pan forward") { pan(0.3,trip:trip) }
+                Spacer()
+                Button("Fit Route") { viewport=RouteMap.fitted([trip]+(comparison.map{[$0]} ?? [])) }
+            }.font(.system(size:10))
+        }.padding(12).background(Theme.raised,in:RoundedRectangle(cornerRadius:8))
     }
-    func playbackSample(_ trip:Trip)->TelemetrySample? {
+
+    private func signalBrowser(_ trip:Trip)->some View {
+        Panel(title:"Signal browser",icon:"magnifyingglass") {
+            VStack(alignment:.leading,spacing:10) {
+                if evidenceRender {
+                    HStack { Image(systemName:"magnifyingglass");Text("Search name, ID, alias, source or unit").foregroundStyle(Theme.tertiaryText);Spacer() }
+                        .padding(7).background(Theme.fieldSurface,in:RoundedRectangle(cornerRadius:6)).overlay(RoundedRectangle(cornerRadius:6).stroke(Theme.border))
+                    Text("Target lane · Lane \(targetLane+1)").font(.system(size:10,weight:.medium))
+                } else {
+                    TextField("Search name, ID, alias, source or unit",text:$search).textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("mac.signals.search")
+                    Picker("Target lane",selection:$targetLane) {
+                        ForEach(laneKeys.indices,id:\.self) { Text("Lane \($0+1)").tag($0) }
+                    }
+                }
+                ForEach(DriveLineSignalGroup.allCases) { group in
+                    let values=browserDescriptors(trip).filter{$0.group == group}
+                    if !values.isEmpty {
+                        DisclosureGroup(group.title) {
+                            VStack(alignment:.leading,spacing:3) {
+                                ForEach(values) { descriptor in
+                                    Button { select(descriptor.key,lane:targetLane) } label: {
+                                        HStack(alignment:.top) {
+                                            VStack(alignment:.leading,spacing:2) {
+                                                Text(descriptor.displayName).foregroundStyle(Theme.primaryText)
+                                                Text(descriptor.key+(descriptor.unit.map{" · "+$0} ?? " · unit unavailable"))
+                                                    .font(.system(size:9,design:.monospaced)).foregroundStyle(Theme.secondaryText)
+                                            }
+                                            Spacer()
+                                            if laneKeys[targetLane] == descriptor.key { Image(systemName:"checkmark.circle.fill").foregroundStyle(Theme.cobalt) }
+                                        }.padding(.vertical,4).contentShape(Rectangle())
+                                    }.buttonStyle(.plain).accessibilityIdentifier("mac.signals.choice.\(descriptor.key)")
+                                }
+                            }.padding(.leading,8)
+                        }.font(.system(size:11))
+                    }
+                }
+                if browserDescriptors(trip).isEmpty { Text("No signals match this search.").font(.system(size:10)).foregroundStyle(Theme.muted) }
+            }.padding(12)
+        }
+    }
+
+    private func browserDescriptors(_ trip:Trip)->[DriveLineSignalDescriptor] {
+        var values=DriveLineJourneyPolicy.signalDescriptors(recording:trip.sharedRecording,query:search,includeUnobservedKnown:true)
+        if let comparison {
+            for descriptor in DriveLineJourneyPolicy.signalDescriptors(recording:comparison.sharedRecording,query:search) where !values.contains(where:{$0.key == descriptor.key}) {
+                values.append(descriptor)
+            }
+        }
+        return values
+    }
+    private func select(_ key:String,lane:Int) {
+        store.changePreferences { preferences in
+            var keys=preferences.resolvedSignalKeys
+            guard keys.indices.contains(lane) else { return }
+            keys[lane]=key;preferences.signalKeys=keys
+        }
+    }
+    private func distanceAvailability(_ trip:Trip)->DriveLineAlignmentAvailability {
+        let primary=DriveLineJourneyPolicy.distanceAlignmentAvailability(trip.sharedRecording)
+        guard primary.isAvailable,let comparison else { return primary }
+        let secondary=DriveLineJourneyPolicy.distanceAlignmentAvailability(comparison.sharedRecording)
+        return secondary.isAvailable ? primary:DriveLineAlignmentAvailability(isAvailable:false,
+            explanation:"Comparison ‘\(comparison.name)’ cannot use distance alignment. \(secondary.explanation)")
+    }
+    private func extent(_ trip:Trip)->ClosedRange<Double> {
+        let a=DriveLineJourneyPolicy.alignmentExtent(trip.sharedRecording,alignment:alignment) ?? 0...max(0.001,trip.duration)
+        guard let comparison,let b=DriveLineJourneyPolicy.alignmentExtent(comparison.sharedRecording,alignment:alignment) else { return a }
+        return min(a.lowerBound,b.lowerBound)...max(a.upperBound,b.upperBound)
+    }
+    private func initialize(_ trip:Trip,fitMap:Bool) {
+        selectedDate=trip.start
+        if comparisonID == trip.id { comparisonID=nil }
+        if comparing,comparisonID == nil { comparisonID=store.vehicleTrips.first(where:{$0.id != trip.id})?.id }
+        if fitMap { viewport=RouteMap.fitted([trip]+(comparison.map{[$0]} ?? [])) }
+        resetRange(trip)
+    }
+    private func resetRange(_ trip:Trip) { visibleRange=extent(trip);selectedDate=trip.start }
+    private func zoom(_ factor:Double,trip:Trip) {
+        let all=extent(trip),span=max(0.0001,visibleRange.upperBound-visibleRange.lowerBound)
+        let centre=DriveLineJourneyPolicy.position(at:selectedDate ?? trip.start,recording:trip.sharedRecording,alignment:alignment) ?? (visibleRange.lowerBound+visibleRange.upperBound)/2
+        let half=min((all.upperBound-all.lowerBound)/2,span*factor/2)
+        let lower=min(max(all.lowerBound,centre-half),max(all.lowerBound,all.upperBound-2*half))
+        visibleRange=lower...min(all.upperBound,lower+2*half)
+    }
+    private func pan(_ fraction:Double,trip:Trip) {
+        let all=extent(trip),span=visibleRange.upperBound-visibleRange.lowerBound,shift=span*fraction
+        let lower=min(max(all.lowerBound,visibleRange.lowerBound+shift),max(all.lowerBound,all.upperBound-span))
+        visibleRange=lower...min(all.upperBound,lower+span)
+    }
+    private func playbackSample(_ trip:Trip)->TelemetrySample? {
         guard let date=selectedDate else { return nil }
         let closest=trip.coordinates.min { abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date)) }
         guard let closest,abs(closest.timestamp.timeIntervalSince(date))<=DriveLineMetricPolicy.maximumGPSGap else { return nil }
         return closest
     }
-    func rawEvidence(_ trip:Trip)->TelemetrySample? {
+    private func rawEvidence(_ trip:Trip)->TelemetrySample? {
         guard let date=selectedDate else { return nil }
         let samples=trip.samples.filter{$0.command != nil || $0.reply != nil}
         guard let closest=samples.min(by:{abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date))}),abs(closest.timestamp.timeIntervalSince(date))<=DriveLineMetricPolicy.maximumSignalGap else { return nil }
         return closest
     }
+}
+
+private struct SignalsEvidenceRoutePanel:View {
+    let trips:[Trip]
+    let marker:TelemetrySample?
+    private var points:[TelemetrySample] { trips.flatMap(\.coordinates) }
+    var body:some View {
+        GeometryReader { proxy in
+            ZStack {
+                RoundedRectangle(cornerRadius:8).fill(Theme.raised)
+                ForEach(Array(trips.enumerated()),id:\.element.id) { index,trip in
+                    Path { path in
+                        guard let first=trip.coordinates.first else { return }
+                        path.move(to:location(first,in:proxy.size))
+                        for point in trip.coordinates.dropFirst() { path.addLine(to:location(point,in:proxy.size)) }
+                    }.stroke(index == 0 ? Theme.cobalt:Theme.fuelAttention,style:StrokeStyle(lineWidth:4,lineCap:.round,lineJoin:.round))
+                }
+                if let marker,marker.hasCoordinate {
+                    Circle().fill(Theme.primaryText).overlay(Circle().stroke(Theme.raised,lineWidth:2)).frame(width:13,height:13)
+                        .position(location(marker,in:proxy.size))
+                }
+                VStack { HStack { Label("Recorded GPS route",systemImage:"point.bottomleft.forward.to.point.topright.scurvepath").font(.system(size:11,weight:.semibold));Spacer();Text("Sanitized evidence · \(points.count) points").font(.system(size:10)).foregroundStyle(Theme.secondaryText) }.padding(14);Spacer() }
+            }.overlay(RoundedRectangle(cornerRadius:8).stroke(Theme.border))
+        }.accessibilityIdentifier("mac.signals.map")
+    }
+    private func location(_ sample:TelemetrySample,in size:CGSize)->CGPoint {
+        let latitudes=points.compactMap(\.latitude),longitudes=points.compactMap(\.longitude)
+        let minLat=latitudes.min() ?? 0,maxLat=latitudes.max() ?? 1,minLon=longitudes.min() ?? 0,maxLon=longitudes.max() ?? 1
+        let x=32+(sample.longitude!-minLon)/max(0.000_001,maxLon-minLon)*(size.width-64)
+        let y=32+(maxLat-sample.latitude!)/max(0.000_001,maxLat-minLat)*(size.height-64)
+        return CGPoint(x:x,y:y)
+    }
+}
+
+private struct MacSignalLane:View {
+    let index:Int
+    let key:String
+    let trip:Trip
+    let comparison:Trip?
+    let alignment:DriveLineSignalAlignment
+    @Binding var visibleRange:ClosedRange<Double>
+    @Binding var selectedDate:Date?
+    let interaction:SignalChartInteraction
+    @State private var panOrigin:ClosedRange<Double>?
+
+    private var descriptor:DriveLineSignalDescriptor { DriveLineJourneyPolicy.signalDescriptor(key,recording:trip.sharedRecording) }
+    private var series:DriveLineSignalSeries { DriveLineJourneyPolicy.signalSeries(key,unit:descriptor.unit ?? "",recording:trip.sharedRecording) }
+    private var cursor:Date { selectedDate ?? trip.start }
+    private var stats:DriveLineSignalStatistics { DriveLineJourneyPolicy.signalStatistics(series,recording:trip.sharedRecording,alignment:alignment,visibleRange:visibleRange,at:cursor) }
+    private var cursorPosition:Double? { DriveLineJourneyPolicy.position(at:cursor,recording:trip.sharedRecording,alignment:alignment) }
+
+    var body:some View {
+        Panel(title:"Lane \(index+1) · \(descriptor.displayName)",icon:"waveform.path.ecg") {
+            VStack(alignment:.leading,spacing:9) {
+                HStack(alignment:.top) {
+                    VStack(alignment:.leading,spacing:3) {
+                        Text(key).font(.system(size:9,design:.monospaced)).foregroundStyle(Theme.secondaryText).textSelection(.enabled)
+                        HStack(spacing:10) {
+                            SourceBadge(source:stats.sourceIDs.isEmpty ? "Source unavailable":stats.sourceIDs.joined(separator:", "),verified:!stats.sourceIDs.isEmpty)
+                            Text(series.provenance == .derived ? "Derived":"Measured").foregroundStyle(Theme.secondaryText)
+                            if let algorithm=series.algorithmIdentifier { Text("\(algorithm) · v\(series.algorithmVersion ?? "unavailable")").font(.system(size:9,design:.monospaced)).foregroundStyle(Theme.secondaryText) }
+                        }
+                    }
+                    Spacer()
+                    StatusPill(state:stats.freshness == .fresh ? .healthy:(stats.freshness == .stale ? .stale:.unavailable),text:stats.freshness.title)
+                }.font(.system(size:10))
+                SignalStatsStrip(name:trip.name,unit:descriptor.unit,coverage:series.coverage?.fraction,stats:stats)
+                laneChart
+                if let comparison { comparisonEvidence(comparison) }
+            }.padding(12)
+        }.accessibilityIdentifier("mac.signals.lane.\(index)")
+    }
+
+    private var laneChart:some View {
+        let primary=DriveLineJourneyPolicy.alignedSegments(series,recording:trip.sharedRecording,alignment:alignment)
+        let comparisonSeries=comparison.map { DriveLineJourneyPolicy.signalSeries(key,unit:descriptor.unit ?? "",recording:$0.sharedRecording) }
+        let secondary=comparison.flatMap { recording in comparisonSeries.map { DriveLineJourneyPolicy.alignedSegments($0,recording:recording.sharedRecording,alignment:alignment) } } ?? []
+        return Chart {
+            ForEach(Array(primary.enumerated()),id:\.offset) { segment,points in
+                ForEach(points) { value in
+                    LineMark(x:.value(alignment.title,value.position),y:.value(descriptor.unit ?? "Recorded value",value.point.value),series:.value("Primary segment",segment)).foregroundStyle(Theme.cobalt)
+                    PointMark(x:.value(alignment.title,value.position),y:.value(descriptor.unit ?? "Recorded value",value.point.value)).foregroundStyle(Theme.cobalt).symbolSize(8)
+                }
+            }
+            ForEach(Array(secondary.enumerated()),id:\.offset) { segment,points in
+                ForEach(points) { value in
+                    LineMark(x:.value(alignment.title,value.position),y:.value(descriptor.unit ?? "Recorded value",value.point.value),series:.value("Comparison segment",segment+10_000)).foregroundStyle(Theme.fuelAttention)
+                    PointMark(x:.value(alignment.title,value.position),y:.value(descriptor.unit ?? "Recorded value",value.point.value)).foregroundStyle(Theme.fuelAttention).symbolSize(8)
+                }
+            }
+            if let cursorPosition { RuleMark(x:.value("Shared recorded cursor",cursorPosition)).foregroundStyle(Theme.primaryText).lineStyle(StrokeStyle(lineWidth:1,dash:[3])) }
+        }.chartXScale(domain:visibleRange).chartLegend(.hidden).frame(height:175)
+            .chartOverlay { proxy in GeometryReader { geometry in
+                Rectangle().fill(.clear).contentShape(Rectangle()).gesture(DragGesture(minimumDistance:0)
+                    .onChanged { value in
+                        guard let frame=proxy.plotFrame else { return }
+                        let width=max(1,geometry[frame].width)
+                        if interaction == .scrub {
+                            let x=value.location.x-geometry[frame].origin.x
+                            if let position:Double=proxy.value(atX:x),let date=DriveLineJourneyPolicy.timestamp(at:position,recording:trip.sharedRecording,alignment:alignment) { selectedDate=date }
+                        } else {
+                            if panOrigin == nil { panOrigin=visibleRange }
+                            guard let start=panOrigin else { return }
+                            let span=start.upperBound-start.lowerBound
+                            let primary=DriveLineJourneyPolicy.alignmentExtent(trip.sharedRecording,alignment:alignment) ?? start
+                            let all:ClosedRange<Double>
+                            if let comparison,
+                               let secondary=DriveLineJourneyPolicy.alignmentExtent(comparison.sharedRecording,alignment:alignment) {
+                                all=min(primary.lowerBound,secondary.lowerBound)...max(primary.upperBound,secondary.upperBound)
+                            } else { all=primary }
+                            let shift = -Double(value.translation.width/width)*span
+                            let lower=min(max(all.lowerBound,start.lowerBound+shift),max(all.lowerBound,all.upperBound-span))
+                            visibleRange=lower...min(all.upperBound,lower+span)
+                        }
+                    }.onEnded { _ in panOrigin=nil })
+            } }
+    }
+
+    @ViewBuilder private func comparisonEvidence(_ other:Trip)->some View {
+        let otherDescriptor=DriveLineJourneyPolicy.signalDescriptor(key,recording:other.sharedRecording)
+        let otherSeries=DriveLineJourneyPolicy.signalSeries(key,unit:otherDescriptor.unit ?? "",recording:other.sharedRecording)
+        let position=cursorPosition ?? visibleRange.lowerBound
+        let date=DriveLineJourneyPolicy.timestamp(at:position,recording:other.sharedRecording,alignment:alignment) ?? other.start
+        let otherStats=DriveLineJourneyPolicy.signalStatistics(otherSeries,recording:other.sharedRecording,alignment:alignment,visibleRange:visibleRange,at:date)
+        Divider()
+        SignalStatsStrip(name:other.name,unit:otherDescriptor.unit,coverage:otherSeries.coverage?.fraction,stats:otherStats,comparison:true)
+        Text("Comparison provenance remains independent · \(otherStats.sourceIDs.isEmpty ? "source unavailable":otherStats.sourceIDs.joined(separator:", ")) · \(otherSeries.provenance == .derived ? "derived":"measured")")
+            .font(.system(size:9)).foregroundStyle(Theme.secondaryText)
+    }
+}
+
+private struct SignalStatsStrip:View {
+    let name:String
+    let unit:String?
+    let coverage:Double?
+    let stats:DriveLineSignalStatistics
+    var comparison=false
+    var body:some View {
+        VStack(alignment:.leading,spacing:6) {
+            HStack { Circle().fill(comparison ? Theme.fuelAttention:Theme.cobalt).frame(width:7,height:7);Text(name).font(.system(size:10,weight:.semibold));Spacer();Text(coverage.map{"\(Int(($0*100).rounded()))% coverage"} ?? "Coverage unavailable").font(.system(size:9)).foregroundStyle(Theme.secondaryText) }
+            LazyVGrid(columns:Array(repeating:GridItem(.flexible(),alignment:.leading),count:6),spacing:7) {
+                metric("Current",stats.current?.value)
+                metric("Minimum",stats.minimum)
+                metric("Maximum",stats.maximum)
+                metric("Recorded avg",stats.recordedObservationAverage)
+                textMetric("Count",String(stats.observationCount))
+                textMetric("Latest",stats.latestObservation?.formatted(date:.omitted,time:.standard) ?? "—")
+            }
+        }
+    }
+    private func metric(_ title:String,_ value:Double?)->some View { textMetric(title,value.map{number($0,digits:2)+(unit.map{" "+$0} ?? "")} ?? "—") }
+    private func textMetric(_ title:String,_ value:String)->some View { VStack(alignment:.leading,spacing:2) { Text(title).font(.system(size:8)).foregroundStyle(Theme.tertiaryText);Text(value).font(.system(size:10,design:.monospaced)).lineLimit(1).minimumScaleFactor(0.65) } }
 }

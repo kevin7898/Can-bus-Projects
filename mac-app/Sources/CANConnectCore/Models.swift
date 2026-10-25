@@ -267,8 +267,18 @@ public struct VehiclePreferences: Codable {
     public var periodDays = 30
     public var widgets = SummaryKind.allCases.map { SummaryWidget(kind: $0) }
     public var signals = [Signal.speedKph, .rpm, .coolantC, .boostKpa, .fuelRateLph, .voltage]
+    /// Stable identifiers selected by the Phase 6 recorded-Signals workspace.
+    /// `signals` remains encoded for older libraries; a missing value migrates
+    /// in memory without rewriting the library until the next ordinary save.
+    public var signalKeys: [String]?
     public var mapFirst = true
     public init() {}
+    public var resolvedSignalKeys:[String] {
+        var values=(signalKeys?.isEmpty == false ? signalKeys!:signals.map(\.rawValue))
+        let defaults=signals.map(\.rawValue)
+        while values.count<6 { values.append(defaults[values.count % defaults.count]) }
+        return Array(values.prefix(max(6,values.count)))
+    }
 }
 public struct LibraryState: Codable {
     public var schemaVersion = 3
