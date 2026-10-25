@@ -4,7 +4,6 @@ import Combine
 
 struct RootView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var settings = false
     @State private var importFile = false
     var body: some View {
         VStack(spacing:12) {
@@ -14,31 +13,30 @@ struct RootView: View {
                     ForEach(store.state.vehicles) { vehicle in Button(vehicle.title) { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } }.accessibilityIdentifier(vehicle.isSample ? "garage.select.sample" : "garage.select.\(vehicle.id.uuidString)") }
                     Divider()
                     Button("Add a vehicle",systemImage:"plus") { store.vehicleSetupPresented = true }
-                    Button("Manage vehicles",systemImage:"car.2") { store.garagePresented = true }
+                    Button("Manage vehicles",systemImage:"car.2") { store.selectedTab = .garage }
                 } label: { HStack(spacing:5) { Image(systemName:store.activeVehicle?.kind.icon ?? "car.side"); Text(store.activeVehicle?.title ?? "Add vehicle").lineLimit(1).minimumScaleFactor(0.7) }.font(.system(size:10)).foregroundStyle(Palette.blue).frame(maxWidth:120,minHeight:30).contentShape(Rectangle()) }.disabled(store.recording || store.pendingGPS).accessibilityLabel("Choose vehicle")
-                Button { settings = true } label: { Image(systemName:"slider.horizontal.3").frame(width:36,height:30) }.foregroundStyle(Palette.muted).accessibilityLabel("App settings")
+                Button { store.connectPage=2;store.selectedTab = .more } label: { Image(systemName:"gearshape").frame(width:44,height:44) }.foregroundStyle(Palette.muted).accessibilityLabel("Open More settings")
             }
             HStack(alignment:.bottom) {
                 VStack(alignment:.leading, spacing:5) { Eyebrow(text:store.selectedTab.eyebrow); Text(store.selectedTab.title).font(.system(size:28, weight:.regular)) }
                 Spacer()
-                if store.recording { Button { store.selectedTab = .live } label: { Label(store.timerText, systemImage:"record.circle.fill").font(.system(size:11)).foregroundStyle(Palette.red) }.accessibilityLabel("Recording. Open Live to finish") }
-                else if store.selectedTab == .trips {
-                    Menu { Button("Record with iPhone GPS", systemImage:"location") { store.source = .phoneGPS; store.selectedTab = .live }; Button("Import JSON recording", systemImage:"square.and.arrow.down") { importFile = true }; Button("Add sample recording", systemImage:"play.rectangle") { store.addSample() } } label: { Image(systemName:"plus").frame(width:40,height:40).background(Palette.surface, in:Circle()) }.accessibilityLabel("Add recording")
-                } else { Text(store.selectedTab == .live && store.source == .demo ? "Demo" : "On iPhone").font(.system(size:10)).foregroundStyle(Palette.muted).padding(.horizontal,11).padding(.vertical,7).background(Palette.surface, in:Capsule()) }
+                if store.recording { Button { store.selectedTab = .record } label: { Label(store.timerText, systemImage:"record.circle.fill").font(.system(size:11)).foregroundStyle(Palette.red) }.accessibilityLabel("Recording. Open Record to finish") }
+                else if store.selectedTab == .drives {
+                    Menu { Button("Record with iPhone GPS", systemImage:"location") { store.source = .phoneGPS; store.selectedTab = .record }; Button("Import JSON recording", systemImage:"square.and.arrow.down") { importFile = true }; Button("Add sample recording", systemImage:"play.rectangle") { store.addSample() } } label: { Image(systemName:"plus").frame(width:44,height:44).background(Palette.surface, in:Circle()) }.accessibilityLabel("Add recording")
+                } else { Text(store.selectedTab == .record && store.source == .demo ? "Demo" : "On iPhone").font(.system(size:10)).foregroundStyle(Palette.muted).padding(.horizontal,11).padding(.vertical,7).background(Palette.surface, in:Capsule()) }
             }
             Group { switch store.selectedTab {
-            case .overview: OverviewView(page:$store.overviewPage)
-            case .trips: TripsView(filter:$store.tripFilter, page:$store.tripPage)
-            case .live: LiveView(page:$store.livePage)
-            case .vehicle: VehicleView(page:$store.vehiclePage)
-            case .connect: ConnectView(page:$store.connectPage)
+            case .today: OverviewView(page:$store.overviewPage)
+            case .drives: TripsView(filter:$store.tripFilter, page:$store.tripPage)
+            case .record: LiveView(page:$store.livePage)
+            case .garage: GarageDestinationView()
+            case .more: ConnectView(page:$store.connectPage)
             } }.frame(maxWidth:.infinity, maxHeight:.infinity)
         }
         .padding(.horizontal,18).padding(.top,8).padding(.bottom,8)
         .background(Palette.background.ignoresSafeArea()).foregroundStyle(Palette.text)
         .safeAreaInset(edge:.bottom, spacing:0) { tabBar }
         .overlay(alignment:.bottom) { if let toast = store.toast { Text(toast).font(.system(size:12)).padding(12).background(Palette.raised, in:Capsule()).padding(.bottom,10).allowsHitTesting(false) } }
-        .sheet(isPresented:$settings) { SettingsView() }
         .sheet(isPresented:$store.garagePresented) { GarageView() }
         .fullScreenCover(isPresented:Binding(get:{!store.state.onboardingCompleted || store.vehicleSetupPresented},set:{store.vehicleSetupPresented = $0})) { VehicleSetupView() }
         .fileImporter(isPresented:$importFile, allowedContentTypes:[.json]) { result in importRecording(result, store:store) }
@@ -49,7 +47,7 @@ struct RootView: View {
             Button { store.selectedTab = tab } label: { VStack(spacing:6) { Image(systemName:tab.icon).font(.system(size:17)); Text(tab.title).font(.system(size:10)) }.frame(maxWidth:.infinity).frame(height:57).contentShape(Rectangle()) }
                 .foregroundStyle(store.selectedTab == tab ? Palette.blue : Palette.muted)
                 .accessibilityLabel(tab.title).accessibilityAddTraits(store.selectedTab == tab ? .isSelected : [])
-        } }.padding(.horizontal,10).background(Color(hex:0x101722)).overlay(alignment:.top) { Rectangle().fill(Palette.border).frame(height:1) }
+        } }.padding(.horizontal,10).background(Palette.navigationBackground).overlay(alignment:.top) { Rectangle().fill(Palette.border).frame(height:1) }
     }
 }
 @MainActor
@@ -67,11 +65,11 @@ func importRecording(_ result: Result<URL, Error>, store: AppStore) {
 struct DriveLineCanvas: View {
     @StateObject private var store: AppStore
 
-    init(tab: AppTab = .overview, recording: Bool = false) {
+    init(tab: AppTab = .today, recording: Bool = false) {
         _store = StateObject(wrappedValue:Self.makeStore(tab:tab, recording:recording))
     }
 
-    static func makeStore(tab: AppTab = .overview, recording: Bool = false) -> AppStore {
+    static func makeStore(tab: AppTab = .today, recording: Bool = false) -> AppStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("DriveLinePreviews/\(UUID().uuidString)/state.json")
         let store = AppStore(disk:LocalStore(url:url),
@@ -127,9 +125,9 @@ private final class CanvasScanner: ScannerTransport {
     func disconnect() {}
 }
 
-#Preview("Overview · Sample data") { DriveLineCanvas() }
-#Preview("Trips · Sample data") { DriveLineCanvas(tab:.trips) }
-#Preview("Live · Sample data") { DriveLineCanvas(tab:.live) }
-#Preview("Vehicle · Sample data") { DriveLineCanvas(tab:.vehicle) }
-#Preview("Connect · Sample data") { DriveLineCanvas(tab:.connect) }
+#Preview("Today · Sample data") { DriveLineCanvas() }
+#Preview("Drives · Sample data") { DriveLineCanvas(tab:.drives) }
+#Preview("Record · Sample data") { DriveLineCanvas(tab:.record) }
+#Preview("Garage · Sample data") { DriveLineCanvas(tab:.garage) }
+#Preview("More · Sample data") { DriveLineCanvas(tab:.more) }
 #endif

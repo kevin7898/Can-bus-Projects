@@ -8,7 +8,7 @@ import ExternalAccessory
 final class AppStore: ObservableObject {
     @Published var state: StoredState
     @Published var source: TripSource = .demo
-    @Published var selectedTab: AppTab = .overview
+    @Published var selectedTab: AppTab = .today
     @Published var overviewPage = 0
     @Published var livePage = 0
     @Published var vehiclePage = 0
@@ -204,10 +204,13 @@ final class AppStore: ObservableObject {
         expireScannerGap(at:date)
         // Keep setup forms and native menus stable while idle. Live freshness and
         // recording timers still update every second; history refreshes each minute.
-        if recording || pendingGPS || selectedTab == .live || abs(date.timeIntervalSince(now)) >= 60 { now = date }
+        if recording || pendingGPS || selectedTab == .record || abs(date.timeIntervalSince(now)) >= 60 { now = date }
         if state.draft?.source == .demo { state.draft?.updatedAt = date }
         checkpoint(at:date)
         reconcileScannerConnection(at:date)
+    }
+    func openDeepLink(_ url:URL) {
+        if let destination=DriveLinePhoneRoute.destination(for:url) { selectedTab=destination }
     }
     private func checkpoint(at date: Date, force: Bool = false) {
         guard recording, force || date.timeIntervalSince(lastCheckpoint) >= 5 else { return }

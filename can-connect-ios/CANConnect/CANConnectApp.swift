@@ -21,14 +21,10 @@ struct CANConnectApp: App {
     }
     var body: some Scene { WindowGroup { RootView().environmentObject(store)
         .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme).tint(Palette.blue)
-        .onOpenURL { url in
-            if url.scheme == "canconnect", url.host == "recording" { store.selectedTab = .live }
-        } } }
+        .onOpenURL { store.openDeepLink($0) } } }
 }
-enum AppTab: String, CaseIterable, Identifiable {
-    case overview, trips, live, vehicle, connect
-    var id: String { rawValue }
-    var title: String { rawValue.capitalized }
-    var icon: String { switch self { case .overview: return "square.grid.2x2"; case .trips: return "point.topleft.down.to.point.bottomright.curvepath"; case .live: return "waveform.path.ecg"; case .vehicle: return "car"; case .connect: return "antenna.radiowaves.left.and.right" } }
-    var eyebrow: String { switch self { case .overview: return "Your vehicle, connected"; case .trips: return "Every drive, kept"; case .live: return "In the car"; case .vehicle: return "The full picture"; case .connect: return "Your recording network" } }
+typealias AppTab=DriveLinePhoneDestination
+extension DriveLinePhoneDestination {
+    var icon:String { switch self { case .today:"house.fill";case .drives:"chart.bar.xaxis";case .record:"record.circle";case .garage:"car";case .more:"ellipsis" } }
+    var eyebrow:String { switch self { case .today:"Your vehicle, connected";case .drives:"Every drive, kept";case .record:"Ready when you are";case .garage:"Vehicles in your DriveLine";case .more:"Connections, transfers, and settings" } }
 }

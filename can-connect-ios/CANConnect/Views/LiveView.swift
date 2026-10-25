@@ -121,6 +121,6 @@ struct SignalPicker: View {
 }
 
 #if DEBUG
-#Preview("Live · Sample data") { DriveLineCanvas(tab:.live) }
-#Preview("Live · Recording route") { DriveLineCanvas(tab:.live, recording:true) }
+#Preview("Record · Sample data") { DriveLineCanvas(tab:.record) }
+#Preview("Record · Recording route") { DriveLineCanvas(tab:.record, recording:true) }
 #endif

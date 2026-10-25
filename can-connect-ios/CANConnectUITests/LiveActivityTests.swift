@@ -7,7 +7,7 @@ final class LiveActivityTests: XCTestCase {
             throw XCTSkip("Opt-in physical Live Activity presentation check.")
         }
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing","--live-activity-testing"]; app.launch()
-        XCTAssertTrue(app.buttons["Live"].waitForExistence(timeout:10)); app.buttons["Live"].tap()
+        XCTAssertTrue(app.buttons["Record"].waitForExistence(timeout:10)); app.buttons["Record"].tap()
         app.buttons["Start sample recording"].tap()
         XCTAssertTrue(app.buttons["Finish & save recording"].waitForExistence(timeout:5))
         try await Task.sleep(nanoseconds:2_000_000_000)
@@ -32,7 +32,7 @@ final class LiveActivityTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing","--live-activity-testing"]
         app.launch()
-        XCTAssertTrue(app.buttons["Live"].waitForExistence(timeout:10)); app.buttons["Live"].tap()
+        XCTAssertTrue(app.buttons["Record"].waitForExistence(timeout:10)); app.buttons["Record"].tap()
         app.buttons["Start sample recording"].tap()
         XCTAssertTrue(app.buttons["Finish & save recording"].waitForExistence(timeout:5))
         try await Task.sleep(nanoseconds:2_000_000_000)

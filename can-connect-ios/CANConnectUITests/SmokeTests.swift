@@ -16,10 +16,32 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
+    func testDriveLedgerPrimaryDestinationsAndMoreRoutesAreReachable() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing"];app.launch()
+        XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))
+        for title in ["Today","Drives","Record","Garage","More"] {
+            let tab=app.buttons[title]
+            XCTAssertTrue(tab.waitForExistence(timeout:5),"Missing \(title) destination")
+            tab.tap();XCTAssertTrue(tab.isSelected,"\(title) did not become selected")
+        }
+        app.buttons["Garage"].tap()
+        XCTAssertTrue(app.buttons["Add a vehicle"].waitForExistence(timeout:5))
+        app.buttons["More"].tap()
+        XCTAssertTrue(app.buttons["Connections"].isSelected)
+        XCTAssertTrue(app.staticTexts["CAN recorder"].exists)
+        app.buttons["Transfers"].tap()
+        XCTAssertTrue(app.buttons["Export all recordings"].waitForExistence(timeout:5))
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.segmentedControls["appearance.picker"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["more.server"].exists)
+        XCTAssertTrue(app.buttons["more.transfer-queue"].exists)
+    }
+
+    @MainActor
     func testRegenerationComparisonIsReachableAndDoesNotCountSampleTrips() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))
-        app.buttons["Vehicle"].tap(); app.buttons["DPF"].tap()
+        app.buttons["More"].tap(); app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap(); app.buttons["DPF"].tap()
         let compare = app.buttons["regen.compare"]
         XCTAssertTrue(compare.waitForExistence(timeout:5)); compare.tap()
         XCTAssertTrue(app.staticTexts["Latest complete cycles · 0 / 10"].waitForExistence(timeout:5))
@@ -32,7 +54,7 @@ final class SmokeTests: XCTestCase {
     func testTabsPagesAndSampleRecording() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))
-        app.buttons["Live"].tap()
+        app.buttons["Record"].tap()
         XCTAssertTrue(app.buttons["Start sample recording"].waitForExistence(timeout:5))
         app.buttons["Engine"].tap()
         XCTAssertTrue(app.staticTexts["Engine signals"].waitForExistence(timeout:3))
@@ -43,22 +65,22 @@ final class SmokeTests: XCTestCase {
         app.buttons["Drive"].tap()
         let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "Locked design — native Drive"; shot.lifetime = .keepAlways; add(shot)
         app.buttons["Finish & save recording"].tap()
-        app.buttons["Trips"].tap()
+        app.buttons["Drives"].tap()
         XCTAssertTrue(app.staticTexts["Sample drive"].waitForExistence(timeout:5))
-        app.buttons["Live"].tap()
+        app.buttons["Record"].tap()
         XCTAssertTrue(app.buttons["Drive"].isSelected)
-        app.buttons["Vehicle"].tap(); app.buttons["Logbook"].tap()
+        app.buttons["More"].tap(); app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap(); app.buttons["Logbook"].tap()
         XCTAssertTrue(app.buttons["Log a fill-up"].waitForExistence(timeout:3))
-        app.buttons["Connect"].tap(); app.buttons["Transfers"].tap()
+        app.buttons["Done"].tap(); app.buttons["Transfers"].tap()
         XCTAssertTrue(app.buttons["Export all recordings"].waitForExistence(timeout:3))
-        app.buttons["Vehicle"].tap()
+        app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap()
         XCTAssertTrue(app.buttons["Logbook"].isSelected)
     }
     @MainActor
     func testSootCardExplainsRegenTriggerWithoutChangingCardSize() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.buttons["Your roads"].waitForExistence(timeout:10))
-        app.buttons["Live"].tap()
+        app.buttons["Record"].tap()
         let card = app.buttons["signal-card.drive.0"]
         XCTAssertTrue(card.waitForExistence(timeout:5))
         let original = card.frame
@@ -86,7 +108,7 @@ final class SmokeTests: XCTestCase {
         await saveVehicle(in:app)
         await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["Choose vehicle"].waitForExistence(timeout:5))
-        app.buttons["Vehicle"].tap()
+        app.buttons["More"].tap(); app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap()
         XCTAssertTrue(app.staticTexts["Honda CB500X · recorded values"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["Starting odometer"].exists == false)
         let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "New vehicle without sample telemetry"; shot.lifetime = .keepAlways; add(shot)
@@ -105,7 +127,7 @@ final class SmokeTests: XCTestCase {
         await enter("Test",in:app.textFields["vehicle.make"],app:app)
         await enter("Synthetic MX+",in:app.textFields["vehicle.model"],app:app)
         await saveVehicle(in:app); await waitForOnboardingToDismiss(app)
-        app.buttons["Connect"].tap()
+        app.buttons["More"].tap()
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","CAN recorder")).firstMatch.tap()
         let picker = app.buttons["scanner.transport"]
         XCTAssertTrue(picker.waitForExistence(timeout:5)); picker.tap()
@@ -133,7 +155,7 @@ final class SmokeTests: XCTestCase {
         await enter("Synthetic ECU",in:app.textFields["vehicle.model"],app:app)
         await saveVehicle(in:app)
         await waitForOnboardingToDismiss(app)
-        XCTAssertTrue(app.buttons["Connect"].waitForExistence(timeout:5)); app.buttons["Connect"].tap()
+        XCTAssertTrue(app.buttons["More"].waitForExistence(timeout:5)); app.buttons["More"].tap()
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","CAN recorder")).firstMatch.tap()
         let host = app.textFields["connection.host"]; XCTAssertTrue(host.waitForExistence(timeout:3)); host.tap(); host.typeText("127.0.0.1")
         let port = app.textFields["connection.port"]; port.tap()
@@ -207,7 +229,7 @@ final class SmokeTests: XCTestCase {
             XCTFail("Finish did not save the scanner recording. " + app.debugDescription)
             return
         }
-        app.buttons["Trips"].tap()
+        app.buttons["Drives"].tap()
         XCTAssertTrue(app.staticTexts["Scanner drive"].waitForExistence(timeout:5))
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","Scanner drive")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Measured OBD responses"].waitForExistence(timeout:5))
@@ -243,7 +265,7 @@ final class SmokeTests: XCTestCase {
     @MainActor
     private func waitForOnboardingToDismiss(_ app: XCUIApplication) async {
         let dismissed = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
-            !app.buttons["onboarding.save"].exists && app.keyboards.count == 0 && app.buttons["Vehicle"].isHittable
+            !app.buttons["onboarding.save"].exists && app.keyboards.count == 0 && app.buttons["Garage"].isHittable
         },object:nil)
         await fulfillment(of:[dismissed],timeout:10)
     }

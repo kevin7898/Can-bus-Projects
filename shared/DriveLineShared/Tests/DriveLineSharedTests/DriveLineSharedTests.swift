@@ -27,6 +27,17 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(Set(DriveLineMacDestination.primary + DriveLineMacDestination.secondary), Set(DriveLineMacDestination.allCases))
     }
 
+    func testPhoneNavigationAndMoreCapabilitiesAreReachable() {
+        XCTAssertEqual(DriveLinePhoneDestination.allCases,[.today,.drives,.record,.garage,.more])
+        XCTAssertEqual(Set(DriveLineMoreCapability.allCases),Set([.connections,.transfers,.serverPairing,.settings]))
+    }
+
+    func testRecordingDeepLinkOpensRecord() throws {
+        XCTAssertEqual(DriveLinePhoneRoute.destination(for:try XCTUnwrap(URL(string:"canconnect://recording"))),.record)
+        XCTAssertNil(DriveLinePhoneRoute.destination(for:try XCTUnwrap(URL(string:"canconnect://trips"))))
+        XCTAssertNil(DriveLinePhoneRoute.destination(for:try XCTUnwrap(URL(string:"https://example.com/recording"))))
+    }
+
     private func fixture(_ name: String) throws -> Data {
         try Data(contentsOf: XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")))
     }

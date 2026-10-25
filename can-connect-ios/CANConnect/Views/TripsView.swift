@@ -71,5 +71,5 @@ struct TripDetailView: View {
 }
 
 #if DEBUG
-#Preview("Trips · Sample data") { DriveLineCanvas(tab:.trips) }
+#Preview("Drives · Sample data") { DriveLineCanvas(tab:.drives) }
 #endif

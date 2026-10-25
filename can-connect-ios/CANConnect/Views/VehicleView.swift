@@ -21,7 +21,7 @@ struct VehicleView: View {
         VStack(alignment:.leading,spacing:17) {
             Text("Vehicle-specific health").font(.system(size:18))
             InfoNote(text:"Health data depends on this vehicle and a compatible diagnostic source. Identification alone does not provide fault codes or manufacturer-specific readings.")
-            AppButton(title:"Open Live",secondary:true) { store.selectedTab = .live }
+            AppButton(title:"Open Record",secondary:true) { store.selectedTab = .record }
             Spacer(minLength:0)
         }.padding(.top,12)
     }
@@ -67,7 +67,7 @@ struct VehicleView: View {
         }.padding(.horizontal,1).padding(.top,3)
     }
     private var engine: some View {
-        VStack(alignment:.leading,spacing:16) { Text("End of sample drive").font(.system(size:17)); VStack(spacing:0) { DataRow(label:"Coolant temperature",value:"89 °C"); DataRow(label:"Engine speed",value:"812 rpm"); DataRow(label:"Intake air temperature",value:"24 °C"); DataRow(label:"Control module voltage",value:"13.9 V") }; InfoNote(text:"These are sample recorded readings. Open Live to use the current source.",icon:"clock"); AppButton(title:"Open Live",secondary:true) { store.selectedTab = .live }; Spacer(minLength:0) }.padding(.horizontal,1).padding(.top,10)
+        VStack(alignment:.leading,spacing:16) { Text("End of sample drive").font(.system(size:17)); VStack(spacing:0) { DataRow(label:"Coolant temperature",value:"89 °C"); DataRow(label:"Engine speed",value:"812 rpm"); DataRow(label:"Intake air temperature",value:"24 °C"); DataRow(label:"Control module voltage",value:"13.9 V") }; InfoNote(text:"These are sample recorded readings. Open Record to use the current source.",icon:"clock"); AppButton(title:"Open Record",secondary:true) { store.selectedTab = .record }; Spacer(minLength:0) }.padding(.horizontal,1).padding(.top,10)
     }
     private var dpf: some View { RegenSummaryView() }
     private var logbook: some View {
@@ -117,5 +117,5 @@ struct FuelHistory: View {
 }
 
 #if DEBUG
-#Preview("Vehicle · Sample data") { DriveLineCanvas(tab:.vehicle) }
+#Preview("Vehicle data · Sample data") { DriveLineCanvas(tab:.more) }
 #endif

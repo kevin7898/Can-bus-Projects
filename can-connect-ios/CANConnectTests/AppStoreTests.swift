@@ -3,6 +3,16 @@ import XCTest
 
 final class AppStoreTests: XCTestCase {
     @MainActor
+    func testRecordingDeepLinkSelectsRecordDestination() throws {
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let store=AppStore(disk:LocalStore(url:directory.appendingPathComponent("state.json")))
+        store.selectedTab = .today
+        store.openDeepLink(try XCTUnwrap(URL(string:"canconnect://recording")))
+        XCTAssertEqual(store.selectedTab,.record)
+    }
+
+    @MainActor
     func testImportIsIdempotentAndPersists() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:directory) }

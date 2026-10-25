@@ -10,13 +10,15 @@ struct ConnectView: View {
     @State private var recorderInfo = false
     @State private var serverSetup = false
     @State private var queue = false
+    @State private var vehicleData = false
     var body: some View {
-        VStack(spacing:12) { PageControl(labels:["Devices","Transfers"],selection:$page)
-            TabView(selection:$page) { devices.tag(0); transfers.tag(1) }.tabViewStyle(.page(indexDisplayMode:.never))
+        VStack(spacing:12) { PageControl(labels:["Connections","Transfers","Settings"],selection:$page)
+            TabView(selection:$page) { devices.tag(0); transfers.tag(1); settings.tag(2) }.tabViewStyle(.page(indexDisplayMode:.never))
         }
         .sheet(isPresented:$recorderInfo) { ScannerConnectionView() }
         .sheet(isPresented:$serverSetup) { ServerConnectionView() }
         .sheet(isPresented:$queue) { TransferQueueView() }
+        .sheet(isPresented:$vehicleData) { SheetShell(title:"Vehicle data and fuel") { VehicleView(page:$store.vehiclePage).frame(minHeight:620) } }
         .fileImporter(isPresented:$importing,allowedContentTypes:[.json]) { importRecording($0,store:store) }
         .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-recordings") { result in if case .failure(let error) = result { store.error = error.localizedDescription } }
     }
@@ -27,7 +29,7 @@ struct ConnectView: View {
             Button { serverSetup = true } label: { device("Mac mini M4",subtitle:store.serverStatus,icon:"desktopcomputer",status:"Set up",color:Palette.muted) }.buttonStyle(.plain)
             InfoNote(text:"Record GPS or connect an OBDLink MX+ or Wi-Fi ELM327 scanner. Pair your private Mac server to transfer saved recordings.")
             Spacer(minLength:0)
-            AppButton(title:"Use iPhone GPS",icon:"location",secondary:true) { if !store.recording { store.source = .phoneGPS }; store.selectedTab = .live }
+            AppButton(title:"Use iPhone GPS",icon:"location",secondary:true) { if !store.recording { store.source = .phoneGPS }; store.selectedTab = .record }
         }.padding(.horizontal,1).padding(.top,10)
     }
     private func device(_ title: String, subtitle: String, icon: String, status: String, color: Color) -> some View {
@@ -48,6 +50,21 @@ struct ConnectView: View {
             AppButton(title:"Export all recordings",icon:"square.and.arrow.up") { do { document = JSONDocument(data:try store.archive(store.state.trips).encoded()); exporting = true } catch { store.error = error.localizedDescription } }
         }.padding(.horizontal,1).padding(.top,10)
     }
+    private var settings:some View {
+        ScrollView {
+            VStack(alignment:.leading,spacing:16) {
+                VStack(alignment:.leading,spacing:10) { Text("Appearance").font(.system(size:16,weight:.semibold));AppearancePreferencePicker();Text("System follows this iPhone. Light and Dark remain fixed until changed here.").captionStyle() }.card()
+                Button { store.selectedTab = .garage } label:{ settingRow("Manage vehicles",detail:"Select, add, and review vehicle profiles",icon:"car.2") }.buttonStyle(.plain).accessibilityIdentifier("more.garage")
+                Button { vehicleData=true } label:{ settingRow("Vehicle data and fuel",detail:"Fuel logbook, recorded signals, and DPF history",icon:"gauge.with.dots.needle.50percent") }.buttonStyle(.plain).accessibilityIdentifier("more.vehicle-data")
+                Button { serverSetup=true } label:{ settingRow("Mac server pairing",detail:store.serverStatus,icon:"desktopcomputer") }.buttonStyle(.plain).accessibilityIdentifier("more.server")
+                Button { queue=true } label:{ settingRow("Transfer queue",detail:"\(store.state.transfers.count) queued or completed items",icon:"arrow.up.arrow.down") }.buttonStyle(.plain).accessibilityIdentifier("more.transfer-queue")
+                InfoNote(text:"Connections and Transfers remain available above. Originals stay on this iPhone until a Mac processing receipt is confirmed.")
+            }.padding(.horizontal,1).padding(.top,4)
+        }
+    }
+    private func settingRow(_ title:String,detail:String,icon:String)->some View {
+        HStack(spacing:13) { Image(systemName:icon).font(.system(size:21)).foregroundStyle(Palette.cobalt).frame(width:28);VStack(alignment:.leading,spacing:5) { Text(title).font(.system(size:15,weight:.semibold));Text(detail).captionStyle().multilineTextAlignment(.leading) };Spacer();Image(systemName:"chevron.right").foregroundStyle(Palette.tertiaryText) }.foregroundStyle(Palette.primaryText).card()
+    }
 }
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
@@ -57,6 +74,7 @@ struct SettingsView: View {
         Eyebrow(text:"iOS companion · Native v1.0")
         Text("The design is locked.").font(.title2)
         InfoNote(text:"Five tabs. Pages within each tab. Independent signal cards. Local recordings and fill-ups.")
+        AppearancePreferencePicker()
         AppButton(title:"Manage vehicles",icon:"car.2",secondary:true) { garage = true }
         DataRow(label:"GPS recording",value:"Available")
         DataRow(label:"Live vehicle data",value:store.scanner.connected ? store.scannerTitle : "GPS / sample / OBD")
@@ -70,5 +88,5 @@ struct SettingsView: View {
 }
 
 #if DEBUG
-#Preview("Connect · Sample data") { DriveLineCanvas(tab:.connect) }
+#Preview("More · Sample data") { DriveLineCanvas(tab:.more) }
 #endif

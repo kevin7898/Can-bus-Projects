@@ -45,7 +45,7 @@ struct ScannerConnectionView: View {
                     guard let item = accessories.items.first(where:{$0.id == selectedAccessoryID}) else { throw AppFailure("Pair and choose your OBDLink MX+, then connect.") }
                     settings = ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:item.serial)
                 }
-                try store.connectScanner(settings:settings); store.selectedTab = .live; dismiss()
+                try store.connectScanner(settings:settings); store.selectedTab = .record; dismiss()
             } catch { failure = error.localizedDescription }
         }.disabled(store.recording || store.pendingGPS)
         if store.scanner.connected || store.scanner.connecting {
