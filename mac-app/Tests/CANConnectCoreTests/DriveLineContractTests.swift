@@ -3,6 +3,28 @@ import DriveLineShared
 @testable import CANConnectCore
 
 final class DriveLineContractTests:XCTestCase {
+    func testMacTodayUsesOnlyRealSelectedVehicleDataAndKeepsMissingFuelUnavailable() throws {
+        var calendar=Calendar(identifier:.gregorian);calendar.timeZone=try XCTUnwrap(TimeZone(secondsFromGMT:0))
+        let now=try XCTUnwrap(ISO8601DateFormatter().date(from:"2026-10-25T18:00:00Z"))
+        let vehicle=Vehicle(name:"Real Jetta"), other=Vehicle(name:"Other")
+        let real=Trip(vehicleID:vehicle.id,name:"Real",source:"GPS",samples:[],isDemo:false,
+                      recordedStartedAt:now.addingTimeInterval(-1200),recordedEndedAt:now,recordedDistanceKm:20,tripFuelLitres:nil)
+        let demo=Trip(vehicleID:vehicle.id,name:"Demo",source:"Synthetic",samples:[],isDemo:true,
+                      recordedStartedAt:now.addingTimeInterval(-60),recordedEndedAt:now,recordedDistanceKm:999,tripFuelLitres:99)
+        let foreign=Trip(vehicleID:other.id,name:"Other",source:"GPS",samples:[],recordedStartedAt:now,recordedEndedAt:now,recordedDistanceKm:500)
+        let fill=FuelEntry(vehicleID:vehicle.id,date:now,litresPurchased:42,totalCost:70,odometerKm:200_000,isFullFill:true)
+        let demoFill=FuelEntry(vehicleID:vehicle.id,date:now.addingTimeInterval(1),litresPurchased:100,totalCost:0,odometerKm:1,isFullFill:true,isDemo:true)
+        var state=LibraryState();state.vehicles=[vehicle,other];state.selectedVehicleID=vehicle.id;state.trips=[demo,foreign,real];state.fuelEntries=[demoFill,fill]
+
+        let value=MacTodayPresentation.make(state:state,now:now,calendar:calendar)
+
+        XCTAssertEqual(value.todayTrips.map(\.id),[real.id])
+        XCTAssertEqual(value.todayDistanceKm,20)
+        XCTAssertNil(value.todayFuelLitres,"Missing measured trip fuel must not render as zero")
+        XCTAssertEqual(value.latestTrip?.id,real.id)
+        XCTAssertEqual(value.latestFill?.id,fill.id)
+    }
+
     private func fixture(_ name:String) throws -> Data {
         let root=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return try Data(contentsOf:root.appendingPathComponent("shared/DriveLineShared/Tests/DriveLineSharedTests/Fixtures/\(name).json"))

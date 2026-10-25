@@ -62,7 +62,7 @@ struct RootView:View {
     }
     @ViewBuilder var destination:some View {
         switch store.page {
-        case .today: OverviewView()
+        case .today: DriveLedgerTodayView()
         case .drives: DrivesDestinationView()
         case .fuel: FuelDestinationView()
         case .signals: SignalsView()
