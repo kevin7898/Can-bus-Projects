@@ -27,7 +27,22 @@ struct CANConnectApp: App {
                     RoutePoint(latitude:coordinate[0],longitude:coordinate[1],timestamp:start.addingTimeInterval(Double(index)*20),accuracy:5,speed:18)
                 }
                 let samples=(0..<route.count).map { index in
-                    OBDSample(timestamp:route[index].timestamp,signals:["speedKph":72+Double(index),"rpm":1_600+Double(index*25),"coolantC":86+Double(index)/4,"fuelRateLph":4.2,"boostAbsoluteKpa":132+Double(index),"barometricKpa":101,"dpfRegenTrigger":Double(index*7)],command:"FIXTURE",reply:"Sanitized Phase 4 observation \(index)")
+                    let indexValue=Double(index)
+                    let signals:[String:Double]=[
+                        "speedKph":72+indexValue,
+                        "rpm":1_600+Double(index*25),
+                        "coolantC":86+indexValue/4,
+                        "fuelRateLph":4.2,
+                        "boostAbsoluteKpa":132+indexValue,
+                        "barometricKpa":101,
+                        "dpfRegenTrigger":indexValue*7,
+                    ]
+                    return OBDSample(
+                        timestamp:route[index].timestamp,
+                        signals:signals,
+                        command:"FIXTURE",
+                        reply:"Sanitized Phase 4 observation \(index)"
+                    )
                 }
                 let trip=Trip(vehicleID:vehicle.id,name:"Sanitized sample journey",startedAt:start,duration:Double(max(1,route.count-1))*20,distanceKM:4.8,source:.demo,isSample:true,economy:8.75,fuelLitres:0.42,route:route,samples:samples)
                 let first=FuelEntry(vehicleID:vehicle.id,date:start.addingTimeInterval(-20*86_400),litres:36,costCAD:61.20,odometerKM:216_000,full:true,isSample:true,stationName:"Sample station")
