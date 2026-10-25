@@ -180,9 +180,9 @@ Live Activity checks requiring physical lock-screen or Dynamic Island surfaces.
 
 ## CI
 
-The iOS companion and CAN CONNECT Mac workflows are run from the pushed Phase 4
-tip. Their exact run identifiers and conclusions are reported with the final
-commit.
+The pushed Phase 4 branch triggers the iOS companion and CAN CONNECT Mac
+workflows. Their exact run identifiers and conclusions are reported with the
+final commit.
 
 ## Remaining hardware validation
 
