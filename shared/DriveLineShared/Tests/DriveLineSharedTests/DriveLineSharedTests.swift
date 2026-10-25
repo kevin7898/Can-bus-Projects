@@ -287,4 +287,109 @@ final class DriveLineSharedTests: XCTestCase {
         let lowercase=DriveLineFuelEntry(vehicleID:vehicle.id,date:Date(timeIntervalSince1970:100),litresPurchased:1,totalCost:1,currencyCode:"cad",odometerKm:1,isFullFill:true)
         XCTAssertNoThrow(try DriveLineArchive(producer:producer,sources:[],vehicles:[vehicle],recordings:[],fuelEntries:[lowercase]).encoded())
     }
+
+    func testPhase6RegistrySearchGroupingAliasesSourcesUnitsAndUnknownSignals() {
+        let start=Date(timeIntervalSince1970:1_700_000_000)
+        let recording=DriveLineRecording(recordingID:UUID(),vehicleID:UUID(),name:"Signals",startedAt:start,
+            endedAt:start.addingTimeInterval(20),sourceIDs:["scanner-a"],signalSamples:[
+                DriveLineSignalSample(timestamp:start,values:["rpm":1_500,"vendor.7e8.mystery":12],sourceID:"scanner-a"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(10),values:["rpm":1_600,"dpfRegenTrigger":42],sourceID:"scanner-a")
+            ])
+        XCTAssertEqual(DriveLineJourneyPolicy.signalDescriptors(recording:recording,query:"tachometer").map(\.key),["rpm"])
+        XCTAssertTrue(DriveLineJourneyPolicy.signalDescriptors(recording:recording,query:"scanner-a").contains(where:{$0.key == "vendor.7e8.mystery"}))
+        XCTAssertTrue(DriveLineJourneyPolicy.signalDescriptors(recording:recording,query:"rpm").contains(where:{$0.key == "rpm"}))
+        let unknown=DriveLineJourneyPolicy.signalDescriptor("vendor.7e8.mystery",recording:recording)
+        XCTAssertEqual(unknown.displayName,"vendor.7e8.mystery")
+        XCTAssertEqual(unknown.group,.otherUnknown)
+        XCTAssertNil(unknown.unit)
+        XCTAssertFalse(unknown.metadataAvailable)
+        XCTAssertEqual(DriveLineJourneyPolicy.signalDescriptor("dpfRegenTrigger",recording:recording).displayName,"DPF regeneration trigger · normalized")
+    }
+
+    func testPhase6VisibleRangeStatisticsUseOnlyFiniteRecordedObservations() {
+        let start=Date(timeIntervalSince1970:1_700_000_000)
+        let recording=DriveLineRecording(recordingID:UUID(),vehicleID:UUID(),name:"Irregular",startedAt:start,
+            endedAt:start.addingTimeInterval(100),sourceIDs:["obd"],signalSamples:[
+                DriveLineSignalSample(timestamp:start,values:["rpm":1_000],sourceID:"obd"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(3),values:["rpm":2_000],sourceID:"obd"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(9),values:["rpm":Double.nan],sourceID:"obd"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(40),values:["rpm":4_000],sourceID:"obd"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(100),values:["rpm":8_000],sourceID:"obd")
+            ])
+        let series=DriveLineJourneyPolicy.signalSeries("rpm",unit:"rpm",recording:recording)
+        XCTAssertEqual(series.segments.count,3,"Long gaps must remain separate segments")
+        let range=DateInterval(start:start,end:start.addingTimeInterval(40))
+        let stats=DriveLineJourneyPolicy.signalStatistics(series,at:start.addingTimeInterval(40),visibleRange:range)
+        XCTAssertEqual(stats.observationCount,3)
+        XCTAssertEqual(stats.minimum,1_000)
+        XCTAssertEqual(stats.maximum,4_000)
+        XCTAssertEqual(try XCTUnwrap(stats.recordedObservationAverage),7_000.0/3.0,accuracy:0.000_001)
+        XCTAssertEqual(stats.current?.value,4_000)
+        XCTAssertEqual(stats.freshness,.fresh)
+        XCTAssertEqual(DriveLineJourneyPolicy.signalStatistics(series,at:start.addingTimeInterval(70),visibleRange:range).freshness,.stale)
+    }
+
+    func testPhase6SharedCursorSynchronizesSignalAndRecordedRouteWithoutForwardFill() {
+        let start=Date(timeIntervalSince1970:1_700_000_000)
+        let gps=[0.0,10.0,20.0].map { DriveLineGPSPoint(timestamp:start.addingTimeInterval($0),latitude:49+$0*0.00001,longitude:-124,horizontalAccuracyM:4,speedMps:10,sourceID:"gps") }
+        let samples=[0.0,10.0,40.0].map { DriveLineSignalSample(timestamp:start.addingTimeInterval($0),values:["rpm":1_500+$0],sourceID:"obd") }
+        let recording=DriveLineRecording(recordingID:UUID(),vehicleID:UUID(),name:"Cursor",startedAt:start,
+            endedAt:start.addingTimeInterval(40),sourceIDs:["gps","obd"],gpsPoints:gps,signalSamples:samples)
+        let atTen=DriveLineJourneyPolicy.cursor(at:start.addingTimeInterval(10),recording:recording,signalKeys:["rpm","gps.speedKph"])
+        XCTAssertEqual(atTen.gpsPoint?.timestamp,start.addingTimeInterval(10))
+        XCTAssertEqual(atTen.observations["rpm"]?.timestamp,atTen.gpsPoint?.timestamp)
+        XCTAssertEqual(atTen.observations["gps.speedKph"]?.value,36)
+        let inGap=DriveLineJourneyPolicy.cursor(at:start.addingTimeInterval(25),recording:recording,signalKeys:["rpm"])
+        XCTAssertNil(inGap.observations["rpm"])
+        XCTAssertEqual(inGap.gpsPoint?.timestamp,start.addingTimeInterval(20))
+    }
+
+    func testPhase6ElapsedAndDistanceAlignmentUseRecordedRouteProgressOnly() throws {
+        let start=Date(timeIntervalSince1970:1_700_000_000),vehicleID=UUID()
+        let gps=[0.0,10.0,20.0,30.0,40.0].map { seconds in
+            DriveLineGPSPoint(timestamp:start.addingTimeInterval(seconds),latitude:49+seconds*0.00001,longitude:-124,horizontalAccuracyM:4,speedMps:10)
+        }
+        let samples=[0.0,10.0,20.0,30.0,40.0].map { DriveLineSignalSample(timestamp:start.addingTimeInterval($0),values:["rpm":1_500+$0]) }
+        let mixed=DriveLineRecording(recordingID:UUID(),vehicleID:vehicleID,name:"Mixed",startedAt:start,
+            endedAt:start.addingTimeInterval(40),sourceIDs:["gps","obd"],gpsPoints:gps,signalSamples:samples)
+        XCTAssertTrue(DriveLineJourneyPolicy.distanceAlignmentAvailability(mixed).isAvailable)
+        XCTAssertEqual(DriveLineJourneyPolicy.alignmentExtent(mixed,alignment:.elapsedTime),0...40)
+        let distance=try XCTUnwrap(DriveLineJourneyPolicy.alignmentExtent(mixed,alignment:.travelledDistance))
+        XCTAssertGreaterThan(distance.upperBound,0)
+        let series=DriveLineJourneyPolicy.signalSeries("rpm",unit:"rpm",recording:mixed)
+        let aligned=DriveLineJourneyPolicy.alignedSegments(series,recording:mixed,alignment:.travelledDistance).flatMap{$0}
+        XCTAssertEqual(aligned.count,5)
+        let position=try XCTUnwrap(DriveLineJourneyPolicy.position(at:start.addingTimeInterval(20),recording:mixed,alignment:.travelledDistance))
+        XCTAssertEqual(DriveLineJourneyPolicy.timestamp(at:position,recording:mixed,alignment:.travelledDistance),start.addingTimeInterval(20))
+
+        let obdOnly=DriveLineRecording(recordingID:UUID(),vehicleID:vehicleID,name:"OBD",startedAt:start,
+            endedAt:start.addingTimeInterval(40),sourceIDs:["obd"],signalSamples:samples)
+        XCTAssertFalse(DriveLineJourneyPolicy.distanceAlignmentAvailability(obdOnly).isAvailable)
+        XCTAssertTrue(DriveLineJourneyPolicy.distanceAlignmentAvailability(obdOnly).explanation.contains("no GPS"))
+        var sparse=mixed;sparse.recordingID=UUID();sparse.gpsPoints=[gps[0],gps[1]]
+        XCTAssertFalse(DriveLineJourneyPolicy.distanceAlignmentAvailability(sparse).isAvailable)
+        XCTAssertTrue(DriveLineJourneyPolicy.distanceAlignmentAvailability(sparse).explanation.contains("50%"))
+    }
+
+    func testPhase6BoostFreshnessDPFLanguageAndComparisonIdentity() throws {
+        let start=Date(timeIntervalSince1970:1_700_000_000),vehicleID=UUID()
+        let first=DriveLineRecording(recordingID:UUID(),vehicleID:vehicleID,name:"First",startedAt:start,
+            endedAt:start.addingTimeInterval(120),sourceIDs:["obd"],signalSamples:[
+                DriveLineSignalSample(timestamp:start,values:["barometricKpa":100],sourceID:"barometer"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(70),values:["boostAbsoluteKpa":135,"dpfRegenTrigger":60],sourceID:"obd"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(80),values:["boostAbsoluteKpa":140],sourceID:"obd")
+            ])
+        let boost=DriveLineJourneyPolicy.signalSeries("boostKpa",unit:"kPa gauge",recording:first)
+        XCTAssertEqual(boost.algorithmIdentifier,"driveline.boost-gauge.v1")
+        XCTAssertEqual(boost.algorithmVersion,"1")
+        XCTAssertEqual(boost.segments.flatMap{$0}.map(\.value),[35],"A barometer older than 75 seconds must not derive boost")
+        XCTAssertTrue(DriveLineMetricPolicy.dpfRegenTriggerExplanation.contains("not physical DPF fullness"))
+
+        var shorter=first;shorter.recordingID=UUID();shorter.name="Shorter";shorter.endedAt=start.addingTimeInterval(60);shorter.signalSamples=[]
+        XCTAssertNil(DriveLineJourneyPolicy.comparisonIneligibility(primary:first,candidate:shorter))
+        XCTAssertNotEqual(DriveLineJourneyPolicy.alignmentExtent(first,alignment:.elapsedTime),DriveLineJourneyPolicy.alignmentExtent(shorter,alignment:.elapsedTime))
+        XCTAssertTrue(DriveLineJourneyPolicy.signalSeries("rpm",unit:"rpm",recording:shorter).segments.isEmpty)
+        var other=shorter;other.recordingID=UUID();other.vehicleID=UUID()
+        XCTAssertTrue(DriveLineJourneyPolicy.comparisonIneligibility(primary:first,candidate:other)?.contains("same vehicle") == true)
+    }
 }

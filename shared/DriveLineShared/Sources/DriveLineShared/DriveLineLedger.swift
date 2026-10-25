@@ -119,18 +119,149 @@ public struct DriveLineSignalSeries: Equatable, Sendable {
     public var unit: String
     public var provenance: DriveLineSignalProvenance
     public var algorithmIdentifier: String?
+    public var algorithmVersion: String?
     public var segments: [[DriveLineSignalPoint]]
     public var coverage: DriveLineCoverageSummary?
 
     public init(key: String, unit: String, provenance: DriveLineSignalProvenance,
-                algorithmIdentifier: String? = nil, segments: [[DriveLineSignalPoint]],
+                algorithmIdentifier: String? = nil, algorithmVersion: String? = nil,
+                segments: [[DriveLineSignalPoint]],
                 coverage: DriveLineCoverageSummary?) {
         self.key = key
         self.unit = unit
         self.provenance = provenance
         self.algorithmIdentifier = algorithmIdentifier
+        self.algorithmVersion = algorithmVersion
         self.segments = segments
         self.coverage = coverage
+    }
+}
+
+public enum DriveLineSignalGroup: String, CaseIterable, Codable, Identifiable, Sendable {
+    case driving
+    case engine
+    case temperatures
+    case fuelEconomy
+    case pressureBoost
+    case emissionsDPF
+    case transmission
+    case electrical
+    case gpsMotion
+    case rawDiagnostic
+    case otherUnknown
+
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .driving: return "Driving"
+        case .engine: return "Engine"
+        case .temperatures: return "Temperatures"
+        case .fuelEconomy: return "Fuel and economy"
+        case .pressureBoost: return "Pressure and boost"
+        case .emissionsDPF: return "Emissions and DPF"
+        case .transmission: return "Transmission"
+        case .electrical: return "Electrical"
+        case .gpsMotion: return "GPS and motion"
+        case .rawDiagnostic: return "Raw/diagnostic"
+        case .otherUnknown: return "Other or unknown"
+        }
+    }
+}
+
+public struct DriveLineSignalDescriptor: Equatable, Identifiable, Sendable {
+    public var id: String { key }
+    public var key: String
+    public var displayName: String
+    public var unit: String?
+    public var aliases: [String]
+    public var group: DriveLineSignalGroup
+    public var provenance: DriveLineSignalProvenance
+    public var algorithmIdentifier: String?
+    public var algorithmVersion: String?
+    public var sourceIDs: [String]
+    public var metadataAvailable: Bool
+
+    public init(key: String, displayName: String, unit: String?, aliases: [String],
+                group: DriveLineSignalGroup, provenance: DriveLineSignalProvenance = .measured,
+                algorithmIdentifier: String? = nil, algorithmVersion: String? = nil,
+                sourceIDs: [String] = [], metadataAvailable: Bool = true) {
+        self.key = key
+        self.displayName = displayName
+        self.unit = unit
+        self.aliases = aliases
+        self.group = group
+        self.provenance = provenance
+        self.algorithmIdentifier = algorithmIdentifier
+        self.algorithmVersion = algorithmVersion
+        self.sourceIDs = sourceIDs
+        self.metadataAvailable = metadataAvailable
+    }
+}
+
+public enum DriveLineSignalFreshness: String, Codable, Sendable {
+    case fresh
+    case stale
+    case unavailable
+
+    public var title: String {
+        switch self {
+        case .fresh: return "Fresh at cursor"
+        case .stale: return "Stale at cursor"
+        case .unavailable: return "Unavailable at cursor"
+        }
+    }
+}
+
+public struct DriveLineSignalStatistics: Equatable, Sendable {
+    public var current: DriveLineSignalPoint?
+    public var freshness: DriveLineSignalFreshness
+    public var minimum: Double?
+    public var maximum: Double?
+    public var recordedObservationAverage: Double?
+    public var observationCount: Int
+    public var latestObservation: Date?
+    public var sourceIDs: [String]
+
+    public init(current: DriveLineSignalPoint?, freshness: DriveLineSignalFreshness,
+                minimum: Double?, maximum: Double?, recordedObservationAverage: Double?,
+                observationCount: Int, latestObservation: Date?, sourceIDs: [String]) {
+        self.current = current
+        self.freshness = freshness
+        self.minimum = minimum
+        self.maximum = maximum
+        self.recordedObservationAverage = recordedObservationAverage
+        self.observationCount = observationCount
+        self.latestObservation = latestObservation
+        self.sourceIDs = sourceIDs
+    }
+}
+
+public enum DriveLineSignalAlignment: String, CaseIterable, Codable, Identifiable, Sendable {
+    case elapsedTime
+    case travelledDistance
+
+    public var id: String { rawValue }
+    public var title: String { self == .elapsedTime ? "Elapsed time" : "Travelled distance" }
+}
+
+public struct DriveLineAlignmentAvailability: Equatable, Sendable {
+    public var isAvailable: Bool
+    public var explanation: String
+
+    public init(isAvailable: Bool, explanation: String) {
+        self.isAvailable = isAvailable
+        self.explanation = explanation
+    }
+}
+
+public struct DriveLineAlignedSignalPoint: Equatable, Identifiable, Sendable {
+    public var id: String { "\(point.id)-\(position)" }
+    public var position: Double
+    public var point: DriveLineSignalPoint
+
+    public init(position: Double, point: DriveLineSignalPoint) {
+        self.position = position
+        self.point = point
     }
 }
 
@@ -184,6 +315,205 @@ public enum DriveLineJourneyPolicy {
     /// Identifies deterministic Phase 4 evidence derivations without changing preserved recordings.
     public static let algorithmIdentifier = "driveline.evidence"
     public static let algorithmVersion = "1"
+    public static let boostAlgorithmIdentifier = "driveline.boost-gauge.v1"
+    public static let boostAlgorithmVersion = "1"
+    public static let requiredDistanceAlignmentCoverage = 0.5
+
+    private static let knownSignals: [String: DriveLineSignalDescriptor] = {
+        let values: [DriveLineSignalDescriptor] = [
+            .init(key:"speedKph",displayName:"Vehicle speed",unit:"km/h",aliases:["speed","road speed"],group:.driving),
+            .init(key:"rpm",displayName:"Engine speed",unit:"rpm",aliases:["revolutions","tachometer"],group:.engine),
+            .init(key:"engineLoad",displayName:"Engine load",unit:"%",aliases:["load"],group:.engine),
+            .init(key:"mafGps",displayName:"Mass airflow",unit:"g/s",aliases:["MAF","air flow"],group:.engine),
+            .init(key:"coolantC",displayName:"Coolant temperature",unit:"°C",aliases:["coolant"],group:.temperatures),
+            .init(key:"intakeC",displayName:"Intake temperature",unit:"°C",aliases:["IAT"],group:.temperatures),
+            .init(key:"oilC",displayName:"Oil temperature",unit:"°C",aliases:["engine oil"],group:.temperatures),
+            .init(key:"outsideC",displayName:"Outside temperature",unit:"°C",aliases:["ambient temperature"],group:.temperatures),
+            .init(key:"egt1C",displayName:"Exhaust temperature 1",unit:"°C",aliases:["EGT 1"],group:.temperatures),
+            .init(key:"egt2C",displayName:"Exhaust temperature 2",unit:"°C",aliases:["EGT 2"],group:.temperatures),
+            .init(key:"egt3C",displayName:"Exhaust temperature 3",unit:"°C",aliases:["EGT 3"],group:.temperatures),
+            .init(key:"egt4C",displayName:"Exhaust temperature 4",unit:"°C",aliases:["EGT 4"],group:.temperatures),
+            .init(key:"fuelRateLph",displayName:"Fuel rate",unit:"L/h",aliases:["fuel flow"],group:.fuelEconomy),
+            .init(key:"fuelPercent",displayName:"Fuel level",unit:"%",aliases:["tank level"],group:.fuelEconomy),
+            .init(key:"boostKpa",displayName:"Gauge boost",unit:"kPa gauge",aliases:["boost","relative boost"],group:.pressureBoost,
+                  provenance:.derived,algorithmIdentifier:boostAlgorithmIdentifier,algorithmVersion:boostAlgorithmVersion),
+            .init(key:"mapKpa",displayName:"Manifold absolute pressure",unit:"kPa absolute",aliases:["MAP"],group:.pressureBoost),
+            .init(key:"barometricKpa",displayName:"Barometric pressure",unit:"kPa absolute",aliases:["BARO","ambient pressure"],group:.pressureBoost),
+            .init(key:"boostAbsoluteKpa",displayName:"Boost pressure A",unit:"kPa absolute",aliases:["absolute boost"],group:.pressureBoost),
+            .init(key:"boostCommandedKpa",displayName:"Commanded boost A",unit:"kPa absolute",aliases:["requested boost"],group:.pressureBoost),
+            .init(key:"boostBAbsoluteKpa",displayName:"Boost pressure B",unit:"kPa absolute",aliases:["absolute boost B"],group:.pressureBoost),
+            .init(key:"boostBCommandedKpa",displayName:"Commanded boost B",unit:"kPa absolute",aliases:["requested boost B"],group:.pressureBoost),
+            .init(key:"dpfDifferentialKpa",displayName:"DPF differential pressure",unit:"kPa",aliases:["DPF delta pressure"],group:.emissionsDPF),
+            .init(key:"dpfInletKpa",displayName:"DPF inlet pressure",unit:"kPa",aliases:[],group:.emissionsDPF),
+            .init(key:"dpfOutletKpa",displayName:"DPF outlet pressure",unit:"kPa",aliases:[],group:.emissionsDPF),
+            .init(key:"dpfRegenActive",displayName:"DPF regeneration active",unit:"state",aliases:["regen active"],group:.emissionsDPF),
+            .init(key:"dpfRegenType",displayName:"DPF regeneration type",unit:"state",aliases:["regen type"],group:.emissionsDPF),
+            .init(key:"dpfRegenTrigger",displayName:"DPF regeneration trigger · normalized",unit:"%",aliases:["regen trigger","ECU trigger"],group:.emissionsDPF),
+            .init(key:"dpfAverageRegenMinutes",displayName:"Average regeneration interval",unit:"min",aliases:[],group:.emissionsDPF),
+            .init(key:"dpfAverageRegenKM",displayName:"Average regeneration distance",unit:"km",aliases:[],group:.emissionsDPF),
+            .init(key:"dpfAshML",displayName:"DPF ash volume",unit:"mL",aliases:["ash volume"],group:.emissionsDPF),
+            .init(key:"dpfSootG",displayName:"DPF soot mass",unit:"g",aliases:["soot mass"],group:.emissionsDPF),
+            .init(key:"dsgFluidC",displayName:"DSG fluid temperature",unit:"°C",aliases:["transmission temperature"],group:.transmission),
+            .init(key:"voltage",displayName:"Battery voltage",unit:"V",aliases:["system voltage"],group:.electrical),
+            .init(key:"gps.speedKph",displayName:"GPS speed",unit:"km/h",aliases:["location speed"],group:.gpsMotion),
+            .init(key:"gps.horizontalAccuracyM",displayName:"GPS horizontal accuracy",unit:"m",aliases:["location accuracy"],group:.gpsMotion)
+        ]
+        return Dictionary(uniqueKeysWithValues: values.map { ($0.key, $0) })
+    }()
+
+    public static func signalDescriptor(_ key: String, recording: DriveLineRecording) -> DriveLineSignalDescriptor {
+        let sourceIDs = sourceIDs(for:key,recording:recording)
+        if var known = knownSignals[key] {
+            known.sourceIDs = sourceIDs
+            return known
+        }
+        return DriveLineSignalDescriptor(key:key,displayName:key,unit:nil,aliases:[],group:.otherUnknown,
+                                         sourceIDs:sourceIDs,metadataAvailable:false)
+    }
+
+    public static func signalDescriptors(recording: DriveLineRecording, query: String = "",
+                                         includeUnobservedKnown: Bool = false) -> [DriveLineSignalDescriptor] {
+        var keys = Set(recording.signalSamples.flatMap { $0.values.keys })
+        if recording.gpsPoints.contains(where:{ $0.speedMps?.isFinite == true }) { keys.insert("gps.speedKph") }
+        if recording.gpsPoints.contains(where:{ $0.horizontalAccuracyM?.isFinite == true }) { keys.insert("gps.horizontalAccuracyM") }
+        if includeUnobservedKnown { keys.formUnion(knownSignals.keys) }
+        if !signalSeries("boostKpa",unit:knownSignals["boostKpa"]?.unit ?? "",recording:recording).segments.isEmpty {
+            keys.insert("boostKpa")
+        }
+        let needle = query.trimmingCharacters(in:.whitespacesAndNewlines).folding(options:[.caseInsensitive,.diacriticInsensitive],locale:.current)
+        return keys.map { signalDescriptor($0,recording:recording) }.filter { descriptor in
+            guard !needle.isEmpty else { return true }
+            let values = [descriptor.displayName,descriptor.key,descriptor.unit ?? ""] + descriptor.aliases + descriptor.sourceIDs
+            return values.contains { $0.folding(options:[.caseInsensitive,.diacriticInsensitive],locale:.current).contains(needle) }
+        }.sorted {
+            let left = DriveLineSignalGroup.allCases.firstIndex(of:$0.group) ?? .max
+            let right = DriveLineSignalGroup.allCases.firstIndex(of:$1.group) ?? .max
+            return left == right ? ($0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending) : left < right
+        }
+    }
+
+    public static func groupedSignalDescriptors(recording: DriveLineRecording, query: String = "",
+                                                includeUnobservedKnown: Bool = false) -> [(DriveLineSignalGroup,[DriveLineSignalDescriptor])] {
+        let grouped = Dictionary(grouping:signalDescriptors(recording:recording,query:query,
+                                                             includeUnobservedKnown:includeUnobservedKnown),by:\.group)
+        return DriveLineSignalGroup.allCases.compactMap { group in
+            guard let values=grouped[group],!values.isEmpty else { return nil }
+            return (group,values)
+        }
+    }
+
+    public static func signalStatistics(_ series: DriveLineSignalSeries, at cursor: Date,
+                                        visibleRange: DateInterval? = nil) -> DriveLineSignalStatistics {
+        let allPoints=series.segments.flatMap{$0}.filter{$0.value.isFinite}.sorted{$0.timestamp < $1.timestamp}
+        let points = allPoints.filter { point in
+            point.value.isFinite && (visibleRange.map { point.timestamp >= $0.start && point.timestamp <= $0.end } ?? true)
+        }.sorted { $0.timestamp < $1.timestamp }
+        var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineMetricPolicy.maximumSignalGap)
+        result.latestObservation=allPoints.last?.timestamp
+        result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
+        return result
+    }
+
+    public static func signalStatistics(_ series: DriveLineSignalSeries, recording: DriveLineRecording,
+                                        alignment: DriveLineSignalAlignment, visibleRange: ClosedRange<Double>,
+                                        at cursor: Date) -> DriveLineSignalStatistics {
+        let allPoints=series.segments.flatMap{$0}.filter{$0.value.isFinite}.sorted{$0.timestamp < $1.timestamp}
+        let points = alignedSegments(series,recording:recording,alignment:alignment).flatMap { $0 }
+            .filter { visibleRange.contains($0.position) }.map(\.point)
+        var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineMetricPolicy.maximumSignalGap)
+        result.latestObservation=allPoints.last?.timestamp
+        result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
+        return result
+    }
+
+    public static func distanceAlignmentAvailability(_ recording: DriveLineRecording) -> DriveLineAlignmentAvailability {
+        guard !recording.gpsPoints.isEmpty else {
+            return DriveLineAlignmentAvailability(isAvailable:false,
+                explanation:"Travelled-distance alignment is unavailable because this recording has no GPS observations.")
+        }
+        let progress = routeProgress(recording)
+        guard progress.count >= 2, (progress.last?.distanceKm ?? 0) > 0 else {
+            return DriveLineAlignmentAvailability(isAvailable:false,
+                explanation:"Travelled-distance alignment is unavailable because the recorded GPS points do not establish route progress.")
+        }
+        let coverage = DriveLineMetricPolicy.coverageSummaries(recording).first(where:{$0.key == "gps"})?.fraction ?? 0
+        guard coverage >= requiredDistanceAlignmentCoverage else {
+            return DriveLineAlignmentAvailability(isAvailable:false,
+                explanation:"Travelled-distance alignment needs at least 50% recorded GPS coverage; this recording has \(Int((coverage*100).rounded()))%.")
+        }
+        return DriveLineAlignmentAvailability(isAvailable:true,
+            explanation:"Aligned to cumulative progress from recorded GPS segments; gaps add no inferred distance.")
+    }
+
+    public static func alignmentExtent(_ recording: DriveLineRecording,
+                                       alignment: DriveLineSignalAlignment) -> ClosedRange<Double>? {
+        switch alignment {
+        case .elapsedTime:
+            return 0...max(0,recording.endedAt.timeIntervalSince(recording.startedAt))
+        case .travelledDistance:
+            guard distanceAlignmentAvailability(recording).isAvailable,
+                  let end=routeProgress(recording).last?.distanceKm else { return nil }
+            return 0...end
+        }
+    }
+
+    public static func alignedSegments(_ series: DriveLineSignalSeries, recording: DriveLineRecording,
+                                       alignment: DriveLineSignalAlignment) -> [[DriveLineAlignedSignalPoint]] {
+        switch alignment {
+        case .elapsedTime:
+            return series.segments.map { segment in
+                segment.map { DriveLineAlignedSignalPoint(position:max(0,$0.timestamp.timeIntervalSince(recording.startedAt)),point:$0) }
+            }.filter { !$0.isEmpty }
+        case .travelledDistance:
+            guard distanceAlignmentAvailability(recording).isAvailable else { return [] }
+            let progress=routeProgress(recording)
+            var output:[[DriveLineAlignedSignalPoint]]=[]
+            for signalSegment in series.segments {
+                var current:[DriveLineAlignedSignalPoint]=[]
+                for point in signalSegment {
+                    guard let nearest=progress.min(by:{abs($0.timestamp.timeIntervalSince(point.timestamp)) < abs($1.timestamp.timeIntervalSince(point.timestamp))}),
+                          abs(nearest.timestamp.timeIntervalSince(point.timestamp)) <= DriveLineMetricPolicy.maximumGPSGap else {
+                        if !current.isEmpty { output.append(current);current=[] }
+                        continue
+                    }
+                    current.append(DriveLineAlignedSignalPoint(position:nearest.distanceKm,point:point))
+                }
+                if !current.isEmpty { output.append(current) }
+            }
+            return output
+        }
+    }
+
+    public static func timestamp(at position: Double, recording: DriveLineRecording,
+                                 alignment: DriveLineSignalAlignment) -> Date? {
+        switch alignment {
+        case .elapsedTime:
+            guard let extent=alignmentExtent(recording,alignment:alignment) else { return nil }
+            return recording.startedAt.addingTimeInterval(min(max(position,extent.lowerBound),extent.upperBound))
+        case .travelledDistance:
+            guard distanceAlignmentAvailability(recording).isAvailable else { return nil }
+            return routeProgress(recording).min(by:{abs($0.distanceKm-position)<abs($1.distanceKm-position)})?.timestamp
+        }
+    }
+
+    public static func position(at timestamp: Date, recording: DriveLineRecording,
+                                alignment: DriveLineSignalAlignment) -> Double? {
+        switch alignment {
+        case .elapsedTime:
+            guard let extent=alignmentExtent(recording,alignment:alignment) else { return nil }
+            return min(max(timestamp.timeIntervalSince(recording.startedAt),extent.lowerBound),extent.upperBound)
+        case .travelledDistance:
+            guard distanceAlignmentAvailability(recording).isAvailable else { return nil }
+            return routeProgress(recording).min(by:{abs($0.timestamp.timeIntervalSince(timestamp)) < abs($1.timestamp.timeIntervalSince(timestamp))})?.distanceKm
+        }
+    }
+
+    public static func comparisonIneligibility(primary: DriveLineRecording,
+                                                candidate: DriveLineRecording) -> String? {
+        if primary.recordingID == candidate.recordingID { return "Choose another recording." }
+        if primary.vehicleID != candidate.vehicleID { return "Comparison is limited to recordings from the same vehicle." }
+        return nil
+    }
 
     public static func summary(for recording: DriveLineRecording,
                                sources: [DriveLineSourceDescriptor] = []) -> DriveLineJourneySummary {
@@ -249,11 +579,21 @@ public enum DriveLineJourneyPolicy {
                                     recording: DriveLineRecording) -> DriveLineSignalSeries {
         let provenance: DriveLineSignalProvenance = key == "boostKpa" ? .derived : .measured
         let points: [DriveLineSignalPoint]
-        if key == "boostKpa" {
+        if key == "gps.speedKph" {
+            points = recording.gpsPoints.compactMap { point in
+                guard let speed=point.speedMps,speed.isFinite else { return nil }
+                return DriveLineSignalPoint(timestamp:point.timestamp,value:speed*3.6,sourceID:point.sourceID)
+            }.sorted { $0.timestamp < $1.timestamp }
+        } else if key == "gps.horizontalAccuracyM" {
+            points = recording.gpsPoints.compactMap { point in
+                guard let accuracy=point.horizontalAccuracyM,accuracy.isFinite else { return nil }
+                return DriveLineSignalPoint(timestamp:point.timestamp,value:accuracy,sourceID:point.sourceID)
+            }.sorted { $0.timestamp < $1.timestamp }
+        } else if key == "boostKpa" {
             var observations: [String: DriveLineObservation] = [:]
             var result: [DriveLineSignalPoint] = []
             for sample in recording.signalSamples.sorted(by: { $0.timestamp < $1.timestamp }) {
-                for (sampleKey, value) in sample.values {
+                for (sampleKey, value) in sample.values where value.isFinite {
                     observations[sampleKey] = DriveLineObservation(key: sampleKey, value: value,
                         timestamp: sample.timestamp, sourceID: sample.sourceID, recordingID: recording.recordingID)
                 }
@@ -266,21 +606,24 @@ public enum DriveLineJourneyPolicy {
         } else {
             points = recording.signalSamples.compactMap { sample in
                 sample.values[key].flatMap { raw in
+                    guard raw.isFinite else { return nil }
                     let value=key == "dpfRegenTrigger" ? DriveLineMetricPolicy.normalizedDPFRegenTrigger(raw):raw
                     return value.map { DriveLineSignalPoint(timestamp:sample.timestamp,value:$0,sourceID:sample.sourceID) }
                 }
             }.sorted { $0.timestamp < $1.timestamp }
         }
-        let derivedCoverage:DriveLineCoverageSummary? = provenance == .derived ? DriveLineCoverageSummary(
-            key:key,observedSeconds:observedSeconds(points.map(\.timestamp),maximumGap:DriveLineMetricPolicy.maximumSignalGap),
+        let maximumGap = key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap : DriveLineMetricPolicy.maximumSignalGap
+        let calculatedCoverage:DriveLineCoverageSummary? = (provenance == .derived || key.hasPrefix("gps.")) ? DriveLineCoverageSummary(
+            key:key,observedSeconds:observedSeconds(points.map(\.timestamp),maximumGap:maximumGap),
             recordingSeconds:max(0,recording.endedAt.timeIntervalSince(recording.startedAt)),
-            fraction:coverage(timestamps:points.map(\.timestamp),duration:max(0,recording.endedAt.timeIntervalSince(recording.startedAt)),maximumGap:DriveLineMetricPolicy.maximumSignalGap) ?? 0,
+            fraction:coverage(timestamps:points.map(\.timestamp),duration:max(0,recording.endedAt.timeIntervalSince(recording.startedAt)),maximumGap:maximumGap) ?? 0,
             firstObservation:points.first?.timestamp,lastObservation:points.last?.timestamp,
             sourceIDs:Array(Set(points.map(\.sourceID))).sorted()):nil
         return DriveLineSignalSeries(key: key, unit: unit, provenance: provenance,
-            algorithmIdentifier: provenance == .derived ? "driveline.boost-gauge.v1" : nil,
-            segments: segments(points),
-            coverage: derivedCoverage ?? DriveLineMetricPolicy.coverageSummaries(recording).first(where: { $0.key == key }))
+            algorithmIdentifier: provenance == .derived ? boostAlgorithmIdentifier : nil,
+            algorithmVersion: provenance == .derived ? boostAlgorithmVersion : nil,
+            segments: segments(points,maximumGap:maximumGap),
+            coverage: calculatedCoverage ?? DriveLineMetricPolicy.coverageSummaries(recording).first(where: { $0.key == key }))
     }
 
     public static func cursor(at timestamp: Date, recording: DriveLineRecording,
@@ -288,12 +631,10 @@ public enum DriveLineJourneyPolicy {
         let gps = nearest(recording.gpsPoints, to: timestamp, maximumAge: DriveLineMetricPolicy.maximumGPSGap) { $0.timestamp }
         var observations: [String: DriveLineObservation] = [:]
         for key in signalKeys {
-            let candidates = recording.signalSamples.compactMap { sample -> DriveLineObservation? in
-                sample.values[key].map { DriveLineObservation(key: key, value: $0, timestamp: sample.timestamp,
-                    sourceID: sample.sourceID, recordingID: recording.recordingID) }
-            }
-            if let value = nearest(candidates, to: timestamp, maximumAge: DriveLineMetricPolicy.maximumSignalGap, timestamp: { $0.timestamp }) {
-                observations[key] = value
+            let candidates=signalSeries(key,unit:knownSignals[key]?.unit ?? "",recording:recording).segments.flatMap{$0}
+            if let point=nearest(candidates,to:timestamp,maximumAge:DriveLineMetricPolicy.maximumSignalGap,timestamp:{ $0.timestamp }) {
+                observations[key]=DriveLineObservation(key:key,value:point.value,timestamp:point.timestamp,
+                                                       sourceID:point.sourceID,recordingID:recording.recordingID)
             }
         }
         return DriveLineCursorSelection(timestamp: timestamp, gpsPoint: gps, observations: observations)
@@ -395,11 +736,11 @@ public enum DriveLineJourneyPolicy {
         }
     }
 
-    private static func segments(_ points: [DriveLineSignalPoint]) -> [[DriveLineSignalPoint]] {
+    private static func segments(_ points: [DriveLineSignalPoint],maximumGap:TimeInterval) -> [[DriveLineSignalPoint]] {
         var result: [[DriveLineSignalPoint]] = []
         for point in points.sorted(by: { $0.timestamp < $1.timestamp }) {
             if let previous = result.last?.last,
-               point.timestamp.timeIntervalSince(previous.timestamp) <= DriveLineMetricPolicy.maximumSignalGap {
+               point.timestamp.timeIntervalSince(previous.timestamp) <= maximumGap {
                 result[result.count - 1].append(point)
             } else { result.append([point]) }
         }
@@ -423,6 +764,54 @@ public enum DriveLineJourneyPolicy {
             let interval=pair.1.timeIntervalSince(pair.0)
             return total+(interval > 0 && interval <= maximumGap ? interval:0)
         }
+    }
+
+    private struct RouteProgressPoint {
+        var timestamp:Date
+        var distanceKm:Double
+    }
+
+    private static func routeProgress(_ recording:DriveLineRecording)->[RouteProgressPoint] {
+        var distance=0.0
+        var result:[RouteProgressPoint]=[]
+        for segment in DriveLineMetricPolicy.routeSegments(recording.gpsPoints) {
+            guard let first=segment.first else { continue }
+            result.append(RouteProgressPoint(timestamp:first.timestamp,distanceKm:distance))
+            for (a,b) in zip(segment,segment.dropFirst()) {
+                distance += DriveLineMetricPolicy.distanceFromGPS([a,b]) ?? 0
+                result.append(RouteProgressPoint(timestamp:b.timestamp,distanceKm:distance))
+            }
+        }
+        return result.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private static func sourceIDs(for key:String,recording:DriveLineRecording)->[String] {
+        if key == "gps.speedKph" {
+            return Array(Set(recording.gpsPoints.filter{$0.speedMps?.isFinite == true}.map(\.sourceID))).sorted()
+        }
+        if key == "gps.horizontalAccuracyM" {
+            return Array(Set(recording.gpsPoints.filter{$0.horizontalAccuracyM?.isFinite == true}.map(\.sourceID))).sorted()
+        }
+        if key == "boostKpa" {
+            return Array(Set(signalSeries(key,unit:knownSignals[key]?.unit ?? "",recording:recording)
+                .segments.flatMap{$0}.map(\.sourceID))).sorted()
+        }
+        return Array(Set(recording.signalSamples.filter{$0.values[key]?.isFinite == true}.map(\.sourceID))).sorted()
+    }
+
+    private static func statistics(points:[DriveLineSignalPoint],cursor:Date,maximumAge:TimeInterval)->DriveLineSignalStatistics {
+        let finite=points.filter{$0.value.isFinite}.sorted{$0.timestamp < $1.timestamp}
+        guard !finite.isEmpty else {
+            return DriveLineSignalStatistics(current:nil,freshness:.unavailable,minimum:nil,maximum:nil,
+                recordedObservationAverage:nil,observationCount:0,latestObservation:nil,sourceIDs:[])
+        }
+        let nearest=finite.min { abs($0.timestamp.timeIntervalSince(cursor)) < abs($1.timestamp.timeIntervalSince(cursor)) }
+        let current=nearest.flatMap { abs($0.timestamp.timeIntervalSince(cursor)) <= maximumAge ? $0:nil }
+        let average=finite.reduce(0) { $0+$1.value }/Double(finite.count)
+        return DriveLineSignalStatistics(current:current,freshness:current == nil ? .stale:.fresh,
+            minimum:finite.map(\.value).min(),maximum:finite.map(\.value).max(),recordedObservationAverage:average,
+            observationCount:finite.count,latestObservation:finite.last?.timestamp,
+            sourceIDs:Array(Set(finite.map(\.sourceID))).sorted())
     }
 
     private static func statement(gps: Double?, obd: Double?, gaps: [DriveLineEvidenceInterval],
