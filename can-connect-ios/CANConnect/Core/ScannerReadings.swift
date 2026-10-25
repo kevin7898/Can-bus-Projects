@@ -1,4 +1,5 @@
 import Foundation
+import DriveLineShared
 
 enum ScannerConnectionKind: String, Codable, CaseIterable, Identifiable {
     case wifi, obdLinkMXPlus
@@ -131,32 +132,23 @@ extension RecordingDraft {
     mutating func accept(_ sample: OBDSample) {
         guard source == .scanner, sample.isValid, sample.timestamp >= startedAt,
               sample.timestamp >= (samples?.last?.timestamp ?? startedAt) else { return }
-        if let speed = sample.signals["speedKph"],
-           let previous = samples?.last(where:{$0.signals["speedKph"] != nil}),
-           let before = previous.signals["speedKph"] {
-            let dt = sample.timestamp.timeIntervalSince(previous.timestamp)
-            if dt > 0 && dt <= 10 { distanceKM += (before+speed)/2 * dt/3600 }
-        }
         if samples == nil { samples = [] }
-        samples?.append(sample); updatedAt = max(updatedAt, sample.timestamp)
+        samples?.append(sample)
+        if route.isEmpty, let speed = DriveLineMetricPolicy.integral("speedKph",samples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") }) {
+            distanceKM = speed.value/3600
+        }
+        updatedAt = max(updatedAt, sample.timestamp)
     }
 }
 
 
 extension RecordingDraft {
     func integral(_ key: String) -> (value: Double, coverage: Double)? {
-        let values = (samples ?? []).compactMap { sample in sample.signals[key].map { (sample.timestamp,$0) } }
-        var value = 0.0, coverage = 0.0
-        for (a,b) in zip(values,values.dropFirst()) {
-            let seconds = b.0.timeIntervalSince(a.0)
-            guard seconds > 0, seconds <= 10, a.1 >= 0, b.1 >= 0 else { continue }
-            value += (a.1+b.1)/2*seconds; coverage += seconds
-        }
-        return coverage > 0 ? (value,coverage) : nil
+        DriveLineMetricPolicy.integral(key,samples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") })
     }
     func measuredFuel(endedAt: Date) -> (litres: Double?, economy: Double?) {
         let duration = endedAt.timeIntervalSince(startedAt)
-        guard source == .scanner, duration > 0, let fuel = integral("fuelRateLph"), fuel.coverage/duration >= 0.8 else { return (nil,nil) }
+        guard source == .scanner, duration > 0, let fuel = integral("fuelRateLph"), fuel.coverage/duration >= DriveLineMetricPolicy.requiredFuelCoverage else { return (nil,nil) }
         let litres = fuel.value/3600
         guard let speed = integral("speedKph"), speed.coverage/duration >= 0.8, distanceKM > 0.1 else { return (litres,nil) }
         return (litres,litres/distanceKM*100)

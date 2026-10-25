@@ -1,4 +1,5 @@
 import Foundation
+import DriveLineShared
 
 public final class LibraryRepository {
     public let root: URL
@@ -34,13 +35,15 @@ public final class LibraryRepository {
 
 public enum TripExport {
     public static func json(_ trip: Trip) throws -> Data {
-        let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let samples = trip.samples.map { sample -> [String: Any] in
-            var row: [String: Any] = ["timestamp": formatter.string(from: sample.timestamp), "signals": sample.signals]
-            if sample.hasCoordinate { row["latitude"] = sample.latitude!; row["longitude"] = sample.longitude! }
-            return row
+        var recording = trip.sharedRecording
+        recording.coverage = DriveLineMetricPolicy.coverageSummaries(recording)
+        let sources = recording.sourceIDs.map { id -> DriveLineSourceDescriptor in
+            if id == "gps" { return DriveLineSourceDescriptor(id:id,kind:.gps,name:"Recorded GPS") }
+            return DriveLineSourceDescriptor(id:id,kind:.obd,name:"Recorded vehicle signals",detail:trip.source)
         }
-        return try JSONSerialization.data(withJSONObject: ["schemaVersion":1,"vehicleID":trip.vehicleID.uuidString,"name":trip.name,"source":trip.source,"samples":samples], options:[.prettyPrinted,.sortedKeys])
+        return try DriveLineArchive(producer:DriveLineProducer(app:"DriveLine Mac",version:"2",platform:"macOS"),
+                                    sources:sources,
+                                    recordings:[recording]).encoded()
     }
     public static func csv(_ trip: Trip) -> Data {
         let keys = trip.availableSignals

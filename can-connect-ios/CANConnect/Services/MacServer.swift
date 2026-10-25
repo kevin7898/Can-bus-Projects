@@ -150,7 +150,9 @@ final class MacServerClient {
             guard match.vin.isEmpty || vehicle.vin?.uppercased() == match.vin.uppercased() else { throw AppFailure("The Mac vehicle ID belongs to a different VIN.") }
             return match.id
         }
-        if let vin = vehicle.vin, let match = vehicles.first(where:{$0.vin.uppercased() == vin}) { return match.id }
+        if let vin = vehicle.vin, vehicles.contains(where:{$0.vin.uppercased() == vin && $0.id != vehicle.id}) {
+            throw AppFailure("The Mac already has this VIN under a different stable vehicleID. Reconcile the vehicle profiles before transferring.")
+        }
         let remote = RemoteVehicle(id:vehicle.id,name:vehicle.title,year:vehicle.year.map(String.init) ?? "",make:vehicle.make,model:vehicle.model,vin:vehicle.vin ?? "",notes:"Created by iOS companion")
         let response = try await request("POST",path:"v1/vehicles",body:JSONEncoder().encode(remote))
         let saved = try JSONDecoder().decode(RemoteVehicle.self,from:response)

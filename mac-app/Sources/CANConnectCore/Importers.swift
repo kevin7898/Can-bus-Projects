@@ -1,4 +1,5 @@
 import Foundation
+import DriveLineShared
 
 public struct ImportResult {
     public var trips: [Trip]
@@ -61,6 +62,19 @@ public enum RecordingImporter {
     static func parseJSON(data: Data, name: String, vehicleID: UUID, receiptID: UUID) throws -> ImportResult {
         let object = try JSONSerialization.jsonObject(with:data)
         let envelope = object as? [String:Any]
+        if let schema = envelope?["schemaVersion"] as? Int, schema == 2 {
+            let archive = try DriveLineArchive.decoded(data,fallbackVehicleID:vehicleID)
+            guard archive.recordings.allSatisfy({$0.vehicleID == vehicleID}) else { throw CANError.invalid("The archive vehicleID does not match the selected vehicle.") }
+            let trips = archive.recordings.map { recording in
+                let gps = recording.gpsPoints.map { TelemetrySample(timestamp:$0.timestamp,latitude:$0.latitude,longitude:$0.longitude) }
+                let signals = recording.signalSamples.map { TelemetrySample(timestamp:$0.timestamp,signals:$0.values) }
+                return Trip(id:recording.recordingID,vehicleID:recording.vehicleID,receiptID:receiptID,name:recording.name,
+                            source:archive.sources.filter { recording.sourceIDs.contains($0.id) }.map(\.name).joined(separator:" + "),
+                            samples:gps+signals,isDemo:recording.isSample)
+            }
+            guard !trips.isEmpty else { throw CANError.invalid("DriveLine archive contains no recordings.") }
+            return ImportResult(trips:trips,message:"Imported \(trips.count) DriveLine version-2 recording\(trips.count == 1 ? "" : "s") with stable identities.")
+        }
         if let schema = envelope?["schemaVersion"] as? Int, schema != 1 { throw CANError.invalid("Unsupported recording schema version.") }
         let rows = (envelope?["samples"] as? [[String:Any]]) ?? (object as? [[String:Any]]) ?? []
         guard !rows.isEmpty else { throw CANError.invalid("JSON needs a non-empty samples array.") }
@@ -76,7 +90,11 @@ public enum RecordingImporter {
             samples.append(validSample(date,latitude:(row["latitude"] as? NSNumber)?.doubleValue,longitude:(row["longitude"] as? NSNumber)?.doubleValue,signals:signals))
         }
         guard !samples.isEmpty else { throw CANError.invalid("No valid absolute timestamps found in JSON samples.") }
-        let trip = Trip(vehicleID:vehicleID,receiptID:receiptID,name:envelope?["name"] as? String ?? name,source:envelope?["source"] as? String ?? "JSON import",samples:samples)
+        if let wireVehicle = (envelope?["vehicleID"] as? String).flatMap(UUID.init(uuidString:)), wireVehicle != vehicleID {
+            throw CANError.invalid("The recording vehicleID does not match the selected vehicle.")
+        }
+        let stableID = (envelope?["recordingID"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID()
+        let trip = Trip(id:stableID,vehicleID:vehicleID,receiptID:receiptID,name:envelope?["name"] as? String ?? name,source:envelope?["source"] as? String ?? "JSON import",samples:samples)
         return ImportResult(trips:[trip],message:"Imported \(trip.samples.count) samples; skipped \(skipped) rows with invalid timestamps.")
     }
     public static func csvRows(_ text: String, delimiter: Character) throws -> [[String]] {

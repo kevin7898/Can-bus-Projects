@@ -1,4 +1,5 @@
 import Foundation
+import DriveLineShared
 
 // v1.0: approved CAN / CONNECT design, native iOS implementation.
 enum TripSource: String, Codable, CaseIterable { case demo, phoneGPS, scanner, imported
@@ -51,15 +52,10 @@ struct RoutePoint: Codable, Equatable {
     // Render only consecutive observed segments, never a straight line over
     // missing coverage. Match the distance integration's 30-second boundary.
     static func segments(_ points: [RoutePoint]) -> [[RoutePoint]] {
-        var segments: [[RoutePoint]] = []
-        for point in points {
-            if let last = segments.last?.last,
-               point.timestamp > last.timestamp,
-               point.timestamp.timeIntervalSince(last.timestamp) <= 30 {
-                segments[segments.count - 1].append(point)
-            } else { segments.append([point]) }
+        DriveLineMetricPolicy.routeSegments(points.map(\.shared)).map { segment in
+            segment.map { RoutePoint(latitude:$0.latitude,longitude:$0.longitude,timestamp:$0.timestamp,
+                                     accuracy:$0.horizontalAccuracyM ?? 0,speed:$0.speedMps) }
         }
-        return segments
     }
     func distance(to other: RoutePoint) -> Double {
         let p1 = latitude * .pi / 180, p2 = other.latitude * .pi / 180
@@ -69,6 +65,7 @@ struct RoutePoint: Codable, Equatable {
         return 6_371_000 * 2 * atan2(sqrt(a), sqrt(max(0, 1 - a)))
     }
     var isValid: Bool { latitude.isFinite && longitude.isFinite && abs(latitude) <= 90 && abs(longitude) <= 180 && accuracy.isFinite && accuracy >= 0 && (speed == nil || (speed!.isFinite && speed! >= 0)) }
+    var shared: DriveLineGPSPoint { DriveLineGPSPoint(timestamp:timestamp,latitude:latitude,longitude:longitude,horizontalAccuracyM:accuracy,speedMps:speed,sourceID:"gps") }
 }
 struct Trip: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
@@ -85,6 +82,15 @@ struct Trip: Codable, Identifiable, Equatable {
     var samples: [OBDSample]? = nil
     var scannerTransport: ScannerConnectionKind? = nil
     var durationText: String { "\(max(0, Int(duration / 60))) min" }
+}
+extension Trip {
+    var sharedRecording: DriveLineRecording {
+        let readings = (samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") }
+        return DriveLineRecording(recordingID:id,vehicleID:vehicleID ?? UUID(uuidString:"00000000-0000-0000-0000-000000000000")!,name:name,startedAt:startedAt,
+                                  endedAt:startedAt.addingTimeInterval(duration),
+                                  sourceIDs:Array(Set((route.isEmpty ? [] : ["gps"])+(readings.isEmpty ? [] : ["obd"]))).sorted(),
+                                  gpsPoints:route.map(\.shared),signalSamples:readings,tripFuelLitres:fuelLitres,isSample:isSample)
+    }
 }
 struct FuelEntry: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
@@ -119,16 +125,21 @@ struct RecordingDraft: Codable {
             let seconds = point.timestamp.timeIntervalSince(last.timestamp)
             guard seconds > 0 else { return }
             let metres = last.distance(to: point)
-            guard metres / seconds <= 80 else { return } // discard implausible jumps
-            if source == .phoneGPS && seconds <= 30 && metres >= 5 { distanceKM += metres / 1000 }
-            if seconds <= 30 && metres < 5 { return } // stationary jitter
+            guard metres / seconds * 3.6 <= DriveLineMetricPolicy.maximumPlausibleSpeedKph else { return }
+            if seconds <= DriveLineMetricPolicy.maximumGPSGap && metres < DriveLineMetricPolicy.minimumGPSMovementM { return }
         }
         route.append(point)
+        if let measured = DriveLineMetricPolicy.distanceFromGPS(route.map(\.shared)) { distanceKM = measured }
         updatedAt = max(updatedAt, point.timestamp)
     }
     func trip(endedAt: Date, recovered: Bool = false) -> Trip {
-        let measured = measuredFuel(endedAt:endedAt)
-        return Trip(id: id, vehicleID:vehicleID, name: recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"), startedAt: startedAt, duration: max(0, endedAt.timeIntervalSince(startedAt)), distanceKM: distanceKM, source: source, isSample: source == .demo, economy: source == .demo ? 5.4 : measured.economy, fuelLitres: source == .demo ? distanceKM * 5.4 / 100 : measured.litres, route: route, samples: samples, scannerTransport:scannerTransport)
+        let duration = max(0,endedAt.timeIntervalSince(startedAt))
+        let recording = DriveLineRecording(recordingID:id,vehicleID:vehicleID ?? UUID(uuidString:"00000000-0000-0000-0000-000000000000")!,name:"Recording",startedAt:startedAt,endedAt:endedAt,
+            sourceIDs:Array(Set((route.isEmpty ? [] : ["gps"])+((samples?.isEmpty == false) ? ["obd"] : []))).sorted(),
+            gpsPoints:route.map(\.shared),signalSamples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") },isSample:source == .demo)
+        let metrics = DriveLineMetricPolicy.metrics(for:recording)
+        let km = metrics.distanceKm ?? 0
+        return Trip(id:id,vehicleID:vehicleID,name:recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"),startedAt:startedAt,duration:duration,distanceKM:km,source:source,isSample:source == .demo,economy:metrics.economyL100Km,fuelLitres:metrics.tripFuelLitres,route:route,samples:samples,scannerTransport:scannerTransport)
     }
 }
 struct StoredState: Codable {
@@ -196,12 +207,11 @@ struct AppFailure: LocalizedError {
 enum FuelMath {
     // Include partial fills between two full fills. Never mix demo and real entries.
     static func latestEconomy(_ entries: [FuelEntry], sample: Bool = false) -> Double? {
-        let sorted = entries.filter { $0.isSample == sample }.sorted { $0.odometerKM < $1.odometerKM }
-        guard let end = sorted.lastIndex(where: \.full), end > 0,
-              let start = sorted[..<end].lastIndex(where: \.full) else { return nil }
-        let distance = sorted[end].odometerKM - sorted[start].odometerKM
-        guard distance > 0 else { return nil }
-        return sorted[(start + 1)...end].reduce(0) { $0 + $1.litres } * 100 / distance
+        let shared = entries.filter { $0.isSample == sample }.compactMap { entry -> DriveLineFuelEntry? in
+            guard let vehicleID = entry.vehicleID else { return nil }
+            return DriveLineFuelEntry(id:entry.id,vehicleID:vehicleID,date:entry.date,litresPurchased:entry.litres,totalCost:entry.costCAD,odometerKm:entry.odometerKM,isFullFill:entry.full,isSample:entry.isSample)
+        }
+        return DriveLineMetricPolicy.tankToTankEconomy(shared,includeSamples:sample)
     }
 }
 extension Double {

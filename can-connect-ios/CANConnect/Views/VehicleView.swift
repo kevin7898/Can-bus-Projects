@@ -34,7 +34,7 @@ struct VehicleView: View {
     }
     private var recordedFuel: some View {
         VStack(alignment:.leading,spacing:17) {
-            HStack { Metric(title:"Estimated range",value:"—",unit:"km"); Metric(title:store.activeVehicle?.fuel == .electric ? "Battery" : "Fuel level",value:store.activeVehicle?.fuel == .electric ? "—" : store.latest?.recordedValue("fuelPercent")?.text(0) ?? "—",unit:"%") }.card()
+            HStack { Metric(title:"Estimated range",value:"—",unit:"km"); Metric(title:store.activeVehicle?.fuel == .electric ? "Battery" : "Fuel level",value:store.activeVehicle?.fuel == .electric ? "—" : store.latestRecordedValue("fuelPercent")?.text(0) ?? "—",unit:"%") }.card()
             InfoNote(text:"Range and level need a compatible vehicle data source. GPS alone cannot provide them.")
             if let odo = store.activeVehicle?.odometerKM { DataRow(label:"Starting odometer",value:"\(odo.text(0)) km") }
             if let economy = FuelMath.latestEconomy(store.vehicleFills) { Metric(title:"Last full tank",value:economy.text(),unit:"L/100 km").card() }
@@ -45,9 +45,9 @@ struct VehicleView: View {
     private var recordedEngine: some View {
         VStack(alignment:.leading,spacing:16) {
             Text(store.latest?.samples?.isEmpty == false ? "End of recorded drive" : "Waiting for recorded vehicle signals").font(.system(size:17))
-            if store.activeVehicle?.fuel != .electric { DataRow(label:"Coolant temperature",value:"\(store.latest?.recordedValue("coolantC")?.text(0) ?? "—") °C"); DataRow(label:"Engine speed",value:"\(store.latest?.recordedValue("rpm")?.text(0) ?? "—") rpm") }
-            DataRow(label:"System voltage",value:"\(store.latest?.recordedValue("voltage")?.text(1) ?? "—") V")
-            InfoNote(text:"These are saved readings from the latest drive, when available. Open Live for current OBD readings; unsupported signals stay unavailable.")
+            if store.activeVehicle?.fuel != .electric { DataRow(label:"Coolant temperature",value:"\(store.latestRecordedValue("coolantC")?.text(0) ?? "—") °C"); DataRow(label:"Engine speed",value:"\(store.latestRecordedValue("rpm")?.text(0) ?? "—") rpm") }
+            DataRow(label:"System voltage",value:"\(store.latestRecordedValue("voltage")?.text(1) ?? "—") V")
+            InfoNote(text:"These are the newest saved observations for each signal, even when the latest drive was GPS-only. Open Live for current OBD readings; unsupported signals stay unavailable.")
             if let vehicle = store.activeVehicle, !vehicle.supportedPIDs.isEmpty { Text("\(vehicle.supportedPIDs.count) standard OBD PIDs confirmed during setup").captionStyle() }
             Spacer(minLength:0)
         }.padding(.horizontal,1).padding(.top,8)

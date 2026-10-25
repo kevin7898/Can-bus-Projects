@@ -101,12 +101,12 @@ struct LiveView: View {
                     if signal == .sootMass {
                         Spacer(minLength:0)
                         VStack(alignment:.trailing,spacing:1) {
-                            Text(store.sootFullnessText).font(.system(size:compact ? 16 : 18)).foregroundStyle(Palette.text).monospacedDigit()
-                            Text("% full").font(.system(size:9)).foregroundStyle(Palette.muted)
+                            Text(store.regenTriggerText).font(.system(size:compact ? 16 : 18)).foregroundStyle(Palette.text).monospacedDigit()
+                            Text("% trigger").font(.system(size:9)).foregroundStyle(Palette.muted)
                         }
                     }
                 }.lineLimit(1).minimumScaleFactor(0.65)
-            }.frame(maxWidth:.infinity,alignment:.leading).padding(compact ? 12 : 14).background(Palette.surface,in:RoundedRectangle(cornerRadius:14)).overlay(RoundedRectangle(cornerRadius:14).stroke(Palette.border)) }.buttonStyle(.plain).accessibilityLabel(signal == .sootMass ? "\(signal.title), \(store.signalText(signal)) grams, \(store.sootFullnessText) percent full, ECU regeneration trigger. Change signal" : "\(signal.title), \(store.signalText(signal)). Change signal").accessibilityIdentifier("signal-card.\(key)")
+            }.frame(maxWidth:.infinity,alignment:.leading).padding(compact ? 12 : 14).background(Palette.surface,in:RoundedRectangle(cornerRadius:14)).overlay(RoundedRectangle(cornerRadius:14).stroke(Palette.border)) }.buttonStyle(.plain).accessibilityLabel(signal == .sootMass ? "\(signal.title), \(store.signalText(signal)) grams, \(store.regenTriggerText) percent ECU regeneration trigger, not physical filter fullness. Change signal" : "\(signal.title), \(store.signalText(signal)). Change signal").accessibilityIdentifier("signal-card.\(key)")
         } }
     }
 }
@@ -115,7 +115,7 @@ struct SignalPicker: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
     var body: some View { SheetShell(title:"Choose a signal") {
-        ForEach(Signal.allCases) { signal in Button { store.setSignal(signal,slot:slot); dismiss() } label: { HStack { VStack(alignment:.leading,spacing:4) { Text(signal.title).foregroundStyle(Palette.text); Text(signal == .sootMass ? "g · % full (ECU regeneration trigger)" : signal.unit).captionStyle() }; Spacer(); if store.signal(slot) == signal { Image(systemName:"checkmark").foregroundStyle(Palette.blue) } }.padding(.vertical,9).contentShape(Rectangle()) } }
+        ForEach(Signal.allCases) { signal in Button { store.setSignal(signal,slot:slot); dismiss() } label: { HStack { VStack(alignment:.leading,spacing:4) { Text(signal.title).foregroundStyle(Palette.text); Text(signal == .sootMass ? "g · normalized ECU regen trigger" : signal.unit).captionStyle() }; Spacer(); if store.signal(slot) == signal { Image(systemName:"checkmark").foregroundStyle(Palette.blue) } }.padding(.vertical,9).contentShape(Rectangle()) } }
         InfoNote(text:"This changes only the card you selected.")
     } }
 }

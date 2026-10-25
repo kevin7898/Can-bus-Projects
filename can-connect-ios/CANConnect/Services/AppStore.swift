@@ -3,6 +3,7 @@ import SwiftUI
 import Combine
 import UIKit
 import ExternalAccessory
+import DriveLineShared
 
 @MainActor
 final class AppStore: ObservableObject {
@@ -180,7 +181,7 @@ final class AppStore: ObservableObject {
     var elapsed: Double { state.draft.map { max(0, now.timeIntervalSince($0.startedAt)) } ?? 0 }
     var timerText: String { let n = Int(elapsed); return n >= 3600 ? String(format:"%d:%02d:%02d",n/3600,(n%3600)/60,n%60) : String(format:"%02d:%02d",n/60,n%60) }
     var speedText: String {
-        if source == .demo { return "78" }
+        if source == .demo { return "—" }
         if source == .scanner { return scanner.value("speedKph",at:Date())?.text(0) ?? "—" }
         guard let fix = gps.lastFix, now.timeIntervalSince(fix) <= 10 else { return "—" }
         return gps.speedKMH.map { $0.text(0) } ?? "—"
@@ -193,7 +194,7 @@ final class AppStore: ObservableObject {
     }
     var sortedTrips: [Trip] { state.trips.filter { $0.vehicleID == state.selectedVehicleID }.sorted { $0.startedAt > $1.startedAt } }
     var latest: Trip? { sortedTrips.first }
-    var weekTrips: [Trip] { let interval = Calendar.current.dateInterval(of:.weekOfYear, for:now); return sortedTrips.filter { interval?.contains($0.startedAt) ?? false } }
+    var weekTrips: [Trip] { let interval = Calendar.current.dateInterval(of:.weekOfYear, for:now); return sortedTrips.filter { !$0.isSample && (interval?.contains($0.startedAt) ?? false) } }
     var weekKM: Double { weekTrips.reduce(0) { $0 + $1.distanceKM } }
     var weekEconomy: Double? {
         let measured = weekTrips.filter { $0.economy != nil && $0.distanceKM > 0 }
@@ -205,10 +206,7 @@ final class AppStore: ObservableObject {
         // Keep setup forms and native menus stable while idle. Live freshness and
         // recording timers still update every second; history refreshes each minute.
         if recording || pendingGPS || selectedTab == .live || abs(date.timeIntervalSince(now)) >= 60 { now = date }
-        if state.draft?.source == .demo {
-            state.draft?.distanceKM = elapsed * 78 / 3600
-            state.draft?.updatedAt = date
-        }
+        if state.draft?.source == .demo { state.draft?.updatedAt = date }
         checkpoint(at:date)
         reconcileScannerConnection(at:date)
     }
@@ -288,10 +286,7 @@ final class AppStore: ObservableObject {
             draft.samples?.removeAll { $0.timestamp > endedAt }
             draft.updatedAt = endedAt
         }
-        if draft.source == .demo {
-            draft.distanceKM = max(0, endedAt.timeIntervalSince(draft.startedAt)) * 78 / 3600
-            draft.route = SampleData.route(date:draft.startedAt)
-        }
+        if draft.source == .demo { draft.route = SampleData.route(date:draft.startedAt) }
         var next = state
         next.trips.insert(draft.trip(endedAt:endedAt), at:0)
         next.draft = nil
@@ -389,9 +384,10 @@ final class AppStore: ObservableObject {
         resetScannerAutomation(); source = .demo
     }
     func reading(_ key: String) -> Double? { source == .scanner ? scanner.value(key,at:Date()) : nil }
-    // User-facing fullness is the ECU's normalized regeneration trigger, not a
-    // guessed grams-to-capacity conversion. Retain the actual value, no UI clamp.
-    var sootFullnessText: String { reading("dpfRegenTrigger")?.text(0) ?? "—" }
+    var regenTriggerText: String { reading("dpfRegenTrigger").flatMap(DriveLineMetricPolicy.normalizedDPFRegenTrigger)?.text(0) ?? "—" }
+    func latestRecordedValue(_ key:String) -> Double? {
+        DriveLineMetricPolicy.latestObservations(sortedTrips.map(\.sharedRecording),includeSamples:activeVehicle?.isSample == true)[key]?.value
+    }
     func signalText(_ signal: Signal) -> String {
         if source == .demo { return signal.sample }
         switch signal {
@@ -400,8 +396,12 @@ final class AppStore: ObservableObject {
         case .outside: return reading("outsideC")?.text(0) ?? "—"
         case .voltage: return reading("voltage")?.text(1) ?? "—"
         case .boost:
-            guard let map = reading("boostAbsoluteKpa") ?? reading("mapKpa"), let baro = reading("barometricKpa") else { return "—" }
-            return ((map-baro)/100).text(2)
+            let recordingID = state.draft?.id ?? UUID()
+            let observations = scanner.readings.reduce(into:[String:DriveLineObservation]()) { result, item in
+                result[item.key] = DriveLineObservation(key:item.key,value:item.value.value,timestamp:item.value.date,sourceID:"obd",recordingID:recordingID)
+            }
+            guard let boost = DriveLineMetricPolicy.boostGaugeKpa(observations:observations,at:Date()) else { return "—" }
+            return (boost.value/100).text(2)
         case .fuel:
             guard let rate = reading("fuelRateLph"), let speed = reading("speedKph"), speed > 5 else { return "—" }
             return (rate*100/speed).text(1)

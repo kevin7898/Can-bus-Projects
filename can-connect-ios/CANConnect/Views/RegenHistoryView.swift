@@ -65,7 +65,7 @@ struct RegenHistoryView: View {
             VStack(alignment:.leading,spacing:8) {
                 Text(cycle.startedAt.formatted(date:.abbreviated,time:.shortened)).foregroundStyle(Palette.text)
                 Text("\(cycle.startReadings["dpfSootG"]?.value.text(1) ?? "—") → \(cycle.endReadings["dpfSootG"]?.value.text(1) ?? "—") g · \((cycle.observedDuration/60).text(1)) min observed").captionStyle()
-                Text("\(cycle.startReadings["dpfRegenTrigger"]?.value.text(0) ?? "—")% full at start · \(cycle.peakExhaustC?.text(0) ?? "—") °C peak exhaust").captionStyle()
+                Text("\(cycle.startReadings["dpfRegenTrigger"]?.value.text(0) ?? "—")% regen trigger at start · \(cycle.peakExhaustC?.text(0) ?? "—") °C peak exhaust").captionStyle()
                 Text(cycle.reason).captionStyle().fixedSize(horizontal:false,vertical:true)
             }.frame(maxWidth:.infinity,alignment:.leading).card()
         }.buttonStyle(.plain)

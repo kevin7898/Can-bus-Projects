@@ -61,7 +61,7 @@ struct OverviewView:View {
     }
     func update(_ id:UUID,_ body:(inout SummaryWidget)->Void) { store.changePreferences { p in if let i = p.widgets.firstIndex(where:{$0.id==id}) { body(&p.widgets[i]) } } }
     func summary(_ kind:SummaryKind) -> String {
-        let trips = store.filteredTrips
+        let trips = store.realFilteredTrips
         switch kind {
         case .distance: let d = trips.compactMap(\.distanceKm);return d.isEmpty ? "— km" : number(d.reduce(0,+),digits:0)+" km"
         case .economy:
@@ -116,7 +116,7 @@ struct OverviewView:View {
             }
         }
     }
-    func latest(_ key:Signal) -> Double? { store.vehicleTrips.first?.samples.reversed().compactMap{$0.value(key)}.first }
+    func latest(_ key:Signal) -> Double? { store.latestObservation(key)?.value }
 }
 struct SignalsView:View {
     @EnvironmentObject var store:AppStore

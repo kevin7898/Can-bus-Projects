@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import AppKit
 import CryptoKit
+import DriveLineShared
 
 @MainActor final class AppStore: ObservableObject {
     @Published private(set) var state = LibraryState()
@@ -25,6 +26,10 @@ import CryptoKit
         guard preferences.periodDays > 0 else { return vehicleTrips }
         let earliest = Date().addingTimeInterval(-Double(preferences.periodDays)*86400)
         return vehicleTrips.filter { $0.end >= earliest }
+    }
+    var realFilteredTrips: [Trip] { filteredTrips.filter { !$0.isDemo } }
+    func latestObservation(_ signal: Signal) -> DriveLineObservation? {
+        DriveLineMetricPolicy.latestObservations(vehicleTrips.map(\.sharedRecording))[signal.rawValue]
     }
     var libraryURL: URL { repository?.root ?? FileManager.default.homeDirectoryForCurrentUser }
     var receiptList: [ImportReceipt] { state.receipts.sorted { $0.createdAt>$1.createdAt } }
@@ -129,7 +134,8 @@ import CryptoKit
                     return try RecordingImporter.parse(url:prepared.url,vehicleID:receipt.vehicleID,receiptID:receipt.id)
                 }.value
                 try commit { state in
-                    state.trips.removeAll { $0.receiptID==receipt.id }
+                    let stableIDs = Set(result.trips.map(\.id))
+                    state.trips.removeAll { $0.receiptID==receipt.id || stableIDs.contains($0.id) }
                     state.trips.append(contentsOf:result.trips)
                     if let i = state.receipts.firstIndex(where:{$0.id==receipt.id}) {
                         state.receipts[i].status = .processed; state.receipts[i].message = result.message; state.receipts[i].completedAt = Date(); state.receipts[i].tripIDs = result.trips.map(\.id)
@@ -208,7 +214,17 @@ import CryptoKit
                 let object = try JSONSerialization.jsonObject(with:request.body) as? [String:Any]
                 guard let id = UUID(uuidString:request.query["vehicleID"] ?? object?["vehicleID"] as? String ?? ""), state.vehicles.contains(where:{$0.id==id}) else { return HTTPResponse(422,json:["error":"An existing vehicleID is required"]) }
                 // Validate syntax/schema before acknowledging an upload; receipt processing remains separate.
-                _ = try RecordingImporter.parse(data:request.body,name:"companion.json",vehicleID:id,receiptID:UUID())
+                let parsed = try RecordingImporter.parse(data:request.body,name:"companion.json",vehicleID:id,receiptID:UUID())
+                let requestHash = SHA256.hash(data:request.body).map { String(format:"%02x",$0) }.joined()
+                for stableID in parsed.trips.map(\.id) {
+                    if let existing = state.trips.first(where:{$0.id == stableID}),
+                       let existingReceipt = state.receipts.first(where:{$0.id == existing.receiptID}) {
+                        guard existingReceipt.contentHash == requestHash else {
+                            return HTTPResponse(409,json:["error":"recordingID already exists with different content; original preserved"])
+                        }
+                        return HTTPResponse(200,data:try LibraryRepository.encoder().encode(existingReceipt))
+                    }
+                }
                 let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+".json")
                 try request.body.write(to:temp,options:.atomic); defer { try? FileManager.default.removeItem(at:temp) }
                 let receipt = try enqueue(temp,vehicleID:id)

@@ -1,4 +1,5 @@
 import Foundation
+import DriveLineShared
 
 public enum Signal: String, Codable, CaseIterable, Identifiable {
     case speedKph, rpm, coolantC, boostKpa, mapKpa, barometricKpa, fuelRateLph, fuelPercent, voltage, intakeC, oilC, engineLoad
@@ -130,37 +131,17 @@ public struct Trip: Codable, Identifiable {
         return selected
     }
     public var distanceKm: Double? {
-        let gps = coordinates
-        if gps.count > 1 {
-            var sum = 0.0; var intervals = 0
-            for (a,b) in zip(gps, gps.dropFirst()) {
-                let dt = b.timestamp.timeIntervalSince(a.timestamp)
-                guard dt > 0, dt <= 30 else { continue }
-                let distance = Self.haversine(a, b)
-                guard distance / dt * 3600 <= 300 else { continue }
-                sum += distance; intervals += 1
-            }
-            if intervals > 0 { return sum }
-        }
-        return integrate(.speedKph).map { $0.value / 3600 }
+        DriveLineMetricPolicy.metrics(for: sharedRecording).distanceKm
     }
     public var fuelUsedL: Double? {
-        guard let result = integrate(.fuelRateLph), duration > 0, result.coverage / duration >= 0.8 else { return nil }
-        return result.value / 3600
+        DriveLineMetricPolicy.metrics(for: sharedRecording).tripFuelLitres
     }
     public var economyL100: Double? {
         guard let km = distanceKm, km > 0.1, let fuel = fuelUsedL else { return nil }
         return fuel / km * 100
     }
     public func integrate(_ key: Signal) -> (value: Double, coverage: Double)? {
-        let points = samples.compactMap { s -> (Date,Double)? in s.value(key).map { (s.timestamp, $0) } }
-        var sum = 0.0; var coverage = 0.0
-        for (a,b) in zip(points, points.dropFirst()) {
-            let dt = b.0.timeIntervalSince(a.0)
-            guard dt > 0, dt <= 10, a.1 >= 0, b.1 >= 0 else { continue }
-            sum += (a.1 + b.1) / 2 * dt; coverage += dt
-        }
-        return coverage > 0 ? (sum,coverage) : nil
+        DriveLineMetricPolicy.integral(key.rawValue, samples: sharedRecording.signalSamples)
     }
     public static func haversine(_ a: TelemetrySample, _ b: TelemetrySample) -> Double {
         guard a.hasCoordinate, b.hasCoordinate else { return 0 }
@@ -180,6 +161,18 @@ public struct Trip: Codable, Identifiable {
             merged[s.timestamp] = target
         }
         return merged.values.sorted { $0.timestamp < $1.timestamp }
+    }
+    public var sharedRecording: DriveLineRecording {
+        let gps = samples.compactMap { sample -> DriveLineGPSPoint? in
+            guard sample.hasCoordinate else { return nil }
+            return DriveLineGPSPoint(timestamp:sample.timestamp,latitude:sample.latitude!,longitude:sample.longitude!,sourceID:"gps")
+        }
+        let readings = samples.compactMap { sample -> DriveLineSignalSample? in
+            sample.signals.isEmpty ? nil : DriveLineSignalSample(timestamp:sample.timestamp,values:sample.signals,sourceID:"obd")
+        }
+        return DriveLineRecording(recordingID:id,vehicleID:vehicleID,name:name,startedAt:start,endedAt:end,
+                                  sourceIDs:Array(Set((gps.isEmpty ? [] : ["gps"])+(readings.isEmpty ? [] : ["obd"]))).sorted(),
+                                  gpsPoints:gps,signalSamples:readings,isSample:isDemo)
     }
 }
 
