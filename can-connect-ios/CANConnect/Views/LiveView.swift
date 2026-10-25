@@ -13,21 +13,24 @@ struct LiveView: View {
 
     var body:some View {
         GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment:.leading,spacing:12) {
-                    recordingHeader
-                    if let title=presentation.recoveryTitle,let message=presentation.recoveryMessage {
-                        RecoveryBanner(title:title,message:message,actionTitle:store.source == .scanner ? "Retry connection":nil) {
-                            store.reconcileScannerConnection(at:Date().addingTimeInterval(61))
-                        }.accessibilityIdentifier("record.recovery")
+            VStack(spacing:8) {
+                ScrollView {
+                    VStack(alignment:.leading,spacing:12) {
+                        recordingHeader
+                        if let title=presentation.recoveryTitle,let message=presentation.recoveryMessage {
+                            RecoveryBanner(title:title,message:message,actionTitle:store.source == .scanner ? "Retry connection":nil) {
+                                store.reconcileScannerConnection(at:Date().addingTimeInterval(61))
+                            }.accessibilityIdentifier("record.recovery")
+                        }
+                        if presentation.phase == .idle || presentation.phase == .starting { preflight }
+                        else { activeRecording }
                     }
-                    if presentation.phase == .idle || presentation.phase == .starting { preflight }
-                    else { activeRecording }
-                    recordButton
-                }.padding(.horizontal,1).padding(.bottom,8)
-                    .frame(maxWidth:.infinity,minHeight:geometry.size.height,alignment:.top)
-            }.scrollBounceBehavior(.basedOnSize)
-        }.accessibilityIdentifier("record.content")
+                    .padding(.horizontal,1).padding(.bottom,4)
+                    .frame(maxWidth:.infinity,minHeight:max(0,geometry.size.height-88),alignment:.top)
+                }.scrollBounceBehavior(.basedOnSize).accessibilityIdentifier("record.content")
+                recordButton
+            }
+        }
     }
 
     private var recordingHeader:some View {
@@ -44,7 +47,7 @@ struct LiveView: View {
                 StatusPill(state:presentation.scannerState,text:"Scanner")
                 StatusPill(state:presentation.localState,text:store.recording ? "Recording locally":"Local ready")
             }
-            if presentation.queuedTransfers>0 { StatusPill(state:.queued,text:"Upload queued · \(presentation.queuedTransfers)") }
+            if let queuedStatusTitle=presentation.queuedStatusTitle { StatusPill(state:.queued,text:queuedStatusTitle) }
         }.padding(.bottom,2)
     }
 

@@ -202,6 +202,25 @@ import DriveLineShared
     func removeDemo() {
         perform { try commit { $0.removeDemoData() } }
     }
+    #if DEBUG
+    func loadPhase3Fixture() {
+        guard state.vehicles.isEmpty else { return }
+        perform {
+            let vehicle=Vehicle(name:"Sanitized Jetta TDI",year:"2014",make:"Volkswagen",model:"Jetta")
+            let end=Date(),start=end.addingTimeInterval(-2700)
+            let samples=(0...18).map { index in
+                let fraction=Double(index)/18
+                return TelemetrySample(timestamp:start.addingTimeInterval(fraction*2700),latitude:49.16+fraction*0.04,
+                    longitude:-123.94-fraction*0.03,signals:["speedKph":84,"rpm":1840,"coolantC":89,"fuelRateLph":4.5])
+            }
+            let trip=Trip(vehicleID:vehicle.id,name:"Sanitized fixture drive",source:"Synthetic validation fixture",samples:samples,
+                          isDemo:false,recordedStartedAt:start,recordedEndedAt:end,recordedDistanceKm:56.8,tripFuelLitres:2.1)
+            let fill=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(-3600),litresPurchased:42,totalCost:68.12,
+                               odometerKm:216_274,isFullFill:true,stationName:"Fixture station",isDemo:false)
+            try commit { $0.vehicles=[vehicle];$0.selectedVehicleID=vehicle.id;$0.trips=[trip];$0.fuelEntries=[fill] }
+        }
+    }
+    #endif
     private func handle(_ request:HTTPRequest) async -> HTTPResponse {
         do {
             switch (request.method,request.path) {

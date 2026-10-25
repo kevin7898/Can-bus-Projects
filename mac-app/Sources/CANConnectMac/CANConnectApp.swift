@@ -16,6 +16,9 @@ import AppKit
         func argument(_ key:String) -> String? { guard let i = args.firstIndex(of:key),args.indices.contains(i+1) else { return nil };return args[i+1] }
         let root = argument("--library").map { URL(fileURLWithPath:$0,isDirectory:true) }
         let state = AppStore(root:root);_store = StateObject(wrappedValue:state)
+        #if DEBUG
+        if args.contains("--phase3-fixture") { state.loadPhase3Fixture() }
+        #endif
         if args.contains("--headless") {
             guard let token = ProcessInfo.processInfo.environment["CAN_CONNECT_TEST_TOKEN"],token.count>=16,let port = UInt16(argument("--port") ?? "18765") else { fputs("Headless validation needs CAN_CONNECT_TEST_TOKEN (16+ characters) and a valid --port.\n",stderr);exit(2) }
             do { try state.startHeadless(port:port,token:token);dispatchMain() } catch { fputs("Server startup failed: \(error.localizedDescription)\n",stderr);exit(1) }

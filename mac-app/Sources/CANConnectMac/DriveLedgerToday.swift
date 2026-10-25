@@ -28,13 +28,13 @@ struct DriveLedgerTodayView:View {
     private var summary:some View {
         LazyVGrid(columns:Array(repeating:GridItem(.flexible(minimum:150)),count:4),spacing:10) {
             MetricTile(title:"Distance today",value:presentation.todayDistanceKm.map{number($0,digits:1)},unit:"km",
-                       state:presentation.todayDistanceKm == nil ? .unavailable:.healthy,source:"Recorded")
+                       state:presentation.todayDistanceKm == nil ? .unavailable:.healthy,source:"Recorded",showsFreshness:false)
             MetricTile(title:"Duration today",value:presentation.todayTrips.isEmpty ? nil:duration(presentation.todayDuration),
-                       state:presentation.todayTrips.isEmpty ? .unavailable:.healthy,source:"Recorded")
+                       state:presentation.todayTrips.isEmpty ? .unavailable:.healthy,source:"Recorded",showsFreshness:false)
             MetricTile(title:"Drives today",value:presentation.todayTrips.isEmpty ? nil:String(presentation.todayTrips.count),
-                       state:presentation.todayTrips.isEmpty ? .unavailable:.healthy,source:"Local library")
+                       state:presentation.todayTrips.isEmpty ? .unavailable:.healthy,source:"Local library",showsFreshness:false)
             MetricTile(title:"Trip fuel today",value:presentation.todayFuelLitres.map{number($0,digits:2)},unit:"L",
-                       state:presentation.todayFuelLitres == nil ? .unavailable:.healthy,source:"Measured")
+                       state:presentation.todayFuelLitres == nil ? .unavailable:.healthy,source:"Measured",showsFreshness:false)
         }
     }
 

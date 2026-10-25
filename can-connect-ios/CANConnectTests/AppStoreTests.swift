@@ -75,6 +75,28 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(trigger.value,43,"Trigger remains a normalized indicator rather than physical fullness")
     }
 
+    func testRecordingPresentationKeepsRemainingSourceActiveAndNamesQueuedUploads() throws {
+        let now=Date(), start=now.addingTimeInterval(-30)
+        var state=StoredState();state.draft=RecordingDraft(source:.scanner,startedAt:start,updatedAt:now)
+        state.transfers=[TransferItem(tripID:UUID(),name:"Fixture upload",endpoint:"local",
+                                      vehicle:VehicleProfile(),payload:Data())]
+
+        let gpsLoss=PhoneRecordingPresentation.make(state:state,selectedSource:.scanner,pendingGPS:false,
+            scannerConnected:true,scannerConnecting:false,scannerStatus:"Connected",gpsStatus:"Waiting",
+            gpsSpeedKMH:nil,gpsLastFix:nil,now:now)
+        XCTAssertEqual(gpsLoss.phase,.degraded)
+        XCTAssertEqual(gpsLoss.scannerState,.healthy)
+        XCTAssertEqual(gpsLoss.recoveryTitle,"GPS unavailable")
+        XCTAssertEqual(gpsLoss.queuedStatusTitle,"Upload queued · 1")
+
+        let scannerLoss=PhoneRecordingPresentation.make(state:state,selectedSource:.scanner,pendingGPS:false,
+            scannerConnected:false,scannerConnecting:false,scannerStatus:"Disconnected",gpsStatus:"Active",
+            gpsSpeedKMH:72,gpsLastFix:now,now:now)
+        XCTAssertEqual(scannerLoss.phase,.degraded)
+        XCTAssertEqual(scannerLoss.gpsState,.healthy)
+        XCTAssertEqual(scannerLoss.recoveryTitle,"Scanner disconnected")
+    }
+
     @MainActor
     func testRecordingDeepLinkSelectsRecordDestination() throws {
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -83,6 +105,19 @@ final class AppStoreTests: XCTestCase {
         store.selectedTab = .today
         store.openDeepLink(try XCTUnwrap(URL(string:"canconnect://recording")))
         XCTAssertEqual(store.selectedTab,.record)
+    }
+
+    @MainActor
+    func testFinishSavesDraftExactlyOnce() throws {
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let disk=LocalStore(url:directory.appendingPathComponent("state.json"))
+        let store=AppStore(disk:disk)
+        store.state.draft=RecordingDraft(vehicleID:store.state.selectedVehicleID,source:.demo,startedAt:Date(),updatedAt:Date())
+        let id=try XCTUnwrap(store.state.draft?.id)
+        store.finishRecording();store.finishRecording()
+        XCTAssertEqual(store.state.trips.filter{$0.id==id}.count,1)
+        XCTAssertEqual(try disk.load()?.trips.filter{$0.id==id}.count,1)
     }
 
     @MainActor

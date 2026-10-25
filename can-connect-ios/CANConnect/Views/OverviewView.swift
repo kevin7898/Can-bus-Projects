@@ -61,11 +61,11 @@ struct OverviewView: View {
                 }
             } else {
                 LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:10) {
-                    MetricTile(title:"Distance",value:presentation.todayDistanceKM.text(1),unit:"km",source:"Recorded")
-                    MetricTile(title:"Duration",value:duration(presentation.todayDuration),source:"Recorded")
-                    MetricTile(title:"Drives",value:String(presentation.todayDriveCount),source:"Saved locally")
+                    MetricTile(title:"Distance",value:presentation.todayDistanceKM.text(1),unit:"km",source:"Recorded",showsFreshness:false)
+                    MetricTile(title:"Duration",value:duration(presentation.todayDuration),source:"Recorded",showsFreshness:false)
+                    MetricTile(title:"Drives",value:String(presentation.todayDriveCount),source:"Saved locally",showsFreshness:false)
                     MetricTile(title:"Trip fuel",value:presentation.todayFuelLitres?.text(2),unit:"L",
-                               state:presentation.todayFuelLitres == nil ? .unavailable:.healthy,source:"Measured")
+                               state:presentation.todayFuelLitres == nil ? .unavailable:.healthy,source:"Measured",showsFreshness:false)
                 }
                 if presentation.todayFuelDriveCount < presentation.todayDriveCount {
                     Text("Trip fuel is shown only for \(presentation.todayFuelDriveCount) of \(presentation.todayDriveCount) drives with measured fuel coverage.")

@@ -72,6 +72,10 @@ struct PhoneRecordingPresentation: Equatable {
     var recoveryTitle: String?
     var recoveryMessage: String?
 
+    var queuedStatusTitle:String? {
+        queuedTransfers > 0 ? "Upload queued · \(queuedTransfers)" : nil
+    }
+
     static let metricKeys = ["rpm","coolantC","boostGaugeKpa","dsgFluidC","dpfSootG","dpfRegenTrigger"]
 
     static func make(state: StoredState, selectedSource: TripSource, pendingGPS: Bool,
@@ -82,7 +86,7 @@ struct PhoneRecordingPresentation: Equatable {
         let elapsed=draft.map { max(0,now.timeIntervalSince($0.startedAt)) } ?? 0
         let observations=latestObservations(draft:draft)
         let gpsFresh=gpsLastFix.map { (0...10).contains(now.timeIntervalSince($0)) } ?? false
-        let gpsMissing=draft != nil && elapsed>15 && !gpsFresh
+        let gpsMissing=draft != nil && draft?.source != .demo && elapsed>15 && !gpsFresh
         let scannerMissing=draft?.source == .scanner && !scannerConnected
         let phase:PhoneRecordingPhase
         if recovered { phase = .recovered }

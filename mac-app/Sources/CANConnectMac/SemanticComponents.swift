@@ -55,13 +55,14 @@ struct AvailabilityValue:View {
     var unit=""
     var source:String?=nil
     var observedAt:Date?=nil
+    var showsFreshness=true
     var body:some View {
         VStack(alignment:.leading,spacing:4) {
             HStack(alignment:.firstTextBaseline,spacing:4) {
                 Text(value ?? "—").font(.system(size:21,weight:.semibold,design:.rounded)).monospacedDigit()
                 if !unit.isEmpty { Text(unit).font(.caption).foregroundStyle(Theme.secondaryText) }
             }
-            HStack(spacing:8) { if let source { SourceBadge(source:source) };FreshnessLabel(observedAt:observedAt) }
+            HStack(spacing:8) { if let source { SourceBadge(source:source) };if showsFreshness { FreshnessLabel(observedAt:observedAt) } }
         }.accessibilityElement(children:.combine).accessibilityValue(value.map { "\($0) \(unit)" } ?? "Unavailable")
     }
 }
@@ -72,10 +73,11 @@ struct MetricTile:View {
     var unit=""
     var state:DriveLineSemanticState = .healthy
     var source:String?=nil
+    var showsFreshness=true
     var body:some View {
         VStack(alignment:.leading,spacing:10) {
             HStack { Text(title).font(.system(size:11,weight:.medium)).foregroundStyle(Theme.secondaryText);Spacer();Image(systemName:state.icon).foregroundStyle(state.macColor) }
-            AvailabilityValue(value:value,unit:unit,source:source,observedAt:state == .unavailable ? nil:Date())
+            AvailabilityValue(value:value,unit:unit,source:source,observedAt:state == .unavailable ? nil:Date(),showsFreshness:showsFreshness)
         }.padding(13).background(Theme.primarySurface,in:RoundedRectangle(cornerRadius:Theme.Radius.medium))
             .overlay(RoundedRectangle(cornerRadius:Theme.Radius.medium).stroke(Theme.border))
     }
