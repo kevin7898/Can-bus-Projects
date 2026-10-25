@@ -102,6 +102,15 @@ struct TripsView:View {
                     Panel(title:trip.name,icon:trip.isDemo ? "testtube.2" : "route") {
                         MapPanel(trips:[trip],viewport:$viewport,style:store.preferences.mapStyle,height:330,marker:playbackSample(trip))
                         TripStats(trip:trip)
+                        let summary=DriveLineJourneyPolicy.summary(for:trip.sharedRecording)
+                        HStack(spacing:18) {
+                            coverage("GPS coverage",summary.gpsCoverage)
+                            coverage("OBD coverage",summary.obdCoverage)
+                            let annotation=store.journeyAnnotation(for:trip.id)
+                            KeyValue(label:"Start",value:annotation.startPlace ?? "Unavailable")
+                            KeyValue(label:"Finish",value:annotation.finishPlace ?? "Unavailable")
+                        }.padding(.horizontal,14).padding(.vertical,8)
+                        Text(summary.statement).font(.system(size:11)).foregroundStyle(Theme.secondaryText).padding(.horizontal,14).padding(.bottom,10).textSelection(.enabled)
                         HStack { Text(trip.source).foregroundStyle(Theme.muted);Spacer();Button("Purpose and review") { editingAnnotation=true };Button("Export JSON") { store.export(trip) }; Button("Export CSV") { store.export(trip,asJSON:false) } }.font(.system(size:11)).padding(12)
                     }
                     Panel(title:"Drive playback") {
@@ -113,6 +122,27 @@ struct TripsView:View {
                             Slider(value:$playSeconds,in:0...max(0.001,trip.duration)).accessibilityLabel("Playback position").onChange(of:playSeconds) { _,value in selectedDate = trip.start.addingTimeInterval(value) }
                             Text(duration(trip.duration)).monospacedDigit()
                         }.font(.system(size:11)).padding(12)
+                    }
+                    Panel(title:"Evidence timeline",icon:"list.bullet.rectangle") {
+                        ForEach(DriveLineJourneyPolicy.timeline(for:trip.sharedRecording)) { event in
+                            Button { selectedDate=event.timestamp } label: {
+                                HStack(alignment:.top,spacing:10) {
+                                    Image(systemName:event.severity == .attention ? "exclamationmark.triangle.fill":"circle.fill").foregroundStyle(event.severity == .attention ? Theme.fuelAttention:Theme.cobalt).font(.system(size:8))
+                                    VStack(alignment:.leading,spacing:3) { Text(event.note ?? event.kind).foregroundStyle(Theme.primaryText);Text(event.timestamp.formatted(date:.omitted,time:.standard)+(event.endTimestamp.map { " – "+$0.formatted(date:.omitted,time:.standard) } ?? "")).foregroundStyle(Theme.secondaryText) }
+                                    Spacer();Image(systemName:"scope").foregroundStyle(Theme.tertiaryText)
+                                }.font(.system(size:10)).padding(.horizontal,14).padding(.vertical,7).contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                        }
+                        if let receipt=store.state.receipts.first(where:{$0.id==trip.receiptID}) {
+                            HStack { Label("Import \(receipt.status.rawValue)",systemImage:"tray.and.arrow.down");Text(receipt.message).foregroundStyle(Theme.secondaryText);Spacer();Text(receipt.createdAt.formatted(date:.abbreviated,time:.shortened)) }.font(.system(size:10)).padding(14)
+                        }
+                    }
+                    if trip.samples.contains(where:{$0.command != nil || $0.reply != nil}) {
+                        Panel(title:"Preserved command and reply evidence",icon:"doc.text.magnifyingglass") {
+                            ForEach(Array(trip.samples.filter{$0.command != nil || $0.reply != nil}.prefix(40).enumerated()),id:\.offset) { _,sample in
+                                VStack(alignment:.leading,spacing:3) { Text("\(sample.timestamp.formatted(date:.omitted,time:.standard)) · \(sample.command ?? "Command unavailable")").font(.system(size:10,weight:.semibold));Text(sample.reply ?? "Reply unavailable").font(.system(size:9,design:.monospaced)).foregroundStyle(Theme.secondaryText).textSelection(.enabled).lineLimit(5) }.padding(.horizontal,14).padding(.vertical,7).frame(maxWidth:.infinity,alignment:.leading)
+                            }
+                        }
                     }
                     if trip.rawFrameCount>0 { Panel(title:"Raw CAN IDs · no decoder applied") { ForEach(trip.arbitrationIDs.keys.sorted(),id:\.self) { key in KeyValue(label:key,value:String(trip.arbitrationIDs[key] ?? 0)+" frames").padding(.horizontal,14).padding(.vertical,5) } } }
                 }
@@ -138,6 +168,9 @@ struct TripsView:View {
         guard let date = selectedDate else { return nil }
         let closest = trip.coordinates.min { abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date)) }
         guard let closest = closest,abs(closest.timestamp.timeIntervalSince(date))<=10 else { return nil }; return closest
+    }
+    func coverage(_ title:String,_ value:Double?)->some View {
+        VStack(alignment:.leading,spacing:3) { Text(title).font(.system(size:9)).foregroundStyle(Theme.secondaryText);Text(value.map { "\(Int(($0*100).rounded()))%" } ?? "—").font(.system(size:14,design:.monospaced)) }
     }
 }
 

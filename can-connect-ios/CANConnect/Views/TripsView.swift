@@ -155,7 +155,15 @@ struct TripStoryView:View {
     @State private var document=JSONDocument(data:Data())
     @State private var delete=false
     @State private var editingAnnotation=false
+    @State private var playbackSeconds=0.0
     private var summary:DriveLineJourneySummary { DriveLineJourneyPolicy.summary(for:trip.sharedRecording) }
+    private var selectedDate:Date { trip.startedAt.addingTimeInterval(playbackSeconds) }
+    private var cursor:DriveLineCursorSelection {
+        DriveLineJourneyPolicy.cursor(at:selectedDate,recording:trip.sharedRecording,
+                                      signalKeys:["speedKph","rpm","coolantC","fuelRateLph","dpfRegenTrigger"])
+    }
+    private var events:[DriveLineTripEvent] { DriveLineJourneyPolicy.timeline(for:trip.sharedRecording) }
+    private var annotation:DriveLineJourneyAnnotation { store.journeyAnnotation(for:trip.id) }
     var body:some View {
         SheetShell(title:"Trip Story") {
             VStack(alignment:.leading,spacing:7) {
@@ -163,11 +171,51 @@ struct TripStoryView:View {
                 Text(trip.startedAt.formatted(date:.complete,time:.shortened)).captionStyle()
                 HStack { ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) };Spacer();StatusPill(state:summary.quality == .complete ? .healthy:.stale,text:summary.quality.title) }
             }
-            if !trip.route.isEmpty { NativeRouteMap(route:trip.route).frame(height:230).clipShape(RoundedRectangle(cornerRadius:14)) }
+            if !trip.route.isEmpty { NativeRouteMap(route:trip.route,selectedPoint:selectedRoutePoint).frame(height:230).clipShape(RoundedRectangle(cornerRadius:14)) }
             else { EmptyStateCard(icon:"map",title:"Route unavailable",message:"This recording has no saved GPS coordinates. No route is inferred from scanner data.") }
+            VStack(spacing:8) {
+                Slider(value:$playbackSeconds,in:0...max(0.001,trip.duration)).accessibilityLabel("Shared trip playback position")
+                HStack { Text(selectedDate.formatted(date:.omitted,time:.standard)).monospacedDigit();Spacer();Text("\(Int(playbackSeconds))s of \(Int(trip.duration))s").captionStyle() }
+            }.padding(12).background(Palette.fieldSurface,in:RoundedRectangle(cornerRadius:12))
             HStack { Metric(title:"Measured distance",value:summary.metrics.distanceKm?.text() ?? "—",unit:"km");Metric(title:"Duration",value:trip.durationText) }
             HStack { Metric(title:"Trip economy",value:summary.metrics.economyL100Km?.text() ?? "—",unit:"L/100 km");Metric(title:"Measured trip fuel",value:summary.metrics.tripFuelLitres?.text(2) ?? "—",unit:"L") }
             InfoNote(text:summary.statement,icon:"checkmark.shield")
+            SectionCard(title:"Start and finish",icon:"mappin.and.ellipse") {
+                DataRow(label:"Start",value:annotation.startPlace ?? "Place unavailable")
+                DataRow(label:"Finish",value:annotation.finishPlace ?? "Place unavailable")
+            }
+            SectionCard(title:"Coverage and selected evidence",icon:"waveform.path.ecg") {
+                HStack { coverage("GPS",summary.gpsCoverage);coverage("OBD",summary.obdCoverage) }
+                ForEach(["speedKph","rpm","coolantC","fuelRateLph","dpfRegenTrigger"],id:\.self) { key in
+                    let observation=cursor.observations[key]
+                    DataRow(label:signalTitle(key),value:observation.map { valueText(key,$0.value)+" · "+$0.timestamp.formatted(date:.omitted,time:.standard) } ?? "Unavailable at cursor")
+                }
+                if cursor.gpsPoint == nil { InfoNote(text:"No GPS observation is close enough to the shared cursor. The map does not forward-fill a position.",icon:"location.slash") }
+            }
+            SectionCard(title:"Evidence timeline",icon:"list.bullet.rectangle") {
+                ForEach(events) { event in
+                    Button { playbackSeconds=min(max(0,event.timestamp.timeIntervalSince(trip.startedAt)),trip.duration) } label: {
+                        HStack(alignment:.top,spacing:10) {
+                            Image(systemName:event.severity == .attention ? "exclamationmark.triangle.fill":"circle.fill").foregroundStyle(event.severity == .attention ? Palette.fuelAttention:Palette.cobalt).font(.caption)
+                            VStack(alignment:.leading,spacing:3) { Text(event.note ?? event.kind).foregroundStyle(Palette.primaryText);Text(event.timestamp.formatted(date:.omitted,time:.standard)+(event.endTimestamp.map { " – "+$0.formatted(date:.omitted,time:.standard) } ?? "")).captionStyle() }
+                            Spacer();Image(systemName:"scope").foregroundStyle(Palette.tertiaryText)
+                        }.frame(minHeight:40)
+                    }.buttonStyle(.plain)
+                }
+                if let transfer=store.state.transfers.first(where:{$0.tripID==trip.id}) {
+                    HStack { Image(systemName:"arrow.up.circle");Text("Transfer \(transfer.status.rawValue): \(transfer.message)");Spacer();StatusPill(state:transfer.status == .complete ? .healthy:.queued) }.font(.caption)
+                }
+            }
+            if let samples=trip.samples,!samples.isEmpty {
+                DisclosureGroup("Raw command and reply evidence · \(samples.count)") {
+                    VStack(alignment:.leading,spacing:8) {
+                        ForEach(Array(samples.prefix(30).enumerated()),id:\.offset) { _,sample in
+                            VStack(alignment:.leading,spacing:3) { Text("\(sample.timestamp.formatted(date:.omitted,time:.standard)) · \(sample.command)").font(.caption.weight(.semibold));Text(sample.reply).font(.caption2.monospaced()).textSelection(.enabled).lineLimit(4) }.frame(maxWidth:.infinity,alignment:.leading).padding(8).background(Palette.fieldSurface,in:RoundedRectangle(cornerRadius:8))
+                        }
+                        if samples.count>30 { Text("Showing the first 30 preserved replies. Export includes every observation.").captionStyle() }
+                    }.padding(.top,8)
+                }
+            }
             Button { editingAnnotation=true } label: {
                 HStack { Label("Purpose and review",systemImage:"tag");Spacer();Text(store.journeyAnnotation(for:trip.id).purpose?.title ?? "Unclassified").foregroundStyle(Palette.secondaryText);Image(systemName:"chevron.right") }.frame(minHeight:44)
             }
@@ -179,6 +227,21 @@ struct TripStoryView:View {
         }.sheet(isPresented:$editingAnnotation) { JourneyAnnotationEditor(recordingID:trip.id) }
             .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error)=result { store.error=error.localizedDescription } }
             .confirmationDialog("Delete this recording from this iPhone?",isPresented:$delete,titleVisibility:.visible) { Button("Delete recording",role:.destructive) { store.removeTrip(trip.id);dismiss() } }
+    }
+    private var selectedRoutePoint:RoutePoint? {
+        guard let point=cursor.gpsPoint else { return nil }
+        return RoutePoint(latitude:point.latitude,longitude:point.longitude,timestamp:point.timestamp,accuracy:point.horizontalAccuracyM ?? 0,speed:point.speedMps)
+    }
+    private func coverage(_ title:String,_ fraction:Double?)->some View {
+        VStack(alignment:.leading,spacing:4) { Text(title).captionStyle();Text(fraction.map { "\(Int(($0*100).rounded()))%" } ?? "—").font(.title3.monospacedDigit()) }.frame(maxWidth:.infinity,alignment:.leading)
+    }
+    private func signalTitle(_ key:String)->String {
+        if key == "dpfRegenTrigger" { return "Regen trigger · normalized" }
+        return OBDDecoder.labels[key]?.title ?? key
+    }
+    private func valueText(_ key:String,_ value:Double)->String {
+        let normalized=key == "dpfRegenTrigger" ? DriveLineMetricPolicy.normalizedDPFRegenTrigger(value) ?? value:value
+        return "\(normalized.text()) \(OBDDecoder.labels[key]?.unit ?? "")"
     }
 }
 
