@@ -1,11 +1,44 @@
 import SwiftUI
+import UIKit
 
 enum Palette {
-    static let background = Color(hex:0x0b1017), surface = Color(hex:0x141c27), raised = Color(hex:0x1c2735)
-    static let border = Color(hex:0x263344), text = Color(hex:0xf3f6fb), muted = Color(hex:0xa3b1c4)
-    static let blue = Color(hex:0x58a7ff), green = Color(hex:0x7ed5b5), amber = Color(hex:0xe7bc74), red = Color(hex:0xf28a92)
+    static let appBackground = semantic(light:0xF7F5F1,dark:0x0B1017)
+    static let navigationBackground = semantic(light:0xF3F1EC,dark:0x101722)
+    static let primarySurface = semantic(light:0xFFFFFF,dark:0x141C27)
+    static let raisedSurface = semantic(light:0xF1F4F8,dark:0x1C2735)
+    static let fieldSurface = semantic(light:0xEEF1F5,dark:0x101923)
+    static let primaryText = semantic(light:0x0D1A2B,dark:0xF3F6FB)
+    static let secondaryText = semantic(light:0x43536A,dark:0xA3B1C4)
+    static let tertiaryText = semantic(light:0x708096,dark:0x7F8DA1)
+    static let border = semantic(light:0xD8DDE5,dark:0x263344)
+    static let selectedBorder = semantic(light:0x086CF0,dark:0x4C9FFF)
+    static let cobalt = semantic(light:0x066FF9,dark:0x3D99FF)
+    static let cobaltPressed = semantic(light:0x0056C7,dark:0x1D7EDF)
+    static let cobaltDisabled = semantic(light:0xA7C8EF,dark:0x345472)
+    static let healthy = semantic(light:0x138A4A,dark:0x36C477)
+    static let fuelAttention = semantic(light:0xA65E00,dark:0xE7A62B)
+    static let recordingFault = semantic(light:0xD83443,dark:0xFF5C62)
+    static let unavailable = semantic(light:0x737E8D,dark:0x7B8798)
+    static let chartSeries:[Color] = [
+        semantic(light:0x0068D7,dark:0x4CA6FF),semantic(light:0xB84A00,dark:0xFF9B52),
+        semantic(light:0x167A43,dark:0x50D890),semantic(light:0x7D43A8,dark:0xC68CFF),
+        semantic(light:0xA1264D,dark:0xFF7CA5)
+    ]
+    static let routePrimary=cobalt, routeSecondary=semantic(light:0x306F91,dark:0x65B6D9), routeGap=unavailable
+    static let background=appBackground, surface=primarySurface, raised=raisedSurface
+    static let text=primaryText, muted=secondaryText, blue=cobalt, green=healthy, amber=fuelAttention, red=recordingFault
+    enum Spacing { static let xSmall:CGFloat=4, small:CGFloat=8, medium:CGFloat=12, large:CGFloat=18, xLarge:CGFloat=24 }
+    enum Radius { static let small:CGFloat=8, medium:CGFloat=12, large:CGFloat=16 }
+    enum Control { static let minimum:CGFloat=44, prominent:CGFloat=48 }
+    private static func semantic(light:UInt32,dark:UInt32)->Color { Color(uiColor:UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex:dark):UIColor(hex:light) }) }
 }
 extension Color { init(hex: UInt32) { self.init(.sRGB, red:Double((hex >> 16) & 255)/255, green:Double((hex >> 8) & 255)/255, blue:Double(hex & 255)/255, opacity:1) } }
+private extension UIColor { convenience init(hex:UInt32) { self.init(red:CGFloat((hex>>16)&255)/255,green:CGFloat((hex>>8)&255)/255,blue:CGFloat(hex&255)/255,alpha:1) } }
+extension DriveLineAppearance { var colorScheme:ColorScheme? { switch self { case .system:nil;case .light:.light;case .dark:.dark } } }
+struct AppearancePreferencePicker:View {
+    @AppStorage(DriveLineAppearance.storageKey) private var rawValue=DriveLineAppearance.system.rawValue
+    var body:some View { Picker("Appearance",selection:$rawValue) { ForEach(DriveLineAppearance.allCases) { Text($0.title).tag($0.rawValue) } }.pickerStyle(.segmented).accessibilityIdentifier("appearance.picker") }
+}
 extension View {
     func card() -> some View { padding(14).background(Palette.surface, in:RoundedRectangle(cornerRadius:14)).overlay(RoundedRectangle(cornerRadius:14).stroke(Palette.border, lineWidth:1)) }
     func captionStyle() -> some View { font(.system(size:11)).foregroundStyle(Palette.muted) }
@@ -44,7 +77,7 @@ struct InfoNote: View {
 struct SheetShell<Content: View>: View {
     let title: String; @ViewBuilder var content: Content
     @Environment(\.dismiss) private var dismiss
-    var body: some View { NavigationStack { ScrollView { VStack(alignment:.leading, spacing:18) { content }.padding(20) }.background(Palette.background).navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement:.topBarTrailing) { Button("Done") { dismiss() } } }.toolbarBackground(Palette.surface, for:.navigationBar).toolbarBackground(.visible, for:.navigationBar) }.preferredColorScheme(.dark).tint(Palette.blue) }
+    var body: some View { NavigationStack { ScrollView { VStack(alignment:.leading, spacing:18) { content }.padding(20) }.background(Palette.background).navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement:.topBarTrailing) { Button("Done") { dismiss() } } }.toolbarBackground(Palette.surface, for:.navigationBar).toolbarBackground(.visible, for:.navigationBar) }.tint(Palette.blue) }
 }
 struct EconomyChart: View {
     var body: some View { GeometryReader { g in

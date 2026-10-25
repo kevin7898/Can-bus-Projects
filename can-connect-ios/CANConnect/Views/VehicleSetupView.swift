@@ -44,7 +44,7 @@ struct VehicleSetupView: View {
                 .navigationTitle("Vehicle setup").navigationBarTitleDisplayMode(.inline)
                 .toolbar { if store.state.onboardingCompleted { ToolbarItem(placement:.topBarTrailing) { Button("Cancel") { cancel(); dismiss() } } } }
                 .toolbarBackground(Palette.surface,for:.navigationBar).toolbarBackground(.visible,for:.navigationBar)
-        }.preferredColorScheme(.dark).tint(Palette.blue)
+        }.tint(Palette.blue)
             .interactiveDismissDisabled(!store.state.onboardingCompleted || busy)
             .onDisappear { cancel() }
             .onChange(of:page) { _,_ in focusedField = nil }

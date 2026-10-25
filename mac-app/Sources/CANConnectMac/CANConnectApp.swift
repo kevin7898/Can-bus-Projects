@@ -10,6 +10,7 @@ import AppKit
 @main @MainActor struct CANConnectApp:App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var store:AppStore
+    @AppStorage(DriveLineAppearance.storageKey) private var appearanceRaw=DriveLineAppearance.system.rawValue
     init() {
         let args = CommandLine.arguments
         func argument(_ key:String) -> String? { guard let i = args.firstIndex(of:key),args.indices.contains(i+1) else { return nil };return args[i+1] }
@@ -22,7 +23,9 @@ import AppKit
     }
     var body:some Scene {
         WindowGroup("DriveLine",id:"main") {
-            RootView().environmentObject(store).preferredColorScheme(.dark).frame(minWidth:1080,minHeight:720)
+            RootView().environmentObject(store)
+                .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme)
+                .frame(minWidth:1080,minHeight:720)
         }.defaultSize(width:1540,height:1000)
             .commands {
                 CommandGroup(after:.newItem) { Button("Import recordings…") { store.importFiles() }.keyboardShortcut("i",modifiers:.command);Button("Open data folder") { store.openLibrary() } }

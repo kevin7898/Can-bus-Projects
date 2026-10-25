@@ -2,6 +2,25 @@ import XCTest
 @testable import DriveLineShared
 
 final class DriveLineSharedTests: XCTestCase {
+    func testAppearancePersistsAndDefaultsToSystem() throws {
+        let suite = "DriveLineAppearanceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = DriveLineAppearanceStore(defaults: defaults)
+        XCTAssertEqual(store.selection, .system)
+        store.selection = .dark
+        XCTAssertEqual(DriveLineAppearanceStore(defaults: defaults).selection, .dark)
+        defaults.set("future-value", forKey: DriveLineAppearance.storageKey)
+        XCTAssertEqual(store.selection, .system)
+    }
+
+    func testAppearanceResolvesSystemLightAndDark() {
+        XCTAssertEqual(DriveLineAppearance.system.resolved(systemIsDark: false), .light)
+        XCTAssertEqual(DriveLineAppearance.system.resolved(systemIsDark: true), .dark)
+        XCTAssertEqual(DriveLineAppearance.light.resolved(systemIsDark: true), .light)
+        XCTAssertEqual(DriveLineAppearance.dark.resolved(systemIsDark: false), .dark)
+    }
+
     private func fixture(_ name: String) throws -> Data {
         try Data(contentsOf: XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")))
     }

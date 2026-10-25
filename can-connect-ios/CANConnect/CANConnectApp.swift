@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct CANConnectApp: App {
     @StateObject private var store: AppStore
+    @AppStorage(DriveLineAppearance.storageKey) private var appearanceRaw=DriveLineAppearance.system.rawValue
     init() {
         #if DEBUG
         if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
@@ -18,7 +19,8 @@ struct CANConnectApp: App {
             _store = StateObject(wrappedValue:testStore)
         } else { _store = StateObject(wrappedValue:AppStore()) }
     }
-    var body: some Scene { WindowGroup { RootView().environmentObject(store).preferredColorScheme(.dark).tint(Palette.blue)
+    var body: some Scene { WindowGroup { RootView().environmentObject(store)
+        .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme).tint(Palette.blue)
         .onOpenURL { url in
             if url.scheme == "canconnect", url.host == "recording" { store.selectedTab = .live }
         } } }
