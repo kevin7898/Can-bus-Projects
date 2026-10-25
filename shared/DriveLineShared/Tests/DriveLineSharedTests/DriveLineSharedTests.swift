@@ -125,4 +125,99 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(coverage.first(where:{$0.key == "gps"})?.observedSeconds,10)
         XCTAssertEqual(coverage.first(where:{$0.key == "outsideC"})?.observedSeconds,10)
     }
+
+    func testPhase4AnnotationsAreSidecarStateAndDoNotChangeArchiveBytes() throws {
+        let archive = try DriveLineArchive.decoded(fixture("golden-v2"))
+        let before = try archive.encoded()
+        let recordingID = try XCTUnwrap(archive.recordings.first?.recordingID)
+        let annotation = DriveLineJourneyAnnotation(recordingID: recordingID, purpose: .business,
+            reviewed: true, note: "Customer visit", startPlace: "Office", finishPlace: "Customer")
+        let roundTrip = try DriveLineJSON.decoder().decode(DriveLineJourneyAnnotation.self,
+            from: DriveLineJSON.encoder().encode(annotation))
+        XCTAssertEqual(roundTrip.recordingID, recordingID)
+        XCTAssertEqual(roundTrip.purpose, .business)
+        XCTAssertTrue(roundTrip.reviewed)
+        XCTAssertEqual(try archive.encoded(), before, "Sidecar annotations must not mutate an archive or queued payload")
+    }
+
+    func testPhase4JourneySummaryTimelineGapsAndCursorUseOnlyRecordedEvidence() throws {
+        var recording = try XCTUnwrap(DriveLineArchive.decoded(fixture("golden-v2")).recordings.first)
+        let start = recording.startedAt
+        recording.endedAt = start.addingTimeInterval(60)
+        recording.gpsPoints = [
+            DriveLineGPSPoint(timestamp:start,latitude:49,longitude:-124,horizontalAccuracyM:5),
+            DriveLineGPSPoint(timestamp:start.addingTimeInterval(10),latitude:49.0001,longitude:-124,horizontalAccuracyM:5),
+            DriveLineGPSPoint(timestamp:start.addingTimeInterval(50),latitude:49.0002,longitude:-124,horizontalAccuracyM:5)
+        ]
+        recording.signalSamples = [
+            DriveLineSignalSample(timestamp:start,values:["rpm":1_500,"fuelRateLph":3],sourceID:"obd"),
+            DriveLineSignalSample(timestamp:start.addingTimeInterval(10),values:["rpm":1_600,"fuelRateLph":3],sourceID:"obd"),
+            DriveLineSignalSample(timestamp:start.addingTimeInterval(40),values:["rpm":1_700,"dpfRegenTrigger":42],sourceID:"obd")
+        ]
+        recording.tripFuelLitres = nil
+        let summary = DriveLineJourneyPolicy.summary(for: recording)
+        XCTAssertEqual(summary.quality,.degraded)
+        XCTAssertEqual(Set(summary.gaps.map(\.sourceID)),Set(["gps","obd"]))
+        XCTAssertNil(summary.metrics.tripFuelLitres)
+        XCTAssertTrue(summary.statement.contains("below the required 80% threshold"))
+        let timeline = DriveLineJourneyPolicy.timeline(for: recording)
+        XCTAssertTrue(timeline.contains(where:{$0.kind == "gpsLost" && $0.endTimestamp != nil}))
+        XCTAssertTrue(timeline.contains(where:{$0.kind == "obdRecovered"}))
+        XCTAssertTrue(timeline.contains(where:{$0.kind == "dpfRegenTriggerObserved" && $0.note?.contains("not physical DPF fullness") == true}))
+        let cursor = DriveLineJourneyPolicy.cursor(at:start.addingTimeInterval(25),recording:recording,signalKeys:["rpm","missing"])
+        XCTAssertNil(cursor.observations["rpm"],"A cursor cannot forward-fill across a 15-second signal gap")
+        XCTAssertNil(cursor.observations["missing"])
+    }
+
+    func testPhase4SignalsKeepBreaksDuplicatesAndDerivedBoostProvenance() throws {
+        var recording = try XCTUnwrap(DriveLineArchive.decoded(fixture("golden-v2")).recordings.first)
+        let start = recording.startedAt
+        recording.signalSamples += [
+            DriveLineSignalSample(timestamp:start.addingTimeInterval(100),values:["rpm":2_000],sourceID:"obd"),
+            DriveLineSignalSample(timestamp:start.addingTimeInterval(101),values:["boostAbsoluteKpa":136],sourceID:"obd")
+        ]
+        let rpm = DriveLineJourneyPolicy.signalSeries("rpm",unit:"rpm",recording:recording)
+        XCTAssertEqual(rpm.provenance,.measured)
+        XCTAssertEqual(rpm.segments.count,2)
+        let boost = DriveLineJourneyPolicy.signalSeries("boostKpa",unit:"kPa gauge",recording:recording)
+        XCTAssertEqual(boost.provenance,.derived)
+        XCTAssertEqual(boost.algorithmIdentifier,"driveline.boost-gauge.v1")
+        XCTAssertEqual(boost.segments.flatMap{$0}.first?.value,30)
+        XCTAssertFalse(boost.segments.flatMap{$0}.contains(where:{$0.timestamp == start.addingTimeInterval(101)}),
+                       "A stale barometer must not create derived boost")
+    }
+
+    func testPhase4FuelLedgerUsesOnlyValidFullFillBoundariesAndKeepsTripFuelSeparate() throws {
+        let vehicleID=UUID(),start=Date(timeIntervalSince1970:1_700_000_000)
+        let first=DriveLineFuelEntry(vehicleID:vehicleID,date:start,litresPurchased:40,totalCost:60,odometerKm:10_000,isFullFill:true)
+        let partial=DriveLineFuelEntry(vehicleID:vehicleID,date:start.addingTimeInterval(1),litresPurchased:10,totalCost:17,odometerKm:10_200,isFullFill:false)
+        let last=DriveLineFuelEntry(vehicleID:vehicleID,date:start.addingTimeInterval(2),litresPurchased:20,totalCost:36,odometerKm:10_600,isFullFill:true)
+        let sample=DriveLineFuelEntry(vehicleID:vehicleID,date:start.addingTimeInterval(3),litresPurchased:100,totalCost:0,odometerKm:10_700,isFullFill:true,isSample:true)
+        let ledger=DriveLineJourneyPolicy.fuelLedger([first,partial,last,sample])
+        XCTAssertEqual(ledger.count,3)
+        XCTAssertNil(ledger[0].tankEconomyL100Km)
+        XCTAssertNil(ledger[1].tankEconomyL100Km)
+        XCTAssertEqual(try XCTUnwrap(ledger[2].tankEconomyL100Km),5,accuracy:0.000_001)
+        XCTAssertEqual(try XCTUnwrap(ledger[2].costPerLitre),1.8,accuracy:0.000_001)
+
+        let recording=DriveLineRecording(recordingID:UUID(),vehicleID:vehicleID,name:"Measured",startedAt:start,
+            endedAt:start.addingTimeInterval(10),sourceIDs:["obd"],
+            signalSamples:[DriveLineSignalSample(timestamp:start,values:["fuelRateLph":3]),
+                           DriveLineSignalSample(timestamp:start.addingTimeInterval(10),values:["fuelRateLph":3])],
+            recordedDistanceKm:1)
+        let series=DriveLineJourneyPolicy.tripFuelSeries([recording])
+        XCTAssertEqual(series.count,1)
+        XCTAssertEqual(series[0].litres,3.0/360.0,accuracy:0.000_001)
+        XCTAssertEqual(ledger[2].entry.litresPurchased,20)
+    }
+
+    func testExtendedEventDecodesLegacyShapeAndExtensionDataSurvivesRoundTrip() throws {
+        let json=#"{"id":"99999999-9999-4999-8999-999999999999","timestamp":1700000000,"kind":"scannerDisconnected","note":"Observed disconnect"}"#.data(using:.utf8)!
+        let event=try DriveLineJSON.decoder().decode(DriveLineTripEvent.self,from:json)
+        XCTAssertNil(event.endTimestamp)
+        XCTAssertEqual(event.evidenceReferences,[])
+        var archive=try DriveLineArchive.decoded(fixture("golden-v2"))
+        archive.extensionData["future.phase"] = Data([0,1,2,3])
+        XCTAssertEqual(try DriveLineArchive.decoded(archive.encoded()).extensionData["future.phase"],Data([0,1,2,3]))
+    }
 }
