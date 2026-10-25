@@ -264,13 +264,22 @@ public enum DriveLineJourneyPolicy {
             points = result
         } else {
             points = recording.signalSamples.compactMap { sample in
-                sample.values[key].map { DriveLineSignalPoint(timestamp: sample.timestamp, value: $0, sourceID: sample.sourceID) }
+                sample.values[key].flatMap { raw in
+                    let value=key == "dpfRegenTrigger" ? DriveLineMetricPolicy.normalizedDPFRegenTrigger(raw):raw
+                    return value.map { DriveLineSignalPoint(timestamp:sample.timestamp,value:$0,sourceID:sample.sourceID) }
+                }
             }.sorted { $0.timestamp < $1.timestamp }
         }
+        let derivedCoverage:DriveLineCoverageSummary? = provenance == .derived ? DriveLineCoverageSummary(
+            key:key,observedSeconds:observedSeconds(points.map(\.timestamp),maximumGap:DriveLineMetricPolicy.maximumSignalGap),
+            recordingSeconds:max(0,recording.endedAt.timeIntervalSince(recording.startedAt)),
+            fraction:coverage(timestamps:points.map(\.timestamp),duration:max(0,recording.endedAt.timeIntervalSince(recording.startedAt)),maximumGap:DriveLineMetricPolicy.maximumSignalGap) ?? 0,
+            firstObservation:points.first?.timestamp,lastObservation:points.last?.timestamp,
+            sourceIDs:Array(Set(points.map(\.sourceID))).sorted()):nil
         return DriveLineSignalSeries(key: key, unit: unit, provenance: provenance,
             algorithmIdentifier: provenance == .derived ? "driveline.boost-gauge.v1" : nil,
             segments: segments(points),
-            coverage: DriveLineMetricPolicy.coverageSummaries(recording).first(where: { $0.key == key }))
+            coverage: derivedCoverage ?? DriveLineMetricPolicy.coverageSummaries(recording).first(where: { $0.key == key }))
     }
 
     public static func cursor(at timestamp: Date, recording: DriveLineRecording,
@@ -402,6 +411,14 @@ public enum DriveLineJourneyPolicy {
             return total + (gap > 0 && gap <= maximumGap ? gap : 0)
         }
         return min(1, seconds / duration)
+    }
+
+    private static func observedSeconds(_ timestamps:[Date],maximumGap:TimeInterval)->Double {
+        let sorted=Array(Set(timestamps)).sorted()
+        return zip(sorted,sorted.dropFirst()).reduce(0) { total,pair in
+            let interval=pair.1.timeIntervalSince(pair.0)
+            return total+(interval > 0 && interval <= maximumGap ? interval:0)
+        }
     }
 
     private static func statement(gps: Double?, obd: Double?, gaps: [DriveLineEvidenceInterval],

@@ -8,15 +8,25 @@ struct SignalChart:View {
     @Binding var selectedDate:Date?
     var height:CGFloat = 160
     var body:some View {
-        let values = trip.trace(signal)
+        let series=DriveLineJourneyPolicy.signalSeries(signal.rawValue,unit:signal.unit,recording:trip.sharedRecording)
+        let values=series.segments.flatMap{$0}
         VStack(alignment:.leading,spacing:6) {
-            HStack { Text(signal.title); Spacer(); Text(signal.unit).foregroundStyle(Theme.muted) }.font(.system(size:11))
+            HStack {
+                Text(signal.title)
+                SourceBadge(source:series.provenance == .derived ? "Derived · \(series.algorithmIdentifier ?? "documented policy")":"Measured",verified:true)
+                if let coverage=series.coverage { Text("\(Int((coverage.fraction*100).rounded()))% coverage").foregroundStyle(Theme.secondaryText) }
+                Spacer();Text(signal.unit).foregroundStyle(Theme.muted)
+            }.font(.system(size:11))
             if values.isEmpty { Text("No recorded \(signal.title.lowercased()) signal").font(.system(size:12)).foregroundStyle(Theme.muted).frame(maxWidth:.infinity,maxHeight:.infinity) }
             else {
                 Chart {
-                    ForEach(values) { point in
-                        if let value = point.sample.value(signal) { LineMark(x:.value("Time",point.sample.timestamp),y:.value(signal.unit,value),series:.value("Recorded segment",point.segment)).foregroundStyle(Theme.blue) }
+                    ForEach(Array(series.segments.enumerated()),id:\.offset) { segment,points in
+                        ForEach(points) { point in
+                            LineMark(x:.value("Time",point.timestamp),y:.value(signal.unit,point.value),series:.value("Recorded segment",segment))
+                                .foregroundStyle(series.provenance == .derived ? Theme.fuelAttention:Theme.cobalt)
+                        }
                     }
+                    ForEach(DriveLineJourneyPolicy.timeline(for:trip.sharedRecording).filter{$0.severity == .attention}) { event in RuleMark(x:.value("Evidence event",event.timestamp)).foregroundStyle(Theme.recordingFault.opacity(0.55)).lineStyle(StrokeStyle(lineWidth:1,dash:[2,3])) }
                     if let selectedDate = selectedDate { RuleMark(x:.value("Playback",selectedDate)).foregroundStyle(Theme.muted).lineStyle(StrokeStyle(lineWidth:1,dash:[3])) }
                 }.chartLegend(.hidden).chartXScale(domain:trip.start...max(trip.end,trip.start.addingTimeInterval(0.001)))
                     .chartOverlay { proxy in GeometryReader { geometry in
