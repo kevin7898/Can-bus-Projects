@@ -6,12 +6,13 @@ import DriveLineShared
 public struct ImportResult {
     public var trips: [Trip]
     public var fuelEntries:[FuelEntry]
+    public var receiptFiles:[String:Data]
     public var message: String
-    public init(trips: [Trip], fuelEntries:[FuelEntry] = [], message: String) { self.trips = trips; self.fuelEntries=fuelEntries; self.message = message }
+    public init(trips: [Trip], fuelEntries:[FuelEntry] = [],receiptFiles:[String:Data] = [:], message: String) { self.trips = trips; self.fuelEntries=fuelEntries;self.receiptFiles=receiptFiles; self.message = message }
 }
 
 public enum RecordingImporter {
-    public static let maxBytes = 50 * 1024 * 1024
+    public static let maxBytes = 100 * 1024 * 1024
     public static func parse(url: URL, vehicleID: UUID, receiptID: UUID) throws -> ImportResult {
         let ext = url.pathExtension.lowercased()
         if ext == "sqlite" || ext == "db" { return try PelicanImporter.parse(database: url, vehicleID:vehicleID, receiptID:receiptID) }
@@ -24,7 +25,7 @@ public enum RecordingImporter {
         return try parse(data:data, name:url.lastPathComponent,vehicleID:vehicleID,receiptID:receiptID)
     }
     public static func parse(data: Data, name: String, vehicleID: UUID, receiptID: UUID) throws -> ImportResult {
-        guard data.count <= maxBytes else { throw CANError.invalid("Recording exceeds 50 MB.") }
+        guard data.count <= maxBytes else { throw CANError.invalid("Recording exceeds 100 MB.") }
         guard var text = String(data:data,encoding:.utf8) else { throw CANError.invalid("This file is not UTF-8 telemetry text. Import Pelican .scanlogs folders or their ZIP archive using the file picker.") }
         text = text.replacingOccurrences(of:"\u{FEFF}",with:"")
         let clean = text.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -86,8 +87,8 @@ public enum RecordingImporter {
                           currencyCode:fill.currencyCode,odometerKm:fill.odometerKm,isFullFill:fill.isFullFill,stationName:fill.stationName,
                           notes:fill.notes,receipt:fill.receipt,isDemo:fill.isSample)
             }
-            guard !trips.isEmpty else { throw CANError.invalid("DriveLine archive contains no recordings.") }
-            return ImportResult(trips:trips,fuelEntries:fills,message:"Imported \(trips.count) DriveLine version-2 recording\(trips.count == 1 ? "" : "s") and \(fills.count) fuel entr\(fills.count == 1 ? "y" : "ies") with stable identities.")
+            guard !trips.isEmpty || !fills.isEmpty else { throw CANError.invalid("DriveLine archive contains no recordings or fuel entries.") }
+            return ImportResult(trips:trips,fuelEntries:fills,receiptFiles:archive.receiptFiles,message:"Imported \(trips.count) DriveLine version-2 recording\(trips.count == 1 ? "" : "s") and \(fills.count) fuel entr\(fills.count == 1 ? "y" : "ies") with stable identities.")
         }
         if let schema = envelope?["schemaVersion"] as? Int, schema != 1 { throw CANError.invalid("Unsupported recording schema version.") }
         let rows = (envelope?["samples"] as? [[String:Any]]) ?? (object as? [[String:Any]]) ?? []

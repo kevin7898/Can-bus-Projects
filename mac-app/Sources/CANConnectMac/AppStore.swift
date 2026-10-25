@@ -147,6 +147,7 @@ import DriveLineShared
                     defer { if let cleanup = prepared.cleanup { try? FileManager.default.removeItem(at:cleanup) } }
                     return try RecordingImporter.parse(url:prepared.url,vehicleID:receipt.vehicleID,receiptID:receipt.id)
                 }.value
+                try repo.storeReceiptFiles(result.receiptFiles,for:result.fuelEntries)
                 try commit { state in
                     let stableIDs = Set(result.trips.map(\.id))
                     state.trips.removeAll { $0.receiptID==receipt.id || stableIDs.contains($0.id) }
@@ -194,7 +195,12 @@ import DriveLineShared
     func export(_ trip:Trip,asJSON:Bool = true) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "CAN-Connect-"+trip.id.uuidString+(asJSON ? ".json" : ".csv")
         guard panel.runModal() == .OK,let url = panel.url else { return }
-        perform { let data = asJSON ? try TripExport.json(trip,fuelEntries:state.fuelEntries) : TripExport.csv(trip); try data.write(to:url,options:.atomic); notice = "Recording exported." }
+        perform { let data = asJSON ? try TripExport.json(trip,fuelEntries:state.fuelEntries,receiptFiles:repository?.archivedReceiptFiles(state.fuelEntries) ?? [:]) : TripExport.csv(trip); try data.write(to:url,options:.atomic); notice = "Recording exported." }
+    }
+    func receiptURL(_ metadata:DriveLineReceiptMetadata)->URL? { repository.flatMap { $0.receiptData(metadata)==nil ? nil:$0.receiptURL(metadata) } }
+    func openReceipt(_ metadata:DriveLineReceiptMetadata) {
+        guard let url=receiptURL(metadata) else { error="The receipt file is missing. Its metadata remains preserved.";return }
+        NSWorkspace.shared.open(url)
     }
     func loadDemo() {
         perform {
@@ -247,6 +253,23 @@ import DriveLineShared
             selectedTripID=trip.id;page = .drives
         }
     }
+    func loadPhase5Fixture() {
+        loadPhase3Fixture()
+        guard let vehicle=state.vehicles.first,let trip=state.trips.first,let repository else { return }
+        perform {
+            let bytes=Data("sanitized Phase 5 receipt fixture".utf8)
+            let digest=SHA256.hash(data:bytes).map { String(format:"%02x",$0) }.joined()
+            let metadata=DriveLineReceiptMetadata(fileName:"receipt-fixture.txt",mediaType:"text/plain",byteCount:bytes.count,sha256:digest,capturedAt:Date())
+            let partial=FuelEntry(vehicleID:vehicle.id,date:Date().addingTimeInterval(-12*86_400),litresPurchased:12,totalCost:21.48,currencyCode:"CAD",odometerKm:216_500,isFullFill:false,stationName:"Island Fuel",notes:"Sanitized partial fill")
+            let full=FuelEntry(vehicleID:vehicle.id,date:Date().addingTimeInterval(-2*86_400),litresPurchased:24,totalCost:42.96,currencyCode:"CAD",odometerKm:216_874,isFullFill:true,stationName:"Harbour Fuel",notes:"Full tank after partial fill",receipt:metadata)
+            try repository.storeReceiptFiles([digest:bytes],for:[full])
+            try commit { state in
+                state.fuelEntries.append(contentsOf:[partial,full])
+                state.journeyAnnotations[trip.id.uuidString]=DriveLineJourneyAnnotation(recordingID:trip.id,purpose:.service,reviewed:true,startPlace:"Sample start",finishPlace:"Sample finish")
+            }
+            selectedTripID=trip.id;page = .fuel
+        }
+    }
     #endif
     private func handle(_ request:HTTPRequest) async -> HTTPResponse {
         do {
@@ -282,9 +305,20 @@ import DriveLineShared
                 let receipt = try enqueue(temp,vehicleID:id)
                 Task { await processPending() }
                 return HTTPResponse(receipt.status == .processed ? 200 : 202,data:try LibraryRepository.encoder().encode(receipt))
+            case ("POST","/v1/fuel-entries"):
+                guard !readOnly else { return HTTPResponse(503,json:["error":"Library is read-only"]) }
+                guard let id=UUID(uuidString:request.query["vehicleID"] ?? ""),state.vehicles.contains(where:{$0.id==id}) else { return HTTPResponse(422,json:["error":"An existing vehicleID is required"]) }
+                let parsed=try RecordingImporter.parse(data:request.body,name:"companion-fuel.json",vehicleID:id,receiptID:UUID())
+                guard parsed.trips.isEmpty,!parsed.fuelEntries.isEmpty else { return HTTPResponse(422,json:["error":"A fuel update must contain fuel entries only"]) }
+                let requestHash=SHA256.hash(data:request.body).map { String(format:"%02x",$0) }.joined()
+                if let duplicate=state.receipts.first(where:{$0.vehicleID==id && $0.contentHash==requestHash}) { return HTTPResponse(200,data:try LibraryRepository.encoder().encode(duplicate)) }
+                let temp=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+".json")
+                try request.body.write(to:temp,options:.atomic);defer { try? FileManager.default.removeItem(at:temp) }
+                let receipt=try enqueue(temp,vehicleID:id);Task { await processPending() }
+                return HTTPResponse(receipt.status == .processed ? 200:202,data:try LibraryRepository.encoder().encode(receipt))
             default:
                 if request.method=="GET",request.path.hasPrefix("/v1/receipts/"),let id = UUID(uuidString:String(request.path.dropFirst("/v1/receipts/".count))),let receipt = state.receipts.first(where:{$0.id==id}) { return HTTPResponse(200,data:try LibraryRepository.encoder().encode(receipt)) }
-                if request.method=="GET",request.path.hasPrefix("/v1/trips/"),let id = UUID(uuidString:String(request.path.dropFirst("/v1/trips/".count))),let trip = state.trips.first(where:{$0.id==id}) { return HTTPResponse(200,data:try TripExport.json(trip,fuelEntries:state.fuelEntries)) }
+                if request.method=="GET",request.path.hasPrefix("/v1/trips/"),let id = UUID(uuidString:String(request.path.dropFirst("/v1/trips/".count))),let trip = state.trips.first(where:{$0.id==id}) { return HTTPResponse(200,data:try TripExport.json(trip,fuelEntries:state.fuelEntries,receiptFiles:repository?.archivedReceiptFiles(state.fuelEntries) ?? [:])) }
                 return HTTPResponse(404,json:["error":"Route not found"])
             }
         } catch { return HTTPResponse(422,json:["error":error.localizedDescription]) }

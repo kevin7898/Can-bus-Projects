@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum DriveLineContractError: LocalizedError, Equatable {
     case invalid(String)
@@ -350,11 +351,16 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
     public var vehicles: [DriveLineVehicle]
     public var recordings: [DriveLineRecording]
     public var fuelEntries: [DriveLineFuelEntry]
+    /// Receipt payloads keyed by their lowercase SHA-256 digest. Production
+    /// stores keep these bytes outside their primary state and add them only
+    /// to complete archives.
+    public var receiptFiles: [String: Data]
     public var extensionData: [String: Data]
 
     public init(schemaVersion: Int = currentSchemaVersion, producer: DriveLineProducer,
                 sources: [DriveLineSourceDescriptor], vehicles: [DriveLineVehicle] = [],
                 recordings: [DriveLineRecording], fuelEntries: [DriveLineFuelEntry] = [],
+                receiptFiles: [String: Data] = [:],
                 extensionData: [String: Data] = [:]) {
         self.schemaVersion = schemaVersion
         self.producer = producer
@@ -362,11 +368,12 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
         self.vehicles = vehicles
         self.recordings = recordings
         self.fuelEntries = fuelEntries
+        self.receiptFiles = receiptFiles
         self.extensionData = extensionData
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, producer, sources, vehicles, recordings, fuelEntries, extensionData
+        case schemaVersion, producer, sources, vehicles, recordings, fuelEntries, receiptFiles, extensionData
     }
 
     public init(from decoder: Decoder) throws {
@@ -377,6 +384,7 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
         vehicles = try values.decodeIfPresent([DriveLineVehicle].self,forKey:.vehicles) ?? []
         recordings = try values.decodeIfPresent([DriveLineRecording].self,forKey:.recordings) ?? []
         fuelEntries = try values.decodeIfPresent([DriveLineFuelEntry].self,forKey:.fuelEntries) ?? []
+        receiptFiles = try values.decodeIfPresent([String:Data].self,forKey:.receiptFiles) ?? [:]
         extensionData = try values.decodeIfPresent([String:Data].self,forKey:.extensionData) ?? [:]
     }
 
@@ -390,8 +398,8 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
 
     public static func decoded(_ data: Data, fallbackVehicleID: UUID? = nil,
                                fallbackRecordingID: UUID? = nil) throws -> DriveLineArchive {
-        guard data.count <= 50 * 1024 * 1024 else {
-            throw DriveLineContractError.invalid("DriveLine archive exceeds 50 MB.")
+        guard data.count <= 100 * 1024 * 1024 else {
+            throw DriveLineContractError.invalid("DriveLine archive exceeds 100 MB.")
         }
         let object = try JSONSerialization.jsonObject(with: data)
         if let envelope = object as? [String: Any], (envelope["schemaVersion"] as? NSNumber)?.intValue == 2 {
@@ -415,6 +423,13 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
         }
         let vehicleIDs = Set(vehicles.map(\.id))
         let sourceIDs = Set(sources.map(\.id))
+        guard receiptFiles.count <= 1_000,
+              receiptFiles.reduce(0, { $0 + $1.value.count }) <= 80 * 1024 * 1024,
+              receiptFiles.allSatisfy({ digest,data in
+                  digest.count == 64 && digest.allSatisfy(\.isHexDigit) && data.count <= 20 * 1024 * 1024
+              }) else {
+            throw DriveLineContractError.invalid("Invalid receipt attachments in DriveLine archive.")
+        }
         guard recordings.allSatisfy({ vehicleIDs.contains($0.vehicleID) }),
               fuelEntries.allSatisfy({ vehicleIDs.contains($0.vehicleID) }),
               recordings.allSatisfy({ Set($0.sourceIDs).isSubset(of:sourceIDs) &&
@@ -449,8 +464,15 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
                       receipt.byteCount >= 0 && !receipt.fileName.isEmpty && !receipt.mediaType.isEmpty &&
                       receipt.sha256.count == 64 && receipt.sha256.allSatisfy(\.isHexDigit)
                   }) ?? true,
-                  !fill.currencyCode.isEmpty else {
+                  fill.currencyCode.count == 3,
+                  fill.currencyCode.allSatisfy({ $0.isASCII && $0.isLetter }) else {
                 throw DriveLineContractError.invalid("Invalid fuel entry in DriveLine archive.")
+            }
+            if let receipt=fill.receipt,let bytes=receiptFiles[receipt.sha256.lowercased()] {
+                let digest=SHA256.hash(data:bytes).map { String(format:"%02x",$0) }.joined()
+                guard bytes.count == receipt.byteCount,digest == receipt.sha256.lowercased() else {
+                    throw DriveLineContractError.invalid("Receipt metadata does not match its archived attachment.")
+                }
             }
         }
     }

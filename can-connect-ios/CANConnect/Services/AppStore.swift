@@ -319,19 +319,43 @@ final class AppStore: ObservableObject {
         do { try disk.save(state); updateLiveActivity() }
         catch { self.error = "Could not save on this iPhone: \(error.localizedDescription)" }
     }
-    func addFill(litres: Double, cost: Double, odometer: Double, full: Bool, date: Date) throws {
+    @discardableResult func saveFill(id:UUID? = nil,litres:Double,cost:Double,currencyCode:String,odometer:Double,
+                                     full:Bool,date:Date,stationName:String?,notes:String?,
+                                     receipt:ReceiptAttachment? = nil,removeReceipt:Bool = false,
+                                     allowOdometerCorrection:Bool = false) throws ->FuelEntry {
         guard canWrite else { throw AppFailure("Saved data is unavailable. Restart after recovering the original data file.") }
-        guard litres.isFinite, litres > 0, litres <= 150, cost.isFinite, cost >= 0, odometer.isFinite, odometer >= 0 else { throw AppFailure("Check litres, cost and odometer.") }
-        let realFills = vehicleFills.filter { !$0.isSample }
-        guard !realFills.contains(where: { $0.date < date && $0.odometerKM > odometer || $0.date > date && $0.odometerKM < odometer }) else { throw AppFailure("The odometer must follow the order of your other fills.") }
+        let existing=id.flatMap { value in state.fills.first(where:{$0.id==value}) }
+        guard let vehicleID=existing?.vehicleID ?? state.selectedVehicleID,state.vehicles.contains(where:{$0.id==vehicleID && !$0.isSample}) else { throw AppFailure("Choose a real vehicle before saving fuel.") }
+        guard litres.isFinite,litres>0,litres<=2_000,cost.isFinite,cost>=0,cost<=1_000_000,
+              odometer.isFinite,odometer>=0,odometer<=10_000_000,date<=Date().addingTimeInterval(300) else { throw AppFailure("Check litres, total cost, odometer and date.") }
+        let currency=currencyCode.trimmingCharacters(in:.whitespacesAndNewlines).uppercased()
+        guard currency.count==3,currency.allSatisfy({$0.isASCII && $0.isLetter}) else { throw AppFailure("Use a three-letter currency code such as CAD or USD.") }
+        let station=stationName?.trimmingCharacters(in:.whitespacesAndNewlines)
+        let note=notes?.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard (station?.count ?? 0)<=120,(note?.count ?? 0)<=1_000 else { throw AppFailure("Use a shorter station name or note.") }
+        let realFills=state.fills.filter { !$0.isSample && $0.vehicleID == vehicleID && $0.id != id }
+        let outOfOrder=realFills.contains { $0.date<date && $0.odometerKM>odometer || $0.date>date && $0.odometerKM<odometer }
+        guard !outOfOrder || allowOdometerCorrection else { throw AppFailure("The odometer conflicts with the dated fill order. Confirm this is a legitimate correction to save it.") }
+        guard existing?.isSample != true else { throw AppFailure("Sample fuel entries cannot be edited as real history.") }
+        if let receipt { try disk.storeReceipt(receipt) }
+        let metadata=removeReceipt ? nil:(receipt?.metadata ?? existing?.receipt)
+        let value=FuelEntry(id:id ?? UUID(),vehicleID:vehicleID,date:date,litres:litres,costCAD:cost,odometerKM:odometer,full:full,
+                            currencyCode:currency,stationName:station?.isEmpty == true ? nil:station,
+                            notes:note?.isEmpty == true ? nil:note,receipt:metadata)
         var next = state
-        next.fills.append(FuelEntry(vehicleID:state.selectedVehicleID, date:date, litres:litres, costCAD:cost, odometerKM:odometer, full:full))
-        try disk.save(next); state = next; notify("Fill-up saved")
+        if let index=next.fills.firstIndex(where:{$0.id==value.id}) { next.fills[index]=value } else { next.fills.append(value) }
+        try disk.save(next);state=next;notify(id == nil ? "Fill-up saved":"Fuel entry updated")
+        return value
     }
-    func archive(_ trips: [Trip]) -> TripArchive {
+    func prepareReceipt(_ url:URL) throws ->ReceiptAttachment { try disk.prepareReceipt(url) }
+    func hasReceipt(_ metadata:DriveLineReceiptMetadata)->Bool { disk.receiptData(metadata) != nil }
+    func addFill(litres: Double, cost: Double, odometer: Double, full: Bool, date: Date) throws {
+        _=try saveFill(litres:litres,cost:cost,currencyCode:"CAD",odometer:odometer,full:full,date:date,stationName:nil,notes:nil)
+    }
+    func archive(_ trips: [Trip]) throws -> TripArchive {
         let ids = Set(trips.compactMap(\.vehicleID))
-        return TripArchive(vehicles:state.vehicles.filter {ids.contains($0.id)},trips:trips,
-                           fills:state.fills.filter { $0.vehicleID.map(ids.contains) ?? false })
+        let fills=state.fills.filter { $0.vehicleID.map(ids.contains) ?? false }
+        return TripArchive(vehicles:state.vehicles.filter {ids.contains($0.id)},trips:trips,fills:fills,receiptFiles:disk.receiptFiles(fills))
     }
     func importTrips(_ data: Data) throws {
         guard canWrite else { throw AppFailure("Saved data is unavailable.") }
@@ -372,6 +396,7 @@ final class AppStore: ObservableObject {
             } else { fill.vehicleID=next.selectedVehicleID }
             next.fills.append(fill)
         }
+        try disk.restoreReceipts(archive.receiptFiles ?? [:],for:next.fills)
         let importedIDs = Set(additions.compactMap(\.vehicleID))
         if importedIDs.count == 1 { next.selectedVehicleID = importedIDs.first }
         try disk.save(next); state = next; tripPage = 0
@@ -486,8 +511,25 @@ final class AppStore: ObservableObject {
         for trip in state.trips where !trip.isSample && !state.transfers.contains(where:{$0.tripID == trip.id && $0.endpoint == endpoint}) {
             guard let vehicle = state.vehicles.first(where:{$0.id == trip.vehicleID}), !vehicle.isSample,
                   !trip.route.isEmpty || trip.samples?.isEmpty == false else { continue }
-            let payload = try MacRecording.encode(trip,fills:state.fills)
+            let fills=state.fills.filter { !$0.isSample && $0.vehicleID==trip.vehicleID }
+            let payload = try MacRecording.encode(trip,fills:fills,receiptFiles:disk.receiptFiles(fills))
             next.transfers.append(TransferItem(tripID:trip.id,name:trip.name,endpoint:endpoint,vehicle:vehicle,payload:payload)); count += 1
+        }
+        for (key,fills) in Dictionary(grouping:state.fills.filter{!$0.isSample},by:{ $0.vehicleID }) {
+            guard let vehicleID=key else { continue }
+            guard let vehicle=state.vehicles.first(where:{$0.id==vehicleID}),!vehicle.isSample else { continue }
+            let isCovered = fills.allSatisfy { fill in
+                next.transfers.contains { item in
+                    guard item.endpoint == endpoint,
+                          let archived = try? TripArchive.decode(item.payload) else { return false }
+                    return archived.fills.contains(fill)
+                }
+            }
+            guard !isCovered else { continue }
+            let payload=try MacRecording.encodeFills(vehicle:vehicle,fills:fills,receiptFiles:disk.receiptFiles(fills))
+            let hash=TransferItem.hash(payload)
+            guard !next.transfers.contains(where:{$0.endpoint==endpoint && $0.fuelEntryIDs != nil && $0.contentHash==hash}) else { continue }
+            next.transfers.append(TransferItem(tripID:fills.last!.id,name:"Fuel ledger update",endpoint:endpoint,vehicle:vehicle,payload:payload,fuelEntryIDs:fills.map(\.id)));count += 1
         }
         try disk.save(next); state = next
         return count

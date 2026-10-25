@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(DriveLineShared)
 import DriveLineShared
 #endif
@@ -6,10 +7,12 @@ import DriveLineShared
 public final class LibraryRepository {
     public let root: URL
     public var originals: URL { root.appendingPathComponent("Originals", isDirectory: true) }
+    public var receiptFiles:URL { root.appendingPathComponent("Receipts",isDirectory:true) }
     public var manifest: URL { root.appendingPathComponent("library.json") }
     public init(root: URL) throws {
         self.root = root
         try FileManager.default.createDirectory(at: originals, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at:receiptFiles,withIntermediateDirectories:true)
     }
     public func load() throws -> LibraryState {
         guard FileManager.default.fileExists(atPath: manifest.path) else { return LibraryState() }
@@ -23,6 +26,36 @@ public final class LibraryRepository {
         try data.write(to: manifest, options: .atomic)
     }
     public func originalURL(_ receipt: ImportReceipt) -> URL { originals.appendingPathComponent(receipt.archiveName) }
+    public func receiptURL(_ metadata:DriveLineReceiptMetadata)->URL { receiptFiles.appendingPathComponent(metadata.sha256.lowercased()) }
+    public func receiptData(_ metadata:DriveLineReceiptMetadata)->Data? {
+        guard let data=try? Data(contentsOf:receiptURL(metadata)),data.count==metadata.byteCount,
+              SHA256.hash(data:data).map({String(format:"%02x",$0)}).joined()==metadata.sha256.lowercased() else { return nil }
+        return data
+    }
+    public func archivedReceiptFiles(_ entries:[FuelEntry])->[String:Data] {
+        entries.reduce(into:[String:Data]()) { result,entry in
+            guard let metadata=entry.receipt,let data=receiptData(metadata) else { return }
+            result[metadata.sha256.lowercased()]=data
+        }
+    }
+    public func storeReceiptFiles(_ files:[String:Data],for entries:[FuelEntry]) throws {
+        var metadata:[String:DriveLineReceiptMetadata]=[:]
+        for value in entries.compactMap(\.receipt) {
+            let digest=value.sha256.lowercased()
+            if let existing=metadata[digest],existing.byteCount != value.byteCount { throw CANError.invalid("Duplicate receipt metadata disagrees about the file size.") }
+            metadata[digest]=value
+        }
+        for (digest,data) in files {
+            guard let value=metadata[digest.lowercased()],value.byteCount==data.count,
+                  SHA256.hash(data:data).map({String(format:"%02x",$0)}).joined()==digest.lowercased() else {
+                throw CANError.invalid("Receipt attachment does not match its metadata.")
+            }
+            let destination=receiptURL(value)
+            if FileManager.default.fileExists(atPath:destination.path) {
+                guard try Data(contentsOf:destination)==data else { throw CANError.invalid("A different receipt already uses this content hash.") }
+            } else { try data.write(to:destination,options:.atomic) }
+        }
+    }
     public func backup(to destination: URL) throws -> URL {
         let folder = destination.appendingPathComponent("CAN-Connect-Backup-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.copyItem(at: root, to: folder)
@@ -37,7 +70,7 @@ public final class LibraryRepository {
 }
 
 public enum TripExport {
-    public static func json(_ trip: Trip, fuelEntries:[FuelEntry] = []) throws -> Data {
+    public static func json(_ trip: Trip, fuelEntries:[FuelEntry] = [],receiptFiles:[String:Data] = [:]) throws -> Data {
         var recording = trip.sharedRecording
         recording.coverage = DriveLineMetricPolicy.coverageSummaries(recording)
         let sources = recording.sourceIDs.map { id -> DriveLineSourceDescriptor in
@@ -56,7 +89,7 @@ public enum TripExport {
         return try DriveLineArchive(producer:DriveLineProducer(app:"DriveLine Mac",version:"2",platform:"macOS"),
                                     sources:sources,
                                     vehicles:[DriveLineVehicle(id:trip.vehicleID,name:"Recorded vehicle")],
-                                    recordings:[recording],fuelEntries:fills).encoded()
+                                    recordings:[recording],fuelEntries:fills,receiptFiles:receiptFiles).encoded()
     }
     public static func csv(_ trip: Trip) -> Data {
         let keys = trip.availableSignals

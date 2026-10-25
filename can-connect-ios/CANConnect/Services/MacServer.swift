@@ -13,21 +13,30 @@ struct TransferItem: Codable, Identifiable {
     var endpoint: String
     var vehicle: VehicleProfile
     var payload: Data
+    var fuelEntryIDs:[UUID]? = nil
     var receiptID: UUID?
     var remoteVehicleID: UUID?
     var status: TransferStatus = .queued
     var message = "Waiting to send"
-    var contentHash: String { SHA256.hash(data:payload).map { String(format:"%02x",$0) }.joined() }
+    var contentHash: String { Self.hash(payload) }
+    static func hash(_ payload:Data)->String { SHA256.hash(data:payload).map { String(format:"%02x",$0) }.joined() }
 }
 
 // Stable source payload: retry sends the identical bytes, allowing Mac content-hash deduplication.
 enum MacRecording {
-    static func encode(_ trip: Trip, fills: [FuelEntry] = []) throws -> Data {
+    static func encode(_ trip: Trip, fills: [FuelEntry] = [],receiptFiles:[String:Data] = [:]) throws -> Data {
         guard trip.scannerTransport == nil || trip.source == .scanner else { throw AppFailure("Scanner transport metadata requires a scanner recording.") }
         guard !trip.isSample else { throw AppFailure("Sample recordings cannot be uploaded as real vehicle data.") }
         guard !trip.route.isEmpty || trip.samples?.isEmpty == false else { throw AppFailure("This recording has no measured scanner samples or GPS points to transfer.") }
-        let bytes = try TripArchive(vehicles:nil,trips:[trip],fills:fills.filter { !$0.isSample && $0.vehicleID == trip.vehicleID }).encoded()
-        guard bytes.count <= 50*1024*1024 else { throw AppFailure("This recording exceeds the Mac's 50 MB transfer limit. Export it for manual handling.") }
+        let bytes = try TripArchive(vehicles:nil,trips:[trip],fills:fills.filter { !$0.isSample && $0.vehicleID == trip.vehicleID },receiptFiles:receiptFiles).encoded()
+        guard bytes.count <= 100*1024*1024 else { throw AppFailure("This recording and its receipts exceed the Mac's 100 MB transfer limit. Export it for manual handling.") }
+        return bytes
+    }
+    static func encodeFills(vehicle:VehicleProfile,fills:[FuelEntry],receiptFiles:[String:Data] = [:]) throws ->Data {
+        let real=fills.filter { !$0.isSample && $0.vehicleID==vehicle.id }
+        guard !real.isEmpty else { throw AppFailure("There are no real fuel entries to transfer.") }
+        let bytes=try TripArchive(vehicles:[vehicle],trips:[],fills:real,receiptFiles:receiptFiles).encoded()
+        guard bytes.count<=100*1024*1024 else { throw AppFailure("Fuel entries and receipts exceed the Mac's 100 MB transfer limit.") }
         return bytes
     }
 }
@@ -73,7 +82,7 @@ struct MacReceipt: Decodable {
         guard id == (item.receiptID ?? id), vehicleID == item.remoteVehicleID,
               contentHash.lowercased() == item.contentHash, byteCount == item.payload.count,
               ["queued","processing","processed","failed"].contains(status),
-              status != "processed" || !tripIDs.isEmpty else { throw AppFailure("The Mac receipt does not match this recording. The original remains on this iPhone.") }
+              status != "processed" || item.fuelEntryIDs != nil || !tripIDs.isEmpty else { throw AppFailure("The Mac receipt does not match this recording. The original remains on this iPhone.") }
     }
 }
 
@@ -168,7 +177,7 @@ final class MacServerClient {
         if let id = item.receiptID { data = try await request("GET",path:"v1/receipts/\(id.uuidString)") }
         else {
             guard let id = item.remoteVehicleID else { throw AppFailure("Select the Mac vehicle first.") }
-            data = try await request("POST",path:"v1/recordings",body:item.payload,vehicleID:id)
+            data = try await request("POST",path:item.fuelEntryIDs == nil ? "v1/recordings":"v1/fuel-entries",body:item.payload,vehicleID:id)
         }
         let receipt = try JSONDecoder().decode(MacReceipt.self,from:data)
         try receipt.validate(item:item)

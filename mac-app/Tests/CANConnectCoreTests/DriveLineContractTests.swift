@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 import DriveLineShared
 @testable import CANConnectCore
 
@@ -72,5 +73,44 @@ final class DriveLineContractTests:XCTestCase {
         XCTAssertEqual(restored.schemaVersion,3)
         XCTAssertEqual(restored.journeyAnnotations[trip.id.uuidString]?.purpose,.service)
         XCTAssertEqual(try TripExport.json(try XCTUnwrap(restored.trips.first)),archive)
+    }
+
+    func testIPhoneFuelOnlyTransferImportsStableFillAndReceiptWithoutARecording() throws {
+        let vehicle=Vehicle(name:"Synthetic transfer vehicle")
+        let bytes=Data("sanitized cross-platform receipt".utf8)
+        let digest=SHA256.hash(data:bytes).map { String(format:"%02x",$0) }.joined()
+        let metadata=DriveLineReceiptMetadata(fileName:"fixture.txt",mediaType:"text/plain",byteCount:bytes.count,sha256:digest)
+        let fill=DriveLineFuelEntry(id:UUID(),vehicleID:vehicle.id,date:Date(timeIntervalSince1970:100),litresPurchased:42,totalCost:70,currencyCode:"CAD",odometerKm:200_000,isFullFill:true,stationName:"Fixture",notes:"Sanitized",receipt:metadata)
+        let payload=try DriveLineArchive(producer:DriveLineProducer(app:"DriveLine iPhone",version:"test",platform:"iOS"),sources:[],vehicles:[DriveLineVehicle(id:vehicle.id,name:vehicle.name)],recordings:[],fuelEntries:[fill],receiptFiles:[digest:bytes]).encoded()
+        let result=try RecordingImporter.parse(data:payload,name:"companion-fuel.json",vehicleID:vehicle.id,receiptID:UUID())
+        XCTAssertTrue(result.trips.isEmpty)
+        XCTAssertEqual(result.fuelEntries.first?.id,fill.id)
+        XCTAssertEqual(result.fuelEntries.first?.litresPurchased,42)
+        XCTAssertEqual(result.fuelEntries.first?.currencyCode,"CAD")
+        XCTAssertEqual(result.receiptFiles,[digest:bytes])
+    }
+
+    func testReceiptFilesSurviveCompleteBackupRestoreAndDuplicateStorage() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let backupParent=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root);try? FileManager.default.removeItem(at:backupParent) }
+        try FileManager.default.createDirectory(at:backupParent,withIntermediateDirectories:true)
+        let repo=try LibraryRepository(root:root)
+        let vehicle=Vehicle(name:"Synthetic backup vehicle")
+        let bytes=Data("sanitized backup receipt".utf8)
+        let digest=SHA256.hash(data:bytes).map { String(format:"%02x",$0) }.joined()
+        let metadata=DriveLineReceiptMetadata(fileName:"receipt.txt",mediaType:"text/plain",byteCount:bytes.count,sha256:digest)
+        let first=FuelEntry(vehicleID:vehicle.id,date:Date(timeIntervalSince1970:100),litresPurchased:40,totalCost:70,currencyCode:"CAD",odometerKm:1_000,isFullFill:true,receipt:metadata)
+        let second=FuelEntry(vehicleID:vehicle.id,date:Date(timeIntervalSince1970:200),litresPurchased:20,totalCost:35,currencyCode:"USD",odometerKm:1_400,isFullFill:true,receipt:metadata)
+        try repo.storeReceiptFiles([digest:bytes],for:[first,second])
+        XCTAssertNoThrow(try repo.storeReceiptFiles([digest:bytes],for:[first,second]))
+        var state=LibraryState();state.vehicles=[vehicle];state.selectedVehicleID=vehicle.id;state.fuelEntries=[first,second];try repo.save(state)
+        let backup=try repo.backup(to:backupParent)
+        let restored=try LibraryRepository(root:backup)
+        XCTAssertEqual(try restored.load().fuelEntries,[first,second])
+        XCTAssertEqual(restored.receiptData(metadata),bytes)
+        try FileManager.default.removeItem(at:restored.receiptURL(metadata))
+        XCTAssertNil(restored.receiptData(metadata),"Missing receipt bytes remain unavailable while library metadata is retained")
+        XCTAssertEqual(try restored.load().fuelEntries.first?.receipt,metadata)
     }
 }

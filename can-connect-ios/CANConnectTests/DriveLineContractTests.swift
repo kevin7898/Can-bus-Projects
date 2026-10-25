@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import CANConnect
 
 final class DriveLineContractTests:XCTestCase {
@@ -88,5 +89,66 @@ final class DriveLineContractTests:XCTestCase {
         XCTAssertEqual(restarted.journeyAnnotation(for:trip.id).purpose,.business)
         XCTAssertTrue(restarted.journeyAnnotation(for:trip.id).reviewed)
         XCTAssertEqual(restarted.state.transfers.first?.payload,payload)
+    }
+
+    @MainActor func testFuelAddEditValidationAllowsExplicitCorrectionWithoutChangingTripTelemetry() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let store=AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),scannerAvailable:{_ in false})
+        var vehicle=VehicleProfile();vehicle.make="Synthetic";vehicle.model="Fuel fixture";try store.saveVehicle(vehicle)
+        let start=Date(timeIntervalSince1970:1_700_000_000)
+        let trip=Trip(vehicleID:vehicle.id,name:"Measured drive",startedAt:start,duration:10,distanceKM:1,source:.scanner,
+                      isSample:false,economy:6,fuelLitres:0.06,
+                      samples:[OBDSample(timestamp:start,signals:["fuelRateLph":3],command:"015E",reply:"SYNTHETIC")])
+        store.state.trips=[trip];store.save()
+        let before=try XCTUnwrap(store.state.trips.first)
+        _=try store.saveFill(litres:40,cost:70,currencyCode:"cad",odometer:1_000,full:true,date:start,
+                             stationName:" Fixture North ",notes:" First full ")
+        _=try store.saveFill(litres:10,cost:18,currencyCode:"USD",odometer:1_200,full:false,date:start.addingTimeInterval(100),stationName:nil,notes:nil)
+        let last=try store.saveFill(litres:20,cost:36,currencyCode:"CAD",odometer:1_600,full:true,date:start.addingTimeInterval(200),stationName:nil,notes:nil)
+        XCTAssertEqual(try XCTUnwrap(FuelMath.latestEconomy(store.vehicleFills)),5,accuracy:0.000_001)
+        XCTAssertEqual(store.vehicleFills.first?.currencyCode,"CAD")
+        XCTAssertThrowsError(try store.saveFill(id:last.id,litres:20,cost:36,currencyCode:"EURO",odometer:900,full:true,date:start.addingTimeInterval(200),stationName:nil,notes:nil))
+        XCTAssertThrowsError(try store.saveFill(id:last.id,litres:20,cost:36,currencyCode:"EUR",odometer:900,full:true,date:start.addingTimeInterval(200),stationName:nil,notes:nil))
+        let corrected=try store.saveFill(id:last.id,litres:20,cost:36,currencyCode:"EUR",odometer:900,full:true,date:start.addingTimeInterval(200),stationName:nil,notes:"Legitimate dashboard correction",allowOdometerCorrection:true)
+        XCTAssertEqual(corrected.odometerKM,900)
+        XCTAssertEqual(store.state.trips.first,before)
+        XCTAssertEqual(store.state.trips.first?.fuelLitres,0.06,"Purchased fuel edits must not alter measured trip fuel")
+    }
+
+    @MainActor func testReceiptCompleteArchiveRestoreDeduplicatesFilesAndKeepsMissingMetadata() throws {
+        let sourceRoot=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let restoredRoot=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let missingRoot=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { for root in [sourceRoot,restoredRoot,missingRoot] { try? FileManager.default.removeItem(at:root) } }
+        let sourceDisk=LocalStore(url:sourceRoot.appendingPathComponent("state.json"))
+        let source=AppStore(disk:sourceDisk,scannerAvailable:{_ in false})
+        var vehicle=VehicleProfile();vehicle.make="Synthetic";vehicle.model="Receipt fixture";try source.saveVehicle(vehicle)
+        let data=Data("sanitized receipt file bytes".utf8)
+        let digest=SHA256.hash(data:data).map { String(format:"%02x",$0) }.joined()
+        let metadata=DriveLineReceiptMetadata(fileName:"receipt.txt",mediaType:"text/plain",byteCount:data.count,sha256:digest)
+        let attachment=ReceiptAttachment(metadata:metadata,data:data)
+        _=try source.saveFill(litres:40,cost:70,currencyCode:"CAD",odometer:1_000,full:true,date:Date(timeIntervalSince1970:100),stationName:"Fixture",notes:nil,receipt:attachment)
+        _=try source.saveFill(litres:20,cost:35,currencyCode:"USD",odometer:1_400,full:true,date:Date(timeIntervalSince1970:200),stationName:nil,notes:nil,receipt:attachment)
+        let trip=Trip(vehicleID:vehicle.id,name:"Archive anchor",startedAt:Date(timeIntervalSince1970:100),duration:10,distanceKM:1,source:.phoneGPS,isSample:false)
+        source.state.trips=[trip];source.save()
+        let complete=try source.archive([trip])
+        XCTAssertEqual(complete.receiptFiles?.count,1,"Identical receipt content is stored once")
+        XCTAssertEqual(complete.receiptFiles?[digest],data)
+        let stateBytes=try Data(contentsOf:sourceRoot.appendingPathComponent("state.json"))
+        XCTAssertFalse(String(decoding:stateBytes,as:UTF8.self).contains("sanitized receipt file bytes"),"Primary JSON stores metadata, not receipt bytes")
+
+        let restored=AppStore(disk:LocalStore(url:restoredRoot.appendingPathComponent("state.json")),scannerAvailable:{_ in false})
+        try restored.saveVehicle(vehicle)
+        try restored.importTrips(complete.encoded())
+        XCTAssertEqual(restored.vehicleFills.count,2)
+        XCTAssertTrue(try XCTUnwrap(restored.vehicleFills.first?.receipt).sha256 == digest)
+        XCTAssertTrue(restored.vehicleFills.allSatisfy { $0.receipt.map(restored.hasReceipt) == true })
+
+        var missing=complete;missing.receiptFiles=nil
+        let missingStore=AppStore(disk:LocalStore(url:missingRoot.appendingPathComponent("state.json")),scannerAvailable:{_ in false})
+        try missingStore.saveVehicle(vehicle);try missingStore.importTrips(missing.encoded())
+        XCTAssertEqual(missingStore.vehicleFills.first?.receipt?.sha256,digest)
+        XCTAssertFalse(missingStore.vehicleFills.contains { $0.receipt.map(missingStore.hasReceipt) == true },"Missing files remain explicitly unavailable")
     }
 }

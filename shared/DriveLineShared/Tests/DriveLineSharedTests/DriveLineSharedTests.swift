@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import DriveLineShared
 
 final class DriveLineSharedTests: XCTestCase {
@@ -254,5 +255,36 @@ final class DriveLineSharedTests: XCTestCase {
         var archive=try DriveLineArchive.decoded(fixture("golden-v2"))
         archive.extensionData["future.phase"] = Data([0,1,2,3])
         XCTAssertEqual(try DriveLineArchive.decoded(archive.encoded()).extensionData["future.phase"],Data([0,1,2,3]))
+    }
+
+    func testReceiptAttachmentsRoundTripDeduplicateAndPermitMissingFiles() throws {
+        let vehicle=DriveLineVehicle(id:UUID(),name:"Synthetic vehicle")
+        let bytes=Data("sanitized receipt fixture".utf8)
+        let digest=SHA256.hash(data:bytes).map { String(format:"%02x",$0) }.joined()
+        let metadata=DriveLineReceiptMetadata(fileName:"receipt.txt",mediaType:"text/plain",byteCount:bytes.count,sha256:digest)
+        let first=DriveLineFuelEntry(vehicleID:vehicle.id,date:Date(timeIntervalSince1970:100),litresPurchased:40,totalCost:70,currencyCode:"CAD",odometerKm:1_000,isFullFill:true,receipt:metadata)
+        let second=DriveLineFuelEntry(vehicleID:vehicle.id,date:Date(timeIntervalSince1970:200),litresPurchased:20,totalCost:35,currencyCode:"USD",odometerKm:1_400,isFullFill:true,receipt:metadata)
+        let producer=DriveLineProducer(app:"Tests",version:"1",platform:"test")
+        let complete=DriveLineArchive(producer:producer,sources:[],vehicles:[vehicle],recordings:[],fuelEntries:[first,second],receiptFiles:[digest:bytes])
+        let restored=try DriveLineArchive.decoded(complete.encoded())
+        XCTAssertEqual(restored.receiptFiles,[digest:bytes])
+        XCTAssertEqual(restored.fuelEntries.map(\.receipt),[metadata,metadata])
+
+        let missing=DriveLineArchive(producer:producer,sources:[],vehicles:[vehicle],recordings:[],fuelEntries:[first])
+        XCTAssertTrue(try DriveLineArchive.decoded(missing.encoded()).receiptFiles.isEmpty,
+                      "Missing receipt bytes must preserve metadata without fabricating a file")
+        let corrupt=DriveLineArchive(producer:producer,sources:[],vehicles:[vehicle],recordings:[],fuelEntries:[first],receiptFiles:[digest:Data("different bytes".utf8)])
+        XCTAssertThrowsError(try corrupt.encoded())
+    }
+
+    func testFuelCurrencyRequiresThreeAsciiLetters() throws {
+        let vehicle=DriveLineVehicle(id:UUID(),name:"Synthetic vehicle")
+        let producer=DriveLineProducer(app:"Tests",version:"1",platform:"test")
+        for currency in ["", "CA", "CAD1", "C$D"] {
+            let fill=DriveLineFuelEntry(vehicleID:vehicle.id,date:Date(timeIntervalSince1970:100),litresPurchased:1,totalCost:1,currencyCode:currency,odometerKm:1,isFullFill:true)
+            XCTAssertThrowsError(try DriveLineArchive(producer:producer,sources:[],vehicles:[vehicle],recordings:[],fuelEntries:[fill]).encoded())
+        }
+        let lowercase=DriveLineFuelEntry(vehicleID:vehicle.id,date:Date(timeIntervalSince1970:100),litresPurchased:1,totalCost:1,currencyCode:"cad",odometerKm:1,isFullFill:true)
+        XCTAssertNoThrow(try DriveLineArchive(producer:producer,sources:[],vehicles:[vehicle],recordings:[],fuelEntries:[lowercase]).encoded())
     }
 }

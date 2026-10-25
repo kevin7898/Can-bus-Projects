@@ -198,11 +198,12 @@ struct TripArchive: Codable {
     var vehicles: [VehicleProfile]?
     var trips: [Trip]
     var fills: [FuelEntry]
-    init(schemaVersion:Int = 2,vehicles:[VehicleProfile]? = nil,trips:[Trip],fills:[FuelEntry] = []) {
-        self.schemaVersion=schemaVersion;self.vehicles=vehicles;self.trips=trips;self.fills=fills
+    var receiptFiles: [String:Data]?
+    init(schemaVersion:Int = 2,vehicles:[VehicleProfile]? = nil,trips:[Trip],fills:[FuelEntry] = [],receiptFiles:[String:Data] = [:]) {
+        self.schemaVersion=schemaVersion;self.vehicles=vehicles;self.trips=trips;self.fills=fills;self.receiptFiles=receiptFiles.isEmpty ? nil:receiptFiles
     }
     static func decode(_ data: Data) throws -> TripArchive {
-        guard data.count <= 20_000_000 else { throw AppFailure("Choose a JSON recording under 20 MB.") }
+        guard data.count <= 100 * 1024 * 1024 else { throw AppFailure("Choose a DriveLine archive no larger than 100 MB.") }
         let object = try JSONSerialization.jsonObject(with:data) as? [String:Any]
         let version = (object?["schemaVersion"] as? NSNumber)?.intValue ?? 1
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .custom { decoder in
@@ -250,7 +251,7 @@ struct TripArchive: Codable {
                       odometerKM:fill.odometerKm,full:fill.isFullFill,isSample:fill.isSample,currencyCode:fill.currencyCode,
                       stationName:fill.stationName,notes:fill.notes,receipt:fill.receipt)
         }
-        let archive=TripArchive(vehicles:profiles,trips:trips,fills:fills)
+        let archive=TripArchive(vehicles:profiles,trips:trips,fills:fills,receiptFiles:shared.receiptFiles)
         try validate(archive)
         return archive
     }
@@ -276,7 +277,8 @@ struct TripArchive: Codable {
         }
         for fill in archive.fills {
             guard fill.litres.isFinite,fill.litres > 0,fill.costCAD.isFinite,fill.costCAD >= 0,
-                  fill.odometerKM.isFinite,fill.odometerKM >= 0,!fill.currencyCode.isEmpty else { throw AppFailure("The archive contains invalid fuel values.") }
+                  fill.odometerKM.isFinite,fill.odometerKM >= 0,fill.currencyCode.count == 3,
+                  fill.currencyCode.allSatisfy({$0.isASCII && $0.isLetter}) else { throw AppFailure("The archive contains invalid fuel values.") }
         }
     }
     func encoded() throws -> Data {
@@ -320,6 +322,7 @@ struct TripArchive: Codable {
         let producerVersion=Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "development"
         return try DriveLineArchive(producer:DriveLineProducer(app:"DriveLine iPhone",version:producerVersion,platform:"iOS"),sources:sources,
                                     vehicles:allVehicles,recordings:recordings,fuelEntries:sharedFills,
+                                    receiptFiles:receiptFiles ?? [:],
                                     extensionData:["com.canconnect.ios.vehicleProfiles":profileData]).encoded()
     }
 }

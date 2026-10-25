@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the real Network.framework HTTP service in an isolated temporary library."""
-import json,os,pathlib,subprocess,sys,tempfile,time,urllib.request,urllib.error,uuid,socket
+import base64,hashlib,json,os,pathlib,subprocess,sys,tempfile,time,urllib.request,urllib.error,uuid,socket
 binary=str(pathlib.Path(sys.argv[1]).resolve()); token='synthetic-ci-token-not-a-user-secret'
 with tempfile.TemporaryDirectory() as directory:
  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
@@ -46,19 +46,38 @@ with tempfile.TemporaryDirectory() as directory:
   status,duplicate=call(upload_path,recording);assert status==200 and duplicate['id']==receipt['id']
   changed=json.loads(json.dumps(recording));changed['recordings'][0]['name']='Conflicting bytes'
   assert call(upload_path,changed)[0]==409
+  receipt_bytes=b'sanitized API receipt fixture'
+  receipt_digest=hashlib.sha256(receipt_bytes).hexdigest()
+  updated_fill=json.loads(json.dumps(recording['fuelEntries'][0]));updated_fill['totalCost']=62;updated_fill['currencyCode']='USD'
+  updated_fill['receipt']={'fileName':'api-receipt.txt','mediaType':'text/plain','byteCount':len(receipt_bytes),'sha256':receipt_digest}
+  fuel_update={'schemaVersion':2,'producer':{'app':'DriveLine iPhone','version':'test','platform':'iOS'},'sources':[],
+               'vehicles':recording['vehicles'],'recordings':[],'fuelEntries':[updated_fill],
+               'receiptFiles':{receipt_digest:base64.b64encode(receipt_bytes).decode()}}
+  fuel_path='/v1/fuel-entries?vehicleID='+vehicle['id']
+  status,fuel_receipt=call(fuel_path,fuel_update);assert status==202
+  for _ in range(80):
+   status,processed_fuel=call('/v1/receipts/'+fuel_receipt['id'])
+   if processed_fuel['status']=='processed':break
+   if processed_fuel['status']=='failed':raise AssertionError(processed_fuel)
+   time.sleep(.1)
+  else:raise AssertionError('Fuel receipt did not finish')
+  status,fuel_duplicate=call(fuel_path,fuel_update);assert status==200 and fuel_duplicate['id']==fuel_receipt['id']
   status,trips=call('/v1/trips');assert len(trips['trips'])==1
   _,archive=call('/v1/trips/'+trips['trips'][0]['id']);trip=archive['recordings'][0]
   assert archive['schemaVersion']==2 and trip['recordingID'].lower()==recording_id.lower()
   assert trip['signalSamples'][0]['values']['speedKph']==60
   assert [(s['latitude'],s['longitude']) for s in trip['gpsPoints']]==[(49.1,-123.9),(49.1001,-123.9)]
   assert [s['values']['rpm'] for s in trip['signalSamples']]==[832,840]
-  assert archive['fuelEntries'][0]['receipt']['sha256']=='a'*64
+  assert archive['fuelEntries'][0]['receipt']['sha256']==receipt_digest
+  assert base64.b64decode(archive['receiptFiles'][receipt_digest])==receipt_bytes
   assert call('/v1/recordings?vehicleID='+str(uuid.uuid4()),recording)[0]==422
-  manifest=json.loads((pathlib.Path(directory)/'library.json').read_text());assert manifest['schemaVersion']==3 and len(manifest['receipts'])==1
-  assert manifest['fuelEntries'][0]['id'].lower()==fill_id.lower() and manifest['fuelEntries'][0]['receipt']['sha256']=='a'*64
-  assert len(list((pathlib.Path(directory)/'Originals').iterdir()))==1
-  original=next((pathlib.Path(directory)/'Originals').iterdir()); assert json.loads(original.read_text())==recording
-  print('API integration passed: v2 archive in v3 annotation-sidecar library, mixed GPS/OBD and fill receipt, stable IDs, exact original, auth, processing receipt, hash deduplication/conflict, trip retrieval, vehicle validation.')
+  manifest=json.loads((pathlib.Path(directory)/'library.json').read_text());assert manifest['schemaVersion']==3 and len(manifest['receipts'])==2
+  assert manifest['fuelEntries'][0]['id'].lower()==fill_id.lower() and manifest['fuelEntries'][0]['receipt']['sha256']==receipt_digest
+  assert (pathlib.Path(directory)/'Receipts'/receipt_digest).read_bytes()==receipt_bytes
+  originals=list((pathlib.Path(directory)/'Originals').iterdir());assert len(originals)==2
+  assert any(json.loads(original.read_text())==recording for original in originals)
+  assert len(trips['trips'])==1 and trip['recordingID'].lower()==recording_id.lower()
+  print('API integration passed: recording and fuel-only v2 transfers, external receipt bytes, stable IDs, exact originals, auth, processing receipts, hash deduplication/conflict, trip isolation, retrieval, and vehicle validation.')
  finally:
   p.terminate()
   try:p.wait(timeout=5)

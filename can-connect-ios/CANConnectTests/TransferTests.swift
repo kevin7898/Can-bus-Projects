@@ -138,6 +138,33 @@ final class TransferTests: XCTestCase {
         XCTAssertEqual(restarted.state.transfers.first?.status,.queued)
     }
     @MainActor
+    func testFuelOnlyQueueTransfersStableFillWithoutSamplesOrTripMutation() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let disk=LocalStore(url:root.appendingPathComponent("state.json"));let store=AppStore(disk:disk)
+        var vehicle=VehicleProfile();vehicle.make="Synthetic";vehicle.model="Fuel transfer";try store.saveVehicle(vehicle)
+        let fill=try store.saveFill(litres:42,cost:70,currencyCode:"CAD",odometer:200_000,full:true,date:Date(timeIntervalSince1970:100),stationName:"Fixture",notes:"Sanitized",allowOdometerCorrection:false)
+        store.state.fills.append(FuelEntry(vehicleID:vehicle.id,date:Date(timeIntervalSince1970:200),litres:999,costCAD:0,odometerKM:1,full:true,isSample:true))
+        let trip=Trip(vehicleID:vehicle.id,name:"Measured",startedAt:Date(timeIntervalSince1970:100),duration:10,distanceKM:1,source:.scanner,isSample:false,economy:6,fuelLitres:0.06,samples:[OBDSample(timestamp:Date(timeIntervalSince1970:100),signals:["fuelRateLph":3],command:"015E",reply:"SYNTHETIC")])
+        store.state.trips=[trip];store.state.server.address="http://mac.local:8765";store.save()
+        let before=store.state.trips
+        XCTAssertEqual(try store.queueRecordings(),1,"The recording payload already covers the current fill, so no duplicate fuel-only item is needed")
+        XCTAssertEqual(store.state.trips,before)
+        let tripArchive=try TripArchive.decode(try XCTUnwrap(store.state.transfers.first?.payload))
+        XCTAssertEqual(tripArchive.fills.map(\.id),[fill.id]);XCTAssertFalse(tripArchive.fills.contains(where:\.isSample))
+
+        let edited=try store.saveFill(id:fill.id,litres:43,cost:72,currencyCode:"USD",odometer:200_000,full:true,date:Date(timeIntervalSince1970:100),stationName:"Fixture",notes:"Corrected",allowOdometerCorrection:true)
+        XCTAssertEqual(try store.queueRecordings(),1)
+        let fuelItem=try XCTUnwrap(store.state.transfers.last)
+        XCTAssertEqual(fuelItem.fuelEntryIDs,[edited.id])
+        let fuelArchive=try TripArchive.decode(fuelItem.payload)
+        XCTAssertTrue(fuelArchive.trips.isEmpty);XCTAssertEqual(fuelArchive.fills,[edited])
+        var acknowledged=fuelItem;acknowledged.remoteVehicleID=vehicle.id
+        let receipt=MacReceipt(id:UUID(),vehicleID:vehicle.id,contentHash:acknowledged.contentHash,status:"processed",byteCount:acknowledged.payload.count,tripIDs:[])
+        XCTAssertNoThrow(try receipt.validate(item:acknowledged),"A processed fuel-only transfer does not need a recording ID")
+        XCTAssertEqual(store.state.trips,before);XCTAssertEqual(store.state.trips.first?.fuelLitres,0.06)
+    }
+    @MainActor
     func testNativeMacServerQueueWhenLoopbackIntegrationEnabled() async throws {
         guard let address = ProcessInfo.processInfo.environment["CAN_CONNECT_MAC_TEST_URL"], address.hasPrefix("http://127.0.0.1:") else { throw XCTSkip("Opt-in native Mac integration requires a synthetic loopback server. See README.") }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
