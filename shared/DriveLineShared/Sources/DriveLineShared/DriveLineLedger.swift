@@ -805,10 +805,11 @@ public enum DriveLineJourneyPolicy {
             return DriveLineSignalStatistics(current:nil,freshness:.unavailable,minimum:nil,maximum:nil,
                 recordedObservationAverage:nil,observationCount:0,latestObservation:nil,sourceIDs:[])
         }
-        let nearest=finite.min { abs($0.timestamp.timeIntervalSince(cursor)) < abs($1.timestamp.timeIntervalSince(cursor)) }
-        let current=nearest.flatMap { abs($0.timestamp.timeIntervalSince(cursor)) <= maximumAge ? $0:nil }
+        let latestAtCursor=finite.last(where:{$0.timestamp <= cursor})
+        let current=latestAtCursor.flatMap { cursor.timeIntervalSince($0.timestamp) <= maximumAge ? $0:nil }
         let average=finite.reduce(0) { $0+$1.value }/Double(finite.count)
-        return DriveLineSignalStatistics(current:current,freshness:current == nil ? .stale:.fresh,
+        let freshness:DriveLineSignalFreshness = current != nil ? .fresh:(latestAtCursor == nil ? .unavailable:.stale)
+        return DriveLineSignalStatistics(current:current,freshness:freshness,
             minimum:finite.map(\.value).min(),maximum:finite.map(\.value).max(),recordedObservationAverage:average,
             observationCount:finite.count,latestObservation:finite.last?.timestamp,
             sourceIDs:Array(Set(finite.map(\.sourceID))).sorted())
@@ -837,8 +838,8 @@ public enum DriveLineJourneyPolicy {
 
     private static func nearest<T>(_ values: [T], to date: Date, maximumAge: TimeInterval,
                                    timestamp: (T) -> Date) -> T? {
-        guard let value = values.min(by: { abs(timestamp($0).timeIntervalSince(date)) < abs(timestamp($1).timeIntervalSince(date)) }),
-              abs(timestamp(value).timeIntervalSince(date)) <= maximumAge else { return nil }
+        guard let value = values.filter({ timestamp($0) <= date }).max(by:{timestamp($0) < timestamp($1)}),
+              date.timeIntervalSince(timestamp(value)) <= maximumAge else { return nil }
         return value
     }
 

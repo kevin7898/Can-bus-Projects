@@ -341,15 +341,15 @@ struct SignalsView:View {
     }
     private func playbackSample(_ trip:Trip)->TelemetrySample? {
         guard let date=selectedDate else { return nil }
-        let closest=trip.coordinates.min { abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date)) }
-        guard let closest,abs(closest.timestamp.timeIntervalSince(date))<=DriveLineMetricPolicy.maximumGPSGap else { return nil }
-        return closest
+        let latest=trip.coordinates.filter{$0.timestamp <= date}.max(by:{$0.timestamp < $1.timestamp})
+        guard let latest,date.timeIntervalSince(latest.timestamp)<=DriveLineMetricPolicy.maximumGPSGap else { return nil }
+        return latest
     }
     private func rawEvidence(_ trip:Trip)->TelemetrySample? {
         guard let date=selectedDate else { return nil }
-        let samples=trip.samples.filter{$0.command != nil || $0.reply != nil}
-        guard let closest=samples.min(by:{abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date))}),abs(closest.timestamp.timeIntervalSince(date))<=DriveLineMetricPolicy.maximumSignalGap else { return nil }
-        return closest
+        let latest=trip.samples.filter{($0.command != nil || $0.reply != nil) && $0.timestamp <= date}.max(by:{$0.timestamp < $1.timestamp})
+        guard let latest,date.timeIntervalSince(latest.timestamp)<=DriveLineMetricPolicy.maximumSignalGap else { return nil }
+        return latest
     }
 }
 

@@ -327,6 +327,10 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(stats.current?.value,4_000)
         XCTAssertEqual(stats.freshness,.fresh)
         XCTAssertEqual(DriveLineJourneyPolicy.signalStatistics(series,at:start.addingTimeInterval(70),visibleRange:range).freshness,.stale)
+        XCTAssertEqual(DriveLineJourneyPolicy.signalStatistics(series,at:start.addingTimeInterval(-1),visibleRange:range).freshness,.unavailable)
+        let beforeFuture=DriveLineJourneyPolicy.signalStatistics(series,at:start.addingTimeInterval(35),visibleRange:range)
+        XCTAssertNil(beforeFuture.current,"A future observation must never be presented at an earlier cursor")
+        XCTAssertEqual(beforeFuture.freshness,.stale)
     }
 
     func testPhase6SharedCursorSynchronizesSignalAndRecordedRouteWithoutForwardFill() {
@@ -339,6 +343,9 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(atTen.gpsPoint?.timestamp,start.addingTimeInterval(10))
         XCTAssertEqual(atTen.observations["rpm"]?.timestamp,atTen.gpsPoint?.timestamp)
         XCTAssertEqual(atTen.observations["gps.speedKph"]?.value,36)
+        let beforeTen=DriveLineJourneyPolicy.cursor(at:start.addingTimeInterval(9),recording:recording,signalKeys:["rpm"])
+        XCTAssertEqual(beforeTen.gpsPoint?.timestamp,start,"A future GPS observation must not move the route marker early")
+        XCTAssertEqual(beforeTen.observations["rpm"]?.timestamp,start,"A future scanner observation must not be forward-filled")
         let inGap=DriveLineJourneyPolicy.cursor(at:start.addingTimeInterval(25),recording:recording,signalKeys:["rpm"])
         XCTAssertNil(inGap.observations["rpm"])
         XCTAssertEqual(inGap.gpsPoint?.timestamp,start.addingTimeInterval(20))
