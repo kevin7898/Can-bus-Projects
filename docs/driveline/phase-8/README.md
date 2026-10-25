@@ -299,7 +299,12 @@ The Mac renderer covers both 1080×720 minimum and 1540×1000 widescreen layouts
 
 ## GitHub Actions
 
-Pending final evidence push.
+The Phase 8 implementation/evidence push (`e423a6d0709091f50a184868544c3104425c9ff3`) passed both required workflows:
+
+- [CAN CONNECT Mac run 40244390368](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40244390368): **passed**. Core tests, Xcode build, API integration, local-build packaging and artifact upload all completed successfully.
+- [iOS companion run 40244390362](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40244390362): **passed**. Simulator selection, the native build/test suite, screenshot export and test-evidence upload all completed successfully.
+
+The follow-up commit `0eee6d890b22c13290b1c4dcb35d59fb66b357df` corrected only the committed PNG byte payloads. Its tree matches the locally validated evidence tree exactly; the workflow path filters intentionally exclude documentation and screenshots, so this evidence-only correction did not start redundant application workflows.
 
 ## Remaining physical-device validation
 
