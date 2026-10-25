@@ -3,10 +3,10 @@ import SwiftUI
 private extension DriveLineSemanticState {
     var phoneColor:Color {
         switch self {
-        case .healthy:Palette.healthy
-        case .stale,.queued:Palette.fuelAttention
-        case .unavailable:Palette.unavailable
-        case .recording:Palette.recordingFault
+        case .ready,.complete,.recovered:Palette.healthy
+        case .waiting,.queued,.processing,.degraded,.stale:Palette.fuelAttention
+        case .unavailable,.offline,.readOnly:Palette.unavailable
+        case .active,.failed:Palette.recordingFault
         }
     }
 }

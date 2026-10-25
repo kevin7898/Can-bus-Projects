@@ -40,11 +40,44 @@ final class DriveLineSharedTests: XCTestCase {
     }
 
     func testEveryRequiredSemanticStateHasTextAndIcon() {
-        XCTAssertEqual(DriveLineSemanticState.allCases,[.healthy,.stale,.unavailable,.queued,.recording])
+        XCTAssertEqual(DriveLineSemanticState.allCases,[.ready,.active,.waiting,.queued,.processing,.degraded,.stale,.unavailable,.offline,.failed,.recovered,.complete,.readOnly])
         for state in DriveLineSemanticState.allCases {
             XCTAssertFalse(state.title.isEmpty)
             XCTAssertFalse(state.icon.isEmpty)
         }
+    }
+
+    func testPhase8StateMatrixIsCompleteActionableAndUsesExactVocabulary() throws {
+        let matrix=DriveLineStateMatrix.all
+        XCTAssertEqual(matrix.count,119)
+        XCTAssertEqual(matrix.map(\.id),Array(1...119))
+        XCTAssertTrue(matrix.allSatisfy { !$0.trigger.isEmpty && !$0.persistedEvidence.isEmpty && !$0.wording.isEmpty && !$0.recoveryResult.isEmpty })
+        XCTAssertTrue(matrix.allSatisfy { DriveLineSemanticState.allCases.contains($0.state) })
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(42)).state,.failed)
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(42)).actions,[.restoreBackup,.retrySave])
+        XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(42)).wording.contains("draft"))
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(49)).state,.processing)
+        XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(49)).wording.contains("acknowledged"))
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(58)).state,.complete)
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(95)).state,.readOnly)
+        XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(95)).wording.contains("never replaced"))
+    }
+
+    func testPhase8MatrixNeverUsesMisleadingGenericStatusWords() {
+        for item in DriveLineStateMatrix.all {
+            let label=item.state.rawValue.lowercased()
+            XCTAssertNotEqual(label,"connected")
+            XCTAssertNotEqual(label,"synced")
+            XCTAssertNotEqual(label,"error")
+        }
+    }
+
+    func testPhase8EvidenceLanguageKeepsGapsAndPreservationHonest() throws {
+        XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(34)).wording.contains("not bridged"))
+        XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(48)).wording.contains("does not mean"))
+        XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(60)).wording.contains("identical frozen payload"))
+        XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(91)).wording.contains("never physical"))
+        XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(107)).wording.contains("not reassigned"))
     }
 
     private func fixture(_ name: String) throws -> Data {

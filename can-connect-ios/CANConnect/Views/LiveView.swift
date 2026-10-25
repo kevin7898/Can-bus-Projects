@@ -122,7 +122,12 @@ struct LiveView: View {
         switch store.source { case .phoneGPS:return "Records route, speed, distance and duration. Engine telemetry stays unavailable.";case .scanner:return "Records actual scanner observations while GPS independently records the route.";case .demo:return "Clearly labelled sample data for preview only.";case .imported:return "Imported recordings cannot be used as a live source." }
     }
     private var phaseSemantic:DriveLineSemanticState { presentation.phase == .starting ? .stale:(presentation.phase == .idle ? .healthy:.queued) }
-    private func color(_ state:DriveLineSemanticState)->Color { switch state { case .healthy:return Palette.healthy;case .stale,.queued:return Palette.fuelAttention;case .unavailable:return Palette.unavailable;case .recording:return Palette.recordingFault } }
+    private func color(_ state:DriveLineSemanticState)->Color { switch state {
+        case .ready,.complete,.recovered:return Palette.healthy
+        case .waiting,.queued,.processing,.degraded,.stale:return Palette.fuelAttention
+        case .unavailable,.offline,.readOnly:return Palette.unavailable
+        case .active,.failed:return Palette.recordingFault
+    } }
 }
 
 #if DEBUG

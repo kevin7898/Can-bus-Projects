@@ -3,10 +3,10 @@ import SwiftUI
 private extension DriveLineSemanticState {
     var macColor:Color {
         switch self {
-        case .healthy:Theme.healthy
-        case .stale,.queued:Theme.fuelAttention
-        case .unavailable:Theme.unavailable
-        case .recording:Theme.recordingFault
+        case .ready,.complete,.recovered:Theme.healthy
+        case .waiting,.queued,.processing,.degraded,.stale:Theme.fuelAttention
+        case .unavailable,.offline,.readOnly:Theme.unavailable
+        case .active,.failed:Theme.recordingFault
         }
     }
 }
