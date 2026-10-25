@@ -91,6 +91,42 @@ final class SmokeTests: XCTestCase {
         let fuelShot=XCTAttachment(screenshot:app.screenshot());fuelShot.name="Phase 4 Fuel Ledger — sample excluded from totals";fuelShot.lifetime = .keepAlways;add(fuelShot)
     }
     @MainActor
+    func testPhase5FuelLedgerAddAndEditAreReachable() {
+        exercisePhase5Fuel(appearance:"light")
+    }
+    @MainActor
+    func testPhase5FuelLedgerAddAndEditRenderInDarkAppearance() {
+        exercisePhase5Fuel(appearance:"dark")
+    }
+    @MainActor
+    private func exercisePhase5Fuel(appearance:String) {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase5-fixture","--appearance-\(appearance)"];app.launch()
+        XCTAssertTrue(app.buttons["garage.fuel-ledger"].waitForExistence(timeout:10));app.buttons["garage.fuel-ledger"].tap()
+        XCTAssertTrue(app.navigationBars["Fuel Ledger"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Purchased fuel"].exists)
+        XCTAssertTrue(app.staticTexts["Recorded fills"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","74.0")).firstMatch.exists)
+        let ledger=XCTAttachment(screenshot:app.screenshot());ledger.name="Phase 5 Fuel Ledger — \(appearance)";ledger.lifetime = .keepAlways;add(ledger)
+        let scroll=app.scrollViews.firstMatch
+        let addButton=app.buttons["Log a fill-up"]
+        for _ in 0..<6 where !addButton.isHittable { scroll.swipeUp() }
+        XCTAssertTrue(addButton.isHittable);addButton.tap()
+        XCTAssertTrue(app.navigationBars["Add Fuel"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.textFields["fuel.currency"].exists)
+        XCTAssertTrue(app.textFields["fuel.station"].exists)
+        XCTAssertTrue(app.textFields["fuel.notes"].exists)
+        XCTAssertTrue(app.buttons["fuel.receipt.choose"].exists)
+        XCTAssertTrue(app.switches["fuel.odometer-correction"].exists)
+        let addShot=XCTAttachment(screenshot:app.screenshot());addShot.name="Phase 5 Add Fuel — \(appearance)";addShot.lifetime = .keepAlways;add(addShot)
+        app.navigationBars["Add Fuel"].buttons["Done"].tap()
+        let edit=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","fuel.edit.")).firstMatch
+        for _ in 0..<5 where !edit.isHittable { scroll.swipeDown() }
+        XCTAssertTrue(edit.waitForExistence(timeout:5));edit.tap()
+        XCTAssertTrue(app.navigationBars["Edit Fuel"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.textFields["fuel.currency"].value as? String,"CAD")
+        let editShot=XCTAttachment(screenshot:app.screenshot());editShot.name="Phase 5 Edit Fuel — \(appearance)";editShot.lifetime = .keepAlways;add(editShot)
+    }
+    @MainActor
     func testSootCardExplainsRegenTriggerWithoutChangingCardSize() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.staticTexts["Sample vehicle selected"].waitForExistence(timeout:10))

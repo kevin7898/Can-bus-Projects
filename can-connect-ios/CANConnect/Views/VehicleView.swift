@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct VehicleView: View {
     @EnvironmentObject private var store: AppStore
@@ -86,34 +87,85 @@ struct VehicleView: View {
 struct FuelForm: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var litres = ""
     @State private var cost = ""
     @State private var odometer = ""
     @State private var date = Date()
     @State private var full = true
+    @State private var currencyCode="CAD"
+    @State private var station=""
+    @State private var notes=""
+    @State private var receipt:ReceiptAttachment?
+    @State private var existingReceipt:DriveLineReceiptMetadata?
+    @State private var removeReceipt=false
+    @State private var choosingReceipt=false
+    @State private var allowCorrection=false
     @State private var error: String?
+    private let entryID:UUID?
+    init(entry:FuelEntry? = nil) {
+        entryID=entry?.id
+        _litres=State(initialValue:entry.map { String($0.litres) } ?? "")
+        _cost=State(initialValue:entry.map { String($0.costCAD) } ?? "")
+        _odometer=State(initialValue:entry.map { String($0.odometerKM) } ?? "")
+        _date=State(initialValue:entry?.date ?? Date())
+        _full=State(initialValue:entry?.full ?? true)
+        _currencyCode=State(initialValue:entry?.currencyCode ?? "CAD")
+        _station=State(initialValue:entry?.stationName ?? "")
+        _notes=State(initialValue:entry?.notes ?? "")
+        _existingReceipt=State(initialValue:entry?.receipt)
+    }
     private func number(_ input: String) -> Double? { Double(input.replacingOccurrences(of:",",with:".")) }
-    var body: some View { SheetShell(title:"Log a fill-up") {
+    var body: some View {
+        SheetShell(title:entryID == nil ? "Add Fuel":"Edit Fuel") {
         field("Fuel added · L",text:$litres)
-        field("Total cost · CAD",text:$cost)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize { VStack(alignment:.leading,spacing:18) { field("Total cost",text:$cost);currencyField } }
+            else { HStack(alignment:.bottom) { field("Total cost",text:$cost);currencyField.frame(width:90) } }
+        }
         field("Odometer · km",text:$odometer)
-        DatePicker("Date",selection:$date,in:...Date(),displayedComponents:[.date,.hourAndMinute]).font(.system(size:13))
-        Toggle("Full tank",isOn:$full).font(.system(size:14))
+        VStack(alignment:.leading,spacing:8) {
+            if dynamicTypeSize.isAccessibilitySize {
+                Text("Date").captionStyle()
+                DatePicker("Date",selection:$date,in:...Date(),displayedComponents:[.date,.hourAndMinute]).labelsHidden()
+                    .font(.system(size:13)).dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            } else {
+                DatePicker("Date",selection:$date,in:...Date(),displayedComponents:[.date,.hourAndMinute]).font(.system(size:13))
+            }
+        }
+        Toggle(full ? "Full fill":"Partial fill",isOn:$full).font(.system(size:14)).accessibilityIdentifier("fuel.full")
+        VStack(alignment:.leading,spacing:8) { Text("Station").captionStyle();TextField("Optional station or location",text:$station).accessibilityIdentifier("fuel.station").padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)) }
+        VStack(alignment:.leading,spacing:8) { Text("Notes").captionStyle();TextField("Optional notes",text:$notes,axis:.vertical).lineLimit(2...5).accessibilityIdentifier("fuel.notes").padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)) }
+        VStack(alignment:.leading,spacing:8) {
+            HStack { Label(receipt?.metadata.fileName ?? existingReceipt?.fileName ?? "No receipt attached",systemImage:"doc.text").lineLimit(1);Spacer();Button("Choose…") { choosingReceipt=true }.accessibilityIdentifier("fuel.receipt.choose") }
+            if receipt != nil || existingReceipt != nil { Toggle("Remove receipt",isOn:$removeReceipt).font(.caption).accessibilityIdentifier("fuel.receipt.remove") }
+            Text("Receipt files are stored separately from app state and included in complete exports.").captionStyle()
+        }.card()
+        Toggle("Allow explicit odometer correction",isOn:$allowCorrection).font(.system(size:13)).accessibilityIdentifier("fuel.odometer-correction")
         InfoNote(text:"Partial fills count toward the next full-tank economy calculation.")
         if let error { Text(error).font(.system(size:12)).foregroundStyle(Palette.red) }
         AppButton(title:"Save fill-up",icon:"checkmark") {
             guard let l = number(litres), let c = number(cost), let o = number(odometer) else { error = "Enter litres, total cost and odometer."; return }
-            do { try store.addFill(litres:l,cost:c,odometer:o,full:full,date:date); dismiss() } catch { self.error = error.localizedDescription }
+            do { _=try store.saveFill(id:entryID,litres:l,cost:c,currencyCode:currencyCode,odometer:o,full:full,date:date,stationName:station,notes:notes,receipt:receipt,removeReceipt:removeReceipt,allowOdometerCorrection:allowCorrection);dismiss() } catch { self.error = error.localizedDescription }
+            }
         }
-    } }
+        .fileImporter(isPresented:$choosingReceipt,allowedContentTypes:[.image,.pdf,.data]) { result in
+            do { receipt=try store.prepareReceipt(result.get());removeReceipt=false;error=nil } catch { self.error=error.localizedDescription }
+        }
+    }
+    private var currencyField:some View { VStack(alignment:.leading,spacing:8) { Text("Currency").captionStyle();TextField("CAD",text:$currencyCode).textInputAutocapitalization(.characters).autocorrectionDisabled().accessibilityIdentifier("fuel.currency").padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)).frame(maxWidth:.infinity,alignment:.leading) } }
     private func field(_ title: String, text: Binding<String>) -> some View { VStack(alignment:.leading,spacing:8) { Text(title).captionStyle(); TextField("0",text:text).keyboardType(.decimalPad).font(.system(size:21)).padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)) } }
 }
 struct FuelHistory: View {
     @EnvironmentObject private var store: AppStore
-    var body: some View { SheetShell(title:"Fuel logbook") {
-        if store.vehicleFills.isEmpty { InfoNote(text:"No fill-ups yet.") }
-        ForEach(store.vehicleFills.sorted { $0.date > $1.date }) { entry in VStack(alignment:.leading,spacing:8) { Text(entry.date.formatted(date:.abbreviated,time:.shortened)).captionStyle(); Text("\(entry.litres.text()) L · $\(entry.costCAD.text(2)) CAD"); Text("\(entry.odometerKM.text(0)) km · \(entry.full ? "Full" : "Partial")\(entry.isSample ? " · Sample" : "")").captionStyle() }.frame(maxWidth:.infinity,alignment:.leading).card() }
-    } }
+    @State private var editing:FuelEntry?
+    var body: some View {
+        SheetShell(title:"Fuel logbook") {
+            if store.vehicleFills.isEmpty { InfoNote(text:"No fill-ups yet.") }
+            ForEach(store.vehicleFills.sorted { $0.date > $1.date }) { entry in Button { if !entry.isSample { editing=entry } } label:{ VStack(alignment:.leading,spacing:8) { Text(entry.date.formatted(date:.abbreviated,time:.shortened)).captionStyle();Text("\(entry.litres.text()) L · \(entry.costCAD.formatted(.currency(code:entry.currencyCode)))");Text("\(entry.odometerKM.text(0)) km · \(entry.full ? "Full" : "Partial")\(entry.isSample ? " · Sample" : " · Tap to edit")").captionStyle() }.frame(maxWidth:.infinity,alignment:.leading).card() }.buttonStyle(.plain) }
+        }
+        .sheet(item:$editing) { FuelForm(entry:$0) }
+    }
 }
 
 struct FuelLedgerView:View {
@@ -122,6 +174,7 @@ struct FuelLedgerView:View {
     @State private var vehicleID:UUID?
     @State private var dateDays=0
     @State private var adding=false
+    @State private var editing:FuelEntry?
     private var cutoff:Date? { dateDays == 0 ? nil:Date().addingTimeInterval(-Double(dateDays)*86_400) }
     private var entries:[FuelEntry] {
         store.state.fills.filter { entry in
@@ -167,6 +220,7 @@ struct FuelLedgerView:View {
                     DataRow(label:"Odometer",value:"\(entry.odometerKM.text(0)) km")
                     DataRow(label:"Tank-to-tank economy",value:(item?.tankEconomyL100Km).map { "\($0.text(2)) L/100 km" } ?? "Insufficient full-fill boundaries")
                     if let receipt=entry.receipt { DataRow(label:"Receipt",value:"\(receipt.fileName) · \(ByteCountFormatter.string(fromByteCount:Int64(receipt.byteCount),countStyle:.file))") }
+                    if !entry.isSample { Button("Edit fuel entry") { editing=entry }.accessibilityIdentifier("fuel.edit.\(entry.id.uuidString)") }
                 }
             }
             SectionCard(title:"Measured trip fuel",icon:"road.lanes") {
@@ -176,7 +230,7 @@ struct FuelLedgerView:View {
                 }
             }
             AppButton(title:"Log a fill-up",icon:"plus") { adding=true }
-        }.onAppear { vehicleID=store.state.selectedVehicleID }.sheet(isPresented:$adding) { FuelForm() }
+        }.onAppear { vehicleID=store.state.selectedVehicleID }.sheet(isPresented:$adding) { FuelForm() }.sheet(item:$editing) { FuelForm(entry:$0) }
     }
     private var fuelVehiclePicker:some View { Picker("Vehicle",selection:$vehicleID) { Text("All vehicles").tag(nil as UUID?);ForEach(store.state.vehicles) { Text($0.title).tag(Optional($0.id)) } } }
     private var fuelDatePicker:some View { Picker("Date",selection:$dateDays) { Text("Any date").tag(0);Text("90 days").tag(90);Text("1 year").tag(365) } }

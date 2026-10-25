@@ -19,7 +19,13 @@ import AppKit
         #if DEBUG
         if args.contains("--phase3-fixture") { state.loadPhase3Fixture() }
         if args.contains("--phase4-fixture") { state.loadPhase4Fixture() }
+        if args.contains("--phase5-fixture") { state.loadPhase5Fixture() }
         if let page = argument("--phase4-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
+        if let page = argument("--phase5-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
+        if let output = argument("--phase5-render-directory") {
+            let scheme:ColorScheme = argument("--phase5-appearance") == "dark" ? .dark:.light
+            DispatchQueue.main.async { renderPhase5FuelEvidence(store:state,output:URL(fileURLWithPath:output,isDirectory:true),scheme:scheme) }
+        }
         #endif
         if args.contains("--headless") {
             guard let token = ProcessInfo.processInfo.environment["CAN_CONNECT_TEST_TOKEN"],token.count>=16,let port = UInt16(argument("--port") ?? "18765") else { fputs("Headless validation needs CAN_CONNECT_TEST_TOKEN (16+ characters) and a valid --port.\n",stderr);exit(2) }
@@ -38,6 +44,24 @@ import AppKit
         MenuBarExtra("DriveLine",systemImage:"waveform.path.ecg") { MenuBarContent().environmentObject(store) }
     }
 }
+#if DEBUG
+@MainActor private func renderPhase5FuelEvidence(store:AppStore,output:URL,scheme:ColorScheme) {
+    do {
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        for (name,size) in [("mac-fuel-1080x720",CGSize(width:1080,height:720)),("mac-fuel-widescreen",CGSize(width:1540,height:1000))] {
+            let renderer=ImageRenderer(content:RootView().environmentObject(store).preferredColorScheme(scheme).frame(width:size.width,height:size.height))
+            renderer.proposedSize=ProposedViewSize(size);renderer.scale=2
+            guard let image=renderer.cgImage else { throw CocoaError(.fileWriteUnknown) }
+            let bitmap=NSBitmapImageRep(cgImage:image)
+            guard let data=bitmap.representation(using:.png,properties:[:]) else { throw CocoaError(.fileWriteUnknown) }
+            try data.write(to:output.appendingPathComponent(name+".png"),options:.atomic)
+        }
+        NSApp.terminate(nil)
+    } catch {
+        fputs("Phase 5 evidence rendering failed: \(error.localizedDescription)\n",stderr);exit(3)
+    }
+}
+#endif
 struct MenuBarContent:View {
     @EnvironmentObject var store:AppStore
     @Environment(\.openWindow) var openWindow
@@ -53,7 +77,19 @@ struct RootView:View {
             HStack { VStack(alignment:.leading,spacing:4) { Text(store.page.title).font(.system(size:25,weight:.semibold));Text(store.page.subtitle).font(.system(size:11)).foregroundStyle(Theme.secondaryText) };Spacer() }.padding(.horizontal,22).padding(.vertical,18)
             if let error = store.error { banner(error,isError:true) }
             if let notice = store.notice { banner(notice,isError:false) }
+            #if DEBUG
+            if CommandLine.arguments.contains("--phase5-render-directory") {
+                GeometryReader { proxy in
+                    destination.padding(.horizontal,22).padding(.bottom,22)
+                        .frame(width:proxy.size.width/0.72,alignment:.topLeading)
+                        .scaleEffect(0.72,anchor:.topLeading)
+                }.clipped()
+            } else {
+                ScrollView { destination.padding(.horizontal,22).padding(.bottom,22).frame(maxWidth:.infinity,alignment:.topLeading) }
+            }
+            #else
             ScrollView { destination.padding(.horizontal,22).padding(.bottom,22).frame(maxWidth:.infinity,alignment:.topLeading) }
+            #endif
             Divider().overlay(Theme.line)
             HStack(spacing:14) {
                 Button { store.page = .server } label:{ Label("Server: "+store.serverStatus,systemImage:store.serverStatus=="Listening" ? "checkmark.circle.fill":"server.rack") }.accessibilityIdentifier("mac.secondary.server")
@@ -85,15 +121,29 @@ struct RootView:View {
                 if store.state.vehicles.isEmpty { Text("Add a vehicle").tag(nil as UUID?) }
                 ForEach(store.state.vehicles) { Text($0.name).tag(Optional($0.id)) }
             }.labelsHidden().frame(width:180).accessibilityIdentifier("mac.vehicle.picker")
-            Menu {
-                Button("Imports",systemImage:"square.and.arrow.down") { store.page = .imports }
-                Button("Server",systemImage:"server.rack") { store.page = .server }
-                Divider()
-                Menu("Appearance") { ForEach(DriveLineAppearance.allCases) { appearance in Button { appearanceRaw=appearance.rawValue } label:{ if appearanceRaw==appearance.rawValue { Label(appearance.title,systemImage:"checkmark") } else { Text(appearance.title) } } } }
-                Divider()
-                Button("Open data folder",systemImage:"folder") { store.openLibrary() }
-            } label:{ Image(systemName:"ellipsis").frame(width:32,height:30) }.menuStyle(.borderlessButton).accessibilityLabel("Services and appearance").accessibilityIdentifier("mac.secondary.menu")
+            servicesMenu
         }.padding(.horizontal,16).frame(height:58).background(Theme.navigationBackground)
+    }
+    @ViewBuilder var servicesMenu:some View {
+        #if DEBUG
+        if CommandLine.arguments.contains("--phase5-render-directory") {
+            Image(systemName:"ellipsis").frame(width:32,height:30).foregroundStyle(Theme.secondaryText)
+        } else {
+            productionServicesMenu
+        }
+        #else
+        productionServicesMenu
+        #endif
+    }
+    var productionServicesMenu:some View {
+        Menu {
+            Button("Imports",systemImage:"square.and.arrow.down") { store.page = .imports }
+            Button("Server",systemImage:"server.rack") { store.page = .server }
+            Divider()
+            Menu("Appearance") { ForEach(DriveLineAppearance.allCases) { appearance in Button { appearanceRaw=appearance.rawValue } label:{ if appearanceRaw==appearance.rawValue { Label(appearance.title,systemImage:"checkmark") } else { Text(appearance.title) } } } }
+            Divider()
+            Button("Open data folder",systemImage:"folder") { store.openLibrary() }
+        } label:{ Image(systemName:"ellipsis").frame(width:32,height:30) }.menuStyle(.borderlessButton).accessibilityLabel("Services and appearance").accessibilityIdentifier("mac.secondary.menu")
     }
     func navigation(_ page:Workspace) -> some View {
         Button { store.page = page } label: {

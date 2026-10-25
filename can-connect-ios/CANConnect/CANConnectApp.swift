@@ -14,6 +14,8 @@ struct CANConnectApp: App {
         #endif
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
             let arguments=ProcessInfo.processInfo.arguments
+            if arguments.contains("--appearance-light") { UserDefaults.standard.set(DriveLineAppearance.light.rawValue,forKey:DriveLineAppearance.storageKey) }
+            if arguments.contains("--appearance-dark") { UserDefaults.standard.set(DriveLineAppearance.dark.rawValue,forKey:DriveLineAppearance.storageKey) }
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("can-connect-ui-tests/state.json")
             try? FileManager.default.removeItem(at:url.deletingLastPathComponent())
             let usesPhase3Fixture=arguments.contains("--phase3-active") || arguments.contains("--phase3-degraded")
@@ -51,6 +53,19 @@ struct CANConnectApp: App {
                 testStore.state.vehicles=[vehicle];testStore.state.selectedVehicleID=vehicle.id;testStore.state.trips=[trip];testStore.state.fills=[first,partial,last]
                 testStore.state.journeyAnnotations[trip.id.uuidString]=DriveLineJourneyAnnotation(recordingID:trip.id,purpose:.service,reviewed:true,startPlace:"Sample start",finishPlace:"Sample finish")
                 testStore.selectedTab = .drives;testStore.save()
+            }
+            if arguments.contains("--phase5-fixture") {
+                var vehicle=VehicleProfile();vehicle.make="Volkswagen";vehicle.model="Jetta TDI";vehicle.year=2014;vehicle.fuel = .diesel;vehicle.nickname="Sanitized Jetta"
+                let end=Date(),start=end.addingTimeInterval(-2_700)
+                let samples=(0...18).map { index in
+                    OBDSample(timestamp:start.addingTimeInterval(Double(index)*150),signals:["speedKph":76,"rpm":1_820,"fuelRateLph":4.4],command:"FIXTURE",reply:"Sanitized Phase 5 observation")
+                }
+                let trip=Trip(vehicleID:vehicle.id,name:"Sanitized measured journey",startedAt:start,duration:2_700,distanceKM:55.8,source:.scanner,isSample:false,economy:5.2,fuelLitres:2.9,samples:samples)
+                let first=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(-24*86_400),litres:38,costCAD:64.60,odometerKM:216_000,full:true,currencyCode:"CAD",stationName:"Harbour Fuel",notes:"Sanitized fixture")
+                let partial=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(-12*86_400),litres:12,costCAD:21.48,odometerKM:216_260,full:false,currencyCode:"CAD",stationName:"Island Fuel")
+                let last=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(-2*86_400),litres:24,costCAD:42.96,odometerKM:216_600,full:true,currencyCode:"CAD",stationName:"Harbour Fuel",notes:"Full tank after partial fill")
+                testStore.state.vehicles=[vehicle];testStore.state.selectedVehicleID=vehicle.id;testStore.state.trips=[trip];testStore.state.fills=[first,partial,last]
+                testStore.state.onboardingCompleted=true;testStore.selectedTab = .garage;testStore.save()
             }
             // Sanitized, debug-only state fixtures used for Phase 3 visual evidence.
             if usesPhase3Fixture {

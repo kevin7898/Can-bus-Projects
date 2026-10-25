@@ -54,7 +54,7 @@ struct RootView: View {
 func importRecording(_ result: Result<URL, Error>, store: AppStore) {
     do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
         let size = try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0
-        guard size <= 20_000_000 else { throw AppFailure("Choose a recording under 20 MB.") }
+        guard size <= 100 * 1024 * 1024 else { throw AppFailure("Choose a DriveLine archive no larger than 100 MB.") }
         try store.importTrips(Data(contentsOf:url))
     } catch { store.error = error.localizedDescription }
 }
