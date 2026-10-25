@@ -6,7 +6,7 @@ roadmap early. The accepted Phase 4 tip
 branch by merge commit `af421ad617c9f998a7d749d063a3a850b9cfe780`.
 The pre-implementation reconciliation is commit
 `5131a9cf32166d8e028087e22088fdf4f9e4e580` and the receipt storage/transfer
-milestone is `20afab0`.
+milestone is `8178fc26de3f374767f361a22b29fa26374351ab`.
 
 The existing dirty `codex/ios-companion` checkout and every unrelated worktree
 remained untouched. Work was performed only in the managed
@@ -166,9 +166,11 @@ Live Activity checks requiring physical lock-screen or Dynamic Island surfaces.
 
 ## CI
 
-The pushed Phase 5 integration branch triggers the iOS companion and CAN
-CONNECT Mac workflows. Exact run identifiers and conclusions are added after
-the code/evidence commit is available on `origin`.
+The pushed Phase 5 implementation commit
+`8af874155e80d7a7aed4c74c4974ca2a440d0186` passed both required workflows:
+
+- [CAN CONNECT Mac run 40227900207](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40227900207): passed, including core tests, Xcode build, API integration, application packaging, and artifact upload.
+- [iOS companion run 40227900269](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40227900269): passed, including native build/test, screenshot export, and test-evidence preservation.
 
 ## Remaining physical-device validation
 
