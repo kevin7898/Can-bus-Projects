@@ -34,6 +34,18 @@ final class ScannerRecorder: ObservableObject {
         guard connected, let reading = readings[key], (0...max(OBDDecoder.freshness(for:key),VWMeasurementDecoder.freshness(for:key))).contains(date.timeIntervalSince(reading.date)) else { return nil }
         return reading.value
     }
+    /// One bounded, read-only identification session for onboarding. The VIN is
+    /// returned to the caller and is never written to the scanner journal.
+    func identify(settings:ScannerSettings) async throws -> ScannerIdentity {
+        disconnect()
+        await pendingTeardown?.value
+        let transport:ScannerTransport
+        if let makeSession { transport=makeSession() }
+        else if settings.kind == .wifi { transport=ELMWiFiSession() }
+        else { transport=ELMMXPlusSession(serial:settings.accessorySerial,journal:nil,restoreCANDefaults:false) }
+        defer { transport.disconnect() }
+        return try await transport.open(host:settings.host,port:settings.port)
+    }
     func connect(settings: ScannerSettings, vehicle: VehicleProfile) {
         disconnect()
         failureRequiresAttention = false

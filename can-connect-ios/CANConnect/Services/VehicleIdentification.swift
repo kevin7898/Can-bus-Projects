@@ -7,7 +7,13 @@ enum ELMIdentityParser {
         reply.uppercased().components(separatedBy:.newlines).compactMap { raw in
             var line = raw.replacingOccurrences(of:">",with:"").trimmingCharacters(in:.whitespaces)
             if let colon = line.firstIndex(of:":") { line = String(line[line.index(after:colon)...]) }
-            let hex = line.filter { !$0.isWhitespace }
+            var tokens=line.split(whereSeparator:\.isWhitespace).map(String.init)
+            if let first=tokens.first, [3,8].contains(first.count),first.allSatisfy(\.isHexDigit) { tokens.removeFirst() }
+            if let first=tokens.first,first.count==2,let pci=UInt8(first,radix:16) {
+                if pci & 0xF0 == 0x10,tokens.count >= 2 { tokens.removeFirst(2) }
+                else if pci & 0xF0 == 0x20 { tokens.removeFirst() }
+            }
+            let hex = tokens.isEmpty ? line.filter { !$0.isWhitespace } : tokens.joined()
             guard hex.count >= 2, hex.count % 2 == 0, hex.allSatisfy({$0.isHexDigit}) else { return nil }
             var bytes: [UInt8] = []; var i = hex.startIndex
             while i < hex.endIndex { let end = hex.index(i,offsetBy:2); guard let byte = UInt8(hex[i..<end],radix:16) else { return nil }; bytes.append(byte); i = end }
@@ -29,6 +35,14 @@ enum ELMIdentityParser {
         collect()
         guard candidates.count <= 1 else { throw AppFailure("The scanner reported different VINs. Review the vehicle manually.") }
         return candidates.first
+    }
+    static func respondingAddress(_ reply:String)->String? {
+        for raw in reply.uppercased().components(separatedBy:.newlines) {
+            let tokens=raw.trimmingCharacters(in:.whitespacesAndNewlines).split(whereSeparator:\.isWhitespace)
+            guard let first=tokens.first,[3,8].contains(first.count),first.allSatisfy(\.isHexDigit) else { continue }
+            if raw.contains("49 02") || raw.replacingOccurrences(of:" ",with:"").contains("4902") { return String(first) }
+        }
+        return nil
     }
     static func supportedPIDs(_ reply: String, base: Int) -> [Int] {
         var pids = Set<Int>()
@@ -52,7 +66,7 @@ protocol ScannerTransport: AnyObject {
 enum ELMIdentification {
     static func read(restoreCANDefaults: Bool = false, command: (String) async throws -> String) async throws -> ScannerIdentity {
         let adapter = try await command("ATI")
-        let settings = ["ATE0","ATL0","ATS1","ATH0","ATCAF1"]
+        let settings = ["ATE0","ATL0","ATS1","ATH1","ATCAF1"]
             + (restoreCANDefaults ? ["ATCFC1","ATAT1","ATST32","ATSH7DF","ATCRA"] : []) + ["ATSP0"]
         for setting in settings {
             let response = try await command(setting)
@@ -60,6 +74,9 @@ enum ELMIdentification {
         }
         let vinReply = try await command("0902")
         let vin = try ELMIdentityParser.vin(vinReply)
+        let respondingAddress=ELMIdentityParser.respondingAddress(vinReply)
+        let headersOff=try await command("ATH0")
+        guard headersOff.uppercased().contains("OK") else { throw AppFailure("The adapter could not restore header-free diagnostic replies.") }
         var supported: [Int] = []
         for base in stride(from:0,through:224,by:32) {
             if base != 0 && !supported.contains(base) { break }
@@ -68,7 +85,7 @@ enum ELMIdentification {
         }
         let vehicleProtocol = try await command("ATDP")
         guard vin != nil || !supported.isEmpty else { throw AppFailure("The adapter replied, but the vehicle did not provide identification. Check ignition and connection, or continue manually.") }
-        return ScannerIdentity(vin:vin,adapter:Self.clean(adapter),vehicleProtocol:["ISO","CAN","J1850","SAE"].contains(where:{vehicleProtocol.uppercased().contains($0)}) ? Self.clean(vehicleProtocol) : "Unknown",supportedPIDs:supported.filter {$0 % 32 != 0})
+        return ScannerIdentity(vin:vin,adapter:Self.clean(adapter),vehicleProtocol:["ISO","CAN","J1850","SAE"].contains(where:{vehicleProtocol.uppercased().contains($0)}) ? Self.clean(vehicleProtocol) : "Unknown",supportedPIDs:supported.filter {$0 % 32 != 0},respondingAddress:respondingAddress,observedAt:Date())
     }
     private static func clean(_ value: String) -> String { value.components(separatedBy:.newlines).filter {!$0.uppercased().hasPrefix("AT") && !$0.isEmpty}.joined(separator:" ").trimmingCharacters(in:.whitespacesAndNewlines) }
 }
@@ -180,13 +197,8 @@ struct VINLookupResult { var vehicle: VehicleProfile; var partial: Bool }
 struct VINLookup {
     private struct Response: Decodable { var Results: [[String:String?]] }
     func decode(_ input: String) async throws -> VINLookupResult {
-        let vin = try VIN.normalized(input)
-        let url = URL(string:"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/\(vin)?format=json")!
-        let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = 15; config.urlCache = nil
-        let session = URLSession(configuration:config); defer { session.invalidateAndCancel() }
-        let (data,response) = try await session.data(from:url)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw AppFailure("VIN lookup is unavailable. You can finish setup manually.") }
-        return try Self.parse(data,vin:vin)
+        _ = try VIN.normalized(input)
+        throw AppFailure("Cloud VIN lookup is disabled. Validate the VIN locally or finish setup manually.")
     }
     static func parse(_ data: Data, vin: String) throws -> VINLookupResult {
         let response = try JSONDecoder().decode(Response.self,from:data)

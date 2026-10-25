@@ -232,6 +232,10 @@ struct TripArchive: Codable {
             profiles=shared.vehicles.filter { $0.id != missingVehicle }.map { vehicle in
                 var profile=VehicleProfile();profile.id=vehicle.id;profile.nickname=vehicle.name
                 profile.year=vehicle.year.flatMap(Int.init);profile.make=vehicle.make ?? "";profile.model=vehicle.model ?? ""
+                profile.vin=vehicle.vin;profile.fuel=vehicle.fuelType.flatMap { FuelKind(rawValue:$0.lowercased()) } ?? .unknown
+                profile.kind=vehicle.vehicleClass.map { value in switch value { case .passengerCar:return .car;case .lightTruck:return .pickup;case .motorcycle:return .motorcycle;case .heavyTruck:return .heavyTruck;case .van:return .van;case .other:return .other } } ?? .car
+                profile.preferredUnits=vehicle.preferredUnits ?? .metric;profile.preferredGPS=vehicle.preferredGPS ?? .automatic
+                profile.configuredSources=vehicle.configuredSources;profile.isArchived=vehicle.isArchived
                 profile.identificationSource="DriveLine archive";return profile
             }
         }
@@ -297,7 +301,11 @@ struct TripArchive: Codable {
             recording.coverage=DriveLineMetricPolicy.coverageSummaries(recording)
             return recording
         }
-        let sharedVehicles=(vehicles ?? []).map { DriveLineVehicle(id:$0.id,name:$0.title,year:$0.year.map(String.init),make:$0.make,model:$0.model) }
+        let sharedVehicles=(vehicles ?? []).map {
+            DriveLineVehicle(id:$0.id,name:$0.title,year:$0.year.map(String.init),make:$0.make,model:$0.model,
+                vehicleClass:$0.kind.shared,fuelType:$0.fuel.title,vin:$0.vin,preferredUnits:$0.preferredUnits,
+                preferredGPS:$0.preferredGPS,configuredSources:$0.configuredSources,isArchived:$0.isArchived)
+        }
         var allVehicles=sharedVehicles
         let referencedVehicleIDs=Set(recordings.map(\.vehicleID)).union(fills.map { $0.vehicleID ?? missingVehicle })
         for id in referencedVehicleIDs where !allVehicles.contains(where:{$0.id == id}) {

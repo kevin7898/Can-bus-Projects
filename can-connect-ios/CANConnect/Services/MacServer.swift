@@ -70,6 +70,12 @@ struct RemoteVehicle: Codable {
     var model: String
     var vin: String
     var notes: String
+    var vehicleClass:DriveLineVehicleClass?=nil
+    var fuelType:String?=nil
+    var preferredUnits:DriveLineUnitSystem?=nil
+    var preferredGPS:DriveLineGPSPreference?=nil
+    var configuredSources:[DriveLineVehicleSource]?=nil
+    var isArchived:Bool?=nil
 }
 struct MacReceipt: Decodable {
     var id: UUID
@@ -150,7 +156,9 @@ final class MacServerClient {
         if let vin = vehicle.vin, vehicles.contains(where:{$0.vin.uppercased() == vin && $0.id != vehicle.id}) {
             throw AppFailure("The Mac already has this VIN under a different stable vehicleID. Reconcile the vehicle profiles before transferring.")
         }
-        let remote = RemoteVehicle(id:vehicle.id,name:vehicle.title,year:vehicle.year.map(String.init) ?? "",make:vehicle.make,model:vehicle.model,vin:vehicle.vin ?? "",notes:"Created by iOS companion")
+        let remote = RemoteVehicle(id:vehicle.id,name:vehicle.title,year:vehicle.year.map(String.init) ?? "",make:vehicle.make,model:vehicle.model,vin:vehicle.vin ?? "",notes:"Created by iOS companion",
+            vehicleClass:vehicle.kind.shared,fuelType:vehicle.fuel.title,preferredUnits:vehicle.preferredUnits,
+            preferredGPS:vehicle.preferredGPS,configuredSources:vehicle.configuredSources,isArchived:vehicle.isArchived)
         let response = try await request("POST",path:"v1/vehicles",body:JSONEncoder().encode(remote))
         let saved = try JSONDecoder().decode(RemoteVehicle.self,from:response)
         guard saved.id == remote.id, saved.vin == remote.vin else { throw AppFailure("The Mac did not acknowledge this vehicle.") }

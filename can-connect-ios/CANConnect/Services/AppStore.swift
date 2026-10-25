@@ -420,6 +420,7 @@ final class AppStore: ObservableObject {
         guard !recording && !pendingGPS else { throw AppFailure("Finish the current recording before switching vehicles.") }
         guard state.vehicles.contains(where:{$0.id == id}) else { throw AppFailure("Vehicle not found.") }
         var next = state; next.selectedVehicleID = id; next.onboardingCompleted = true
+        next.scanner = next.vehicles.first(where:{$0.id==id})?.scannerConnection ?? ScannerSettings()
         try disk.save(next); state = next; tripPage = 0
         resetScannerAutomation(); source = activeVehicle?.isSample == true ? .demo : .phoneGPS
     }
@@ -436,6 +437,30 @@ final class AppStore: ObservableObject {
         try disk.save(next); state = next; tripPage = 0; vehicleSetupPresented = false
         resetScannerAutomation(); source = .phoneGPS
         notify("Vehicle ready: \(value.title)")
+    }
+    func setVehicleArchived(_ id:UUID,archived:Bool) throws {
+        guard canWrite,!recording,!pendingGPS else { throw AppFailure("Finish recording before changing Garage profiles.") }
+        guard let index=state.vehicles.firstIndex(where:{$0.id==id}) else { throw AppFailure("Vehicle not found.") }
+        var next=state
+        next.vehicles[index].isArchived=archived
+        next.vehicles[index].archivedAt=archived ? Date():nil
+        if archived,next.selectedVehicleID==id {
+            next.selectedVehicleID=next.vehicles.first(where:{$0.id != id && !$0.isArchived})?.id
+            next.scanner=next.vehicles.first(where:{$0.id==next.selectedVehicleID})?.scannerConnection ?? ScannerSettings()
+        }
+        try disk.save(next);state=next;tripPage=0;resetScannerAutomation();source=activeVehicle?.isSample==true ? .demo:.phoneGPS
+    }
+    func deleteEmptyVehicle(_ id:UUID) throws {
+        guard canWrite,!recording,!pendingGPS else { throw AppFailure("Finish recording before changing Garage profiles.") }
+        guard !state.trips.contains(where:{$0.vehicleID==id}),
+              !state.fills.contains(where:{$0.vehicleID==id}),
+              !state.transfers.contains(where:{$0.vehicle.id==id}) else {
+            throw AppFailure("Archive this vehicle instead. Profiles with drives, fills, or queued transfers cannot be permanently deleted.")
+        }
+        var next=state;next.vehicles.removeAll{$0.id==id}
+        if next.selectedVehicleID==id { next.selectedVehicleID=next.vehicles.first(where:{!$0.isArchived})?.id }
+        next.scanner=next.vehicles.first(where:{$0.id==next.selectedVehicleID})?.scannerConnection ?? ScannerSettings()
+        try disk.save(next);state=next;tripPage=0;resetScannerAutomation();source=activeVehicle?.isSample==true ? .demo:.phoneGPS
     }
     func useSampleVehicle() throws {
         guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before switching vehicles.") }
@@ -487,7 +512,10 @@ final class AppStore: ObservableObject {
             guard ELMWiFiSession.isLocalHost(settings.host), settings.port > 0 else { throw AppFailure("Enter a private scanner address and valid TCP port.") }
         }
         var next = state; next.scanner = settings
-        if let i = next.vehicles.firstIndex(where:{$0.id == vehicle.id}) { next.vehicles[i].scannerConnection = settings }
+        if let i = next.vehicles.firstIndex(where:{$0.id == vehicle.id}) {
+            next.vehicles[i].scannerConnection = settings
+            if !next.vehicles[i].configuredSources.contains(.obdScanner) { next.vehicles[i].configuredSources.append(.obdScanner) }
+        }
         try disk.save(next); state = next
         automaticConnectionSuppressed = false; automaticRecordingSuppressed = false
         reconnectFailures = 0; nextReconnect = .distantPast

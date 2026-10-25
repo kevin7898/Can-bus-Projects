@@ -10,7 +10,7 @@ struct RootView: View {
             HStack { Text("DriveLine").font(.system(size:12, weight:.medium)).tracking(2)
                 Spacer()
                 Menu {
-                    ForEach(store.state.vehicles) { vehicle in Button(vehicle.title) { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } }.accessibilityIdentifier(vehicle.isSample ? "garage.select.sample" : "garage.select.\(vehicle.id.uuidString)") }
+                    ForEach(store.state.vehicles.filter{!$0.isArchived}) { vehicle in Button(vehicle.title) { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } }.accessibilityIdentifier(vehicle.isSample ? "garage.select.sample" : "garage.select.\(vehicle.id.uuidString)") }
                     Divider()
                     Button("Add a vehicle",systemImage:"plus") { store.vehicleSetupPresented = true }
                     Button("Manage vehicles",systemImage:"car.2") { store.selectedTab = .garage }

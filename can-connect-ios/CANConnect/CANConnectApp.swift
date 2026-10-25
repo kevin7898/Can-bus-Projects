@@ -73,7 +73,7 @@ struct CANConnectApp: App {
                 testStore.save()
             }
             if arguments.contains("--phase5-fixture") {
-                var vehicle=VehicleProfile();vehicle.make="Volkswagen";vehicle.model="Jetta TDI";vehicle.year=2014;vehicle.fuel = .diesel;vehicle.nickname="Sanitized Jetta"
+                var vehicle=VehicleProfile();vehicle.make="Volkswagen";vehicle.model="Jetta";vehicle.year=2013;vehicle.engine="TDI";vehicle.fuel = .diesel;vehicle.nickname="Fictional Jetta"
                 let end=Date(),start=end.addingTimeInterval(-2_700)
                 let samples=(0...18).map { index in
                     OBDSample(timestamp:start.addingTimeInterval(Double(index)*150),signals:["speedKph":76,"rpm":1_820,"fuelRateLph":4.4],command:"FIXTURE",reply:"Sanitized Phase 5 observation")
@@ -84,6 +84,20 @@ struct CANConnectApp: App {
                 let last=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(-2*86_400),litres:24,costCAD:42.96,odometerKM:216_600,full:true,currencyCode:"CAD",stationName:"Harbour Fuel",notes:"Full tank after partial fill")
                 testStore.state.vehicles=[vehicle];testStore.state.selectedVehicleID=vehicle.id;testStore.state.trips=[trip];testStore.state.fills=[first,partial,last]
                 testStore.state.onboardingCompleted=true;testStore.selectedTab = .garage;testStore.save()
+            }
+            if arguments.contains("--phase7-fixture") {
+                func sample(_ year:Int,_ make:String,_ model:String,_ kind:VehicleKind,_ fuel:FuelKind)->VehicleProfile {
+                    var value=VehicleProfile();value.year=year;value.make=make;value.model=model;value.kind=kind;value.fuel=fuel
+                    value.nickname=model+" · SAMPLE";value.isSample=true;value.identificationSource="Sanitized Phase 7 fixture"
+                    value.configuredSources=[.manual,.phoneGPS,.importedArchive];return value
+                }
+                var jetta=sample(2013,"Volkswagen","Jetta TDI",.car,.diesel);jetta.nickname="Fictional 2013 Jetta · SAMPLE"
+                let ford=sample(2021,"Ford","F-150",.pickup,.gasoline)
+                let honda=sample(2023,"Honda","CB500X ABS",.motorcycle,.gasoline)
+                let kenworth=sample(2025,"Kenworth","T880",.heavyTruck,.diesel)
+                testStore.state.vehicles=[jetta,ford,honda,kenworth];testStore.state.selectedVehicleID=jetta.id
+                testStore.state.trips=[];testStore.state.fills=[];testStore.selectedTab = .garage
+                testStore.state.onboardingCompleted = !arguments.contains("--show-onboarding");testStore.save()
             }
             // Sanitized, debug-only state fixtures used for Phase 3 visual evidence.
             if usesPhase3Fixture {

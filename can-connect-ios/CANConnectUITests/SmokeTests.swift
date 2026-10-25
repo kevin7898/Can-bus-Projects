@@ -128,6 +128,55 @@ final class SmokeTests: XCTestCase {
         let missing=XCTAttachment(screenshot:app.screenshot());missing.name="Phase 6 missing-signal state";missing.lifetime = .keepAlways;add(missing)
     }
     @MainActor
+    func testPhase7GarageAndVehicleDetailRenderInLightAndDark() {
+        for appearance in ["light","dark"] {
+            let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase7-fixture","--appearance-\(appearance)"];app.launch()
+            XCTAssertTrue(app.staticTexts["Fictional 2013 Jetta · SAMPLE"].waitForExistence(timeout:10))
+            XCTAssertTrue(app.staticTexts["F-150 · SAMPLE"].exists)
+            XCTAssertTrue(app.staticTexts["CB500X ABS · SAMPLE"].exists)
+            let garage=XCTAttachment(screenshot:app.screenshot());garage.name="Phase 7 iPhone Garage — \(appearance)";garage.lifetime = .keepAlways;add(garage)
+            let details=app.buttons["Details"].firstMatch
+            XCTAssertTrue(details.waitForExistence(timeout:5));details.tap()
+            XCTAssertTrue(app.staticTexts["Identity"].waitForExistence(timeout:5))
+            XCTAssertTrue(app.staticTexts["Stable UUID"].exists)
+            let detail=XCTAttachment(screenshot:app.screenshot());detail.name="Phase 7 iPhone vehicle detail — \(appearance)";detail.lifetime = .keepAlways;add(detail)
+            app.buttons["Done"].tap()
+            for _ in 0..<8 where !app.staticTexts["T880 · SAMPLE"].exists { app.swipeUp() }
+            XCTAssertTrue(app.staticTexts["T880 · SAMPLE"].waitForExistence(timeout:5))
+            let archived=XCTAttachment(screenshot:app.screenshot());archived.name="Phase 7 iPhone archived vehicle — \(appearance)";archived.lifetime = .keepAlways;add(archived)
+            app.terminate()
+        }
+    }
+    @MainActor
+    func testPhase7FourStageOnboardingEvidenceAndManualFailureContinuation() {
+        let variants:[(String,String,String)]=[
+            ("--phase7-onboarding","Vehicle","Phase 7 iPhone Vehicle stage"),
+            ("--phase7-scanner","Scanner","Phase 7 iPhone Scanner stage"),
+            ("--phase7-identify-success","Identify","Phase 7 iPhone successful Identify review"),
+            ("--phase7-identify-failure","Identify","Phase 7 iPhone failed Identify manual continuation"),
+            ("--phase7-finish","Finish","Phase 7 iPhone Finish stage")
+        ]
+        for (argument,title,name) in variants {
+            let app=XCUIApplication();app.launchArguments=["--ui-testing","--show-onboarding","--phase7-fixture","--phase7-onboarding",argument,"--appearance-light"];app.launch()
+            XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout:10),app.debugDescription)
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","2013")).firstMatch.exists || title=="Scanner")
+            if argument=="--phase7-identify-success" { XCTAssertTrue(app.buttons["onboarding.year.accept"].waitForExistence(timeout:5));XCTAssertTrue(app.buttons["onboarding.year.retain"].exists) }
+            if argument=="--phase7-identify-failure" { XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","manual 2013 draft is unchanged")).firstMatch.exists) }
+            let shot=XCTAttachment(screenshot:app.screenshot());shot.name=name;shot.lifetime = .keepAlways;add(shot)
+            app.terminate()
+        }
+    }
+    @MainActor
+    func testPhase7CompactLargestAccessibilityOnboarding() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--show-onboarding","--phase7-fixture","--phase7-onboarding","--phase7-identify-success","--appearance-light"];app.launch()
+        XCTAssertTrue(app.staticTexts["Identify"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","2013")).firstMatch.exists)
+        let accept=app.buttons["onboarding.year.accept"]
+        for _ in 0..<6 where !accept.isHittable { app.swipeUp() }
+        XCTAssertTrue(accept.exists)
+        let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Phase 7 compact largest accessibility onboarding";shot.lifetime = .keepAlways;add(shot)
+    }
+    @MainActor
     private func exercisePhase6Signals(appearance:String,checkTripStory:Bool = true) {
         let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase6-fixture","--appearance-\(appearance)"];app.launch()
         XCTAssertTrue(app.buttons["More"].waitForExistence(timeout:10));app.buttons["More"].tap();app.buttons["Settings"].tap()
@@ -208,18 +257,20 @@ final class SmokeTests: XCTestCase {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing","--show-onboarding"]; app.launch()
         let manual = app.buttons["onboarding.manual"]
         XCTAssertTrue(manual.waitForExistence(timeout:10)); manual.tap()
-        await enter("Honda",in:app.textFields["vehicle.make"],app:app)
-        await enter("CB500X",in:app.textFields["vehicle.model"],app:app)
+        await enter("2013",in:app.textFields["vehicle.year"],app:app)
+        await enter("Volkswagen",in:app.textFields["vehicle.make"],app:app)
+        await enter("Jetta",in:app.textFields["vehicle.model"],app:app)
         await saveVehicle(in:app)
         await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["Choose vehicle"].waitForExistence(timeout:5))
         app.buttons["More"].tap(); app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap()
-        XCTAssertTrue(app.staticTexts["Honda CB500X · recorded values"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["2013 Volkswagen Jetta · recorded values"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["Starting odometer"].exists == false)
         let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "New vehicle without sample telemetry"; shot.lifetime = .keepAlways; add(shot)
         app.buttons["Done"].tap()
         app.buttons["Garage"].tap()
         let sample = app.buttons["garage.select.sample"]
+        for _ in 0..<5 where !sample.isHittable { app.swipeUp() }
         let ready = XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == true AND hittable == true"),object:sample)
         await fulfillment(of:[ready],timeout:5)
         sample.tap()
@@ -230,8 +281,9 @@ final class SmokeTests: XCTestCase {
     func testMXPlusSetupUsesPairedAccessoriesWithoutNetworkFields() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing","--show-onboarding"]; app.launch()
         XCTAssertTrue(app.buttons["onboarding.manual"].waitForExistence(timeout:10)); app.buttons["onboarding.manual"].tap()
-        await enter("Test",in:app.textFields["vehicle.make"],app:app)
-        await enter("Synthetic MX+",in:app.textFields["vehicle.model"],app:app)
+        await enter("2013",in:app.textFields["vehicle.year"],app:app)
+        await enter("Volkswagen",in:app.textFields["vehicle.make"],app:app)
+        await enter("Jetta",in:app.textFields["vehicle.model"],app:app)
         await saveVehicle(in:app); await waitForOnboardingToDismiss(app)
         app.buttons["More"].tap()
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","CAN recorder")).firstMatch.tap()
@@ -257,8 +309,9 @@ final class SmokeTests: XCTestCase {
         defer { fixture.stop() }
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing","--show-onboarding"]; app.launch()
         XCTAssertTrue(app.buttons["onboarding.manual"].waitForExistence(timeout:10)); app.buttons["onboarding.manual"].tap()
-        await enter("Test",in:app.textFields["vehicle.make"],app:app)
-        await enter("Synthetic ECU",in:app.textFields["vehicle.model"],app:app)
+        await enter("2013",in:app.textFields["vehicle.year"],app:app)
+        await enter("Volkswagen",in:app.textFields["vehicle.make"],app:app)
+        await enter("Jetta",in:app.textFields["vehicle.model"],app:app)
         await saveVehicle(in:app)
         await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["More"].waitForExistence(timeout:5)); app.buttons["More"].tap()
@@ -340,8 +393,16 @@ final class SmokeTests: XCTestCase {
     }
     @MainActor
     private func saveVehicle(in app: XCUIApplication) async {
-        // Return dismisses native and third-party keyboards before reaching Save.
+        // Return dismisses native and third-party keyboards, then exercise all
+        // four reviewable onboarding stages before committing the draft.
         app.textFields["vehicle.model"].typeText("\n")
+        for _ in 0..<3 {
+            let next=app.buttons["Continue"]
+            XCTAssertTrue(next.waitForExistence(timeout:5))
+            let form=app.scrollViews["onboarding.form"]
+            for _ in 0..<6 where !next.isHittable { form.swipeUp() }
+            next.tap()
+        }
         let save = app.buttons["onboarding.save"]
         XCTAssertTrue(save.waitForExistence(timeout:5))
         let form = app.scrollViews["onboarding.form"]

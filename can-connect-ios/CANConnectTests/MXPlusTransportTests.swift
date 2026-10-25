@@ -55,7 +55,7 @@ final class MXPlusTransportTests: XCTestCase {
         let sample = try await channel.command("010C")
         XCTAssertEqual(OBDDecoder.decode(sample,pid:12)?.signals["rpm"],1726)
         let commands = String(decoding:streams.written,as:UTF8.self).split(separator:"\r").map(String.init)
-        XCTAssertEqual(commands,["ATI","ATE0","ATL0","ATS1","ATH0","ATCAF1","ATSP0","0902","0100","ATDP","010C"])
+        XCTAssertEqual(commands,["ATI","ATE0","ATL0","ATS1","ATH1","ATCAF1","ATSP0","0902","ATH0","0100","ATDP","010C"])
         XCTAssertFalse(commands.contains("04"))
     }
     @MainActor
