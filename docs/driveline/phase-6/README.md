@@ -126,7 +126,10 @@ Keyboard traversal reaches the Mac recording/comparison selectors, alignment, sc
 
 ## GitHub Actions
 
-Run identifiers and final conclusions are added after the pushed implementation commit is validated by both workflows.
+Both push workflows validated implementation tip `83d78f431c753ee240bc8986c50e9d3e213c9388`:
+
+- [CAN CONNECT Mac · run 40233565607](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40233565607) — run 32, completed successfully. Core tests, Xcode build, API integration, packaging, and artifact upload passed.
+- [iOS companion · run 40233565630](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40233565630) — run 51, completed successfully. Simulator selection, complete native build/test, screenshot export, and retained test evidence passed.
 
 ## Remaining physical-device validation
 
