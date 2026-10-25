@@ -38,6 +38,43 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNil(value.todayFuelLitres)
     }
 
+    func testRecordingPresentationCoversLifecycleStates() {
+        let now=Date(), idle=StoredState()
+        func value(_ state:StoredState=idle,pending:Bool=false,connected:Bool=false,connecting:Bool=false,stopping:Bool=false,recovered:Bool=false)->PhoneRecordingPhase {
+            PhoneRecordingPresentation.make(state:state,selectedSource:.phoneGPS,pendingGPS:pending,scannerConnected:connected,
+                scannerConnecting:connecting,scannerStatus:"Synthetic",gpsStatus:"Synthetic",gpsSpeedKMH:nil,gpsLastFix:nil,now:now,
+                isStopping:stopping,recovered:recovered).phase
+        }
+        XCTAssertEqual(value(),.idle)
+        XCTAssertEqual(value(pending:true),.starting)
+        var active=StoredState();active.draft=RecordingDraft(source:.phoneGPS,startedAt:now,updatedAt:now)
+        XCTAssertEqual(value(active),.active)
+        var degraded=StoredState();degraded.draft=RecordingDraft(source:.scanner,startedAt:now.addingTimeInterval(-20),updatedAt:now)
+        XCTAssertEqual(value(degraded),.degraded)
+        XCTAssertEqual(value(active,stopping:true),.stopping)
+        XCTAssertEqual(value(recovered:true),.recovered)
+    }
+
+    func testRecordingPresentationSelectsFreshnessIndependentlyAndUsesNoSyntheticZero() throws {
+        let now=Date(), old=now.addingTimeInterval(-30), recent=now.addingTimeInterval(-1)
+        var draft=RecordingDraft(source:.scanner,startedAt:old,updatedAt:recent)
+        draft.samples=[
+            OBDSample(timestamp:old,signals:["rpm":1800,"dpfSootG":11.1],command:"VW",reply:"fixture"),
+            OBDSample(timestamp:recent,signals:["coolantC":89,"dpfRegenTrigger":43],command:"VW",reply:"fixture")
+        ]
+        var state=StoredState();state.draft=draft
+        let value=PhoneRecordingPresentation.make(state:state,selectedSource:.scanner,pendingGPS:false,scannerConnected:true,
+            scannerConnecting:false,scannerStatus:"Connected",gpsStatus:"Active",gpsSpeedKMH:84,gpsLastFix:recent,now:now)
+        let rpm=try XCTUnwrap(value.metrics.first{$0.key=="rpm"})
+        let coolant=try XCTUnwrap(value.metrics.first{$0.key=="coolantC"})
+        let boost=try XCTUnwrap(value.metrics.first{$0.key=="boostGaugeKpa"})
+        let trigger=try XCTUnwrap(value.metrics.first{$0.key=="dpfRegenTrigger"})
+        XCTAssertEqual(rpm.value,1800);XCTAssertEqual(rpm.state,.stale)
+        XCTAssertEqual(coolant.value,89);XCTAssertEqual(coolant.state,.healthy)
+        XCTAssertNil(boost.value);XCTAssertEqual(boost.state,.unavailable)
+        XCTAssertEqual(trigger.value,43,"Trigger remains a normalized indicator rather than physical fullness")
+    }
+
     @MainActor
     func testRecordingDeepLinkSelectsRecordDestination() throws {
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

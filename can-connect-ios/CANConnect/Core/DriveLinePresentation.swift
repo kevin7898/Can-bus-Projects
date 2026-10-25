@@ -39,3 +39,124 @@ struct PhoneTodayPresentation: Equatable {
                     todayFuelDriveCount:measuredFuel.count, latestTrip:realTrips.first, latestFill:latestFill)
     }
 }
+
+enum PhoneRecordingPhase: String, Equatable, CaseIterable {
+    case idle, starting, active, degraded, stopping, recovered
+}
+
+struct PhoneSignalPresentation: Equatable, Identifiable {
+    var id: String { key }
+    var key: String
+    var title: String
+    var value: Double?
+    var unit: String
+    var observedAt: Date?
+    var state: DriveLineSemanticState
+    var source: String
+}
+
+struct PhoneRecordingPresentation: Equatable {
+    var phase: PhoneRecordingPhase
+    var sourceTitle: String
+    var statusTitle: String
+    var statusMessage: String
+    var elapsed: TimeInterval
+    var distanceKM: Double
+    var speed: PhoneSignalPresentation
+    var metrics: [PhoneSignalPresentation]
+    var route: [RoutePoint]
+    var gpsState: DriveLineSemanticState
+    var scannerState: DriveLineSemanticState
+    var localState: DriveLineSemanticState
+    var queuedTransfers: Int
+    var recoveryTitle: String?
+    var recoveryMessage: String?
+
+    static let metricKeys = ["rpm","coolantC","boostGaugeKpa","dsgFluidC","dpfSootG","dpfRegenTrigger"]
+
+    static func make(state: StoredState, selectedSource: TripSource, pendingGPS: Bool,
+                     scannerConnected: Bool, scannerConnecting: Bool, scannerStatus: String,
+                     gpsStatus: String, gpsSpeedKMH: Double?, gpsLastFix: Date?, now: Date,
+                     isStopping: Bool = false, recovered: Bool = false) -> Self {
+        let draft=state.draft
+        let elapsed=draft.map { max(0,now.timeIntervalSince($0.startedAt)) } ?? 0
+        let observations=latestObservations(draft:draft)
+        let gpsFresh=gpsLastFix.map { (0...10).contains(now.timeIntervalSince($0)) } ?? false
+        let gpsMissing=draft != nil && elapsed>15 && !gpsFresh
+        let scannerMissing=draft?.source == .scanner && !scannerConnected
+        let phase:PhoneRecordingPhase
+        if recovered { phase = .recovered }
+        else if isStopping { phase = .stopping }
+        else if pendingGPS || (scannerConnecting && draft == nil) { phase = .starting }
+        else if draft != nil { phase = (scannerMissing || gpsMissing) ? .degraded:.active }
+        else { phase = .idle }
+
+        let speedObservation:PhoneSignalPresentation
+        if let obd=observations["speedKph"],draft?.source == .scanner {
+            speedObservation=signal(key:"speedKph",title:"Speed",unit:"km/h",observation:obd,now:now)
+        } else if gpsFresh,let speed=gpsSpeedKMH {
+            speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:speed,unit:"km/h",observedAt:gpsLastFix,state:.healthy,source:"iPhone GPS")
+        } else {
+            speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:nil,unit:"km/h",observedAt:gpsLastFix,state:gpsLastFix == nil ? .unavailable:.stale,source:"iPhone GPS")
+        }
+
+        var display=observations
+        if let boost=DriveLineMetricPolicy.boostGaugeKpa(observations:observations,at:now) { display["boostGaugeKpa"]=boost }
+        let definitions:[(String,String,String)]=[
+            ("rpm","Engine RPM","rpm"),("coolantC","Coolant","°C"),("boostGaugeKpa","Boost","kPa"),
+            ("dsgFluidC","DSG temp","°C"),("dpfSootG","DPF soot","g"),("dpfRegenTrigger","Regen trigger","%")
+        ]
+        let metrics=definitions.map { key,title,unit -> PhoneSignalPresentation in
+            var item=signal(key:key,title:title,unit:unit,observation:display[key],now:now)
+            if key == "dpfRegenTrigger",let value=item.value { item.value=DriveLineMetricPolicy.normalizedDPFRegenTrigger(value) }
+            return item
+        }
+        let queue=state.transfers.filter { $0.status == .queued || $0.status == .awaitingReceipt }.count
+        let recovery:(String?,String?)
+        if scannerMissing { recovery=("Scanner disconnected","GPS recording continues locally during the two-minute reconnect window.") }
+        else if gpsMissing && draft?.source == .scanner { recovery=("GPS unavailable","Scanner telemetry continues. Route coverage will show the location gap.") }
+        else if gpsMissing { recovery=("GPS unavailable","The recording remains local while DriveLine waits for a fresh location.") }
+        else { recovery=(nil,nil) }
+        let source=draft?.source ?? selectedSource
+        return Self(phase:phase,sourceTitle:source.title,statusTitle:title(phase),
+                    statusMessage:message(phase,scannerStatus:scannerStatus,gpsStatus:gpsStatus),elapsed:elapsed,
+                    distanceKM:draft?.distanceKM ?? 0,speed:speedObservation,metrics:metrics,route:draft?.route ?? [],
+                    gpsState:gpsFresh ? .healthy:(draft == nil ? .stale:.unavailable),
+                    scannerState:scannerConnected ? .healthy:(scannerConnecting ? .stale:.unavailable),
+                    localState:draft == nil ? .healthy:.recording,queuedTransfers:queue,
+                    recoveryTitle:recovery.0,recoveryMessage:recovery.1)
+    }
+
+    private static func latestObservations(draft:RecordingDraft?)->[String:DriveLineObservation] {
+        guard let draft else { return [:] }
+        var result:[String:DriveLineObservation]=[:]
+        for sample in draft.samples ?? [] {
+            for (key,value) in sample.signals where result[key].map({$0.timestamp < sample.timestamp}) ?? true {
+                result[key]=DriveLineObservation(key:key,value:value,timestamp:sample.timestamp,sourceID:"obd",recordingID:draft.id)
+            }
+        }
+        return result
+    }
+
+    private static func signal(key:String,title:String,unit:String,observation:DriveLineObservation?,now:Date)->PhoneSignalPresentation {
+        guard let observation else { return PhoneSignalPresentation(key:key,title:title,value:nil,unit:unit,observedAt:nil,state:.unavailable,source:"OBD") }
+        let freshness=key == "boostGaugeKpa" ? 10:max(OBDDecoder.freshness(for:key),VWMeasurementDecoder.freshness(for:key))
+        let age=now.timeIntervalSince(observation.timestamp)
+        return PhoneSignalPresentation(key:key,title:title,value:observation.value,unit:unit,observedAt:observation.timestamp,
+                                       state:(0...freshness).contains(age) ? .healthy:.stale,source:"OBD")
+    }
+
+    private static func title(_ phase:PhoneRecordingPhase)->String {
+        switch phase { case .idle:return "Ready to record";case .starting:return "Starting";case .active:return "Recording";case .degraded:return "Recording with limited coverage";case .stopping:return "Saving recording";case .recovered:return "Recording recovered" }
+    }
+    private static func message(_ phase:PhoneRecordingPhase,scannerStatus:String,gpsStatus:String)->String {
+        switch phase {
+        case .idle:return "Choose iPhone GPS or a configured scanner."
+        case .starting:return gpsStatus
+        case .active:return "Saved locally as observations arrive."
+        case .degraded:return "Available sources continue recording locally."
+        case .stopping:return "Preserving the original recording."
+        case .recovered:return "The interrupted draft was restored once and saved locally."
+        }
+    }
+}
