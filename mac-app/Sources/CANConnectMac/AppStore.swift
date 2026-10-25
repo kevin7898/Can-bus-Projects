@@ -62,7 +62,12 @@ import DriveLineShared
                         for i in state.receipts.indices where state.receipts[i].status == .processing { state.receipts[i].status = .queued; state.receipts[i].message = "Recovered interrupted import; original preserved" }
                     }
                 }
-            } catch { self.error = "Library could not be read. Existing files were kept. \(error.localizedDescription)"; readOnly = true }
+            } catch {
+                _ = try? repo.preserveUnreadableManifest()
+                let backup=repo.validStateBackup() == nil ? "No valid backup is available; repair is not automatic." : "A validated backup is available for explicit restore."
+                self.error = "Library could not be read. Original bytes were preserved and the library is read-only. \(backup) \(error.localizedDescription)"
+                readOnly = true
+            }
         }
         server.onState = { [weak self] value in DispatchQueue.main.async { self?.serverStatus = value } }
         Task { [weak self] in
@@ -224,6 +229,13 @@ import DriveLineShared
         let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.canCreateDirectories = true; panel.message = "Choose a destination for a complete library backup."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         perform { guard let repo = repository else { return }; let backup = try repo.backup(to:url); NSWorkspace.shared.activateFileViewerSelecting([backup]); notice = "Backup completed." }
+    }
+    func restoreStateBackup() {
+        perform {
+            guard let repository else { throw CANError.invalid("The library location is unavailable.") }
+            state=try repository.restoreStateBackup();readOnly=false;error=nil
+            notice="Recovered the library from its validated backup. The damaged source remains preserved."
+        }
     }
     func export(_ trip:Trip,asJSON:Bool = true) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "CAN-Connect-"+trip.id.uuidString+(asJSON ? ".json" : ".csv")

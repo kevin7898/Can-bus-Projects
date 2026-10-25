@@ -139,6 +139,34 @@ final class DriveLineContractTests:XCTestCase {
         XCTAssertEqual(try restored.load().fuelEntries.first?.receipt,metadata)
     }
 
+    func testCorruptLibraryPreservesBytesAndRestoresValidatedAtomicBackup() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let repo=try LibraryRepository(root:root)
+        var original=LibraryState();let vehicle=Vehicle(name:"Sanitized recovery vehicle")
+        original.vehicles=[vehicle];original.selectedVehicleID=vehicle.id
+        try repo.save(original)
+        var newer=original;newer.serverPort=9012;try repo.save(newer)
+        XCTAssertEqual(repo.validStateBackup()?.serverPort,original.serverPort)
+        let corrupt=Data("{ synthetic corrupt library".utf8);try corrupt.write(to:repo.manifest)
+        XCTAssertThrowsError(try repo.load())
+        let recovered=try repo.restoreStateBackup()
+        XCTAssertEqual(recovered.selectedVehicleID,vehicle.id)
+        XCTAssertEqual(try repo.load().serverPort,original.serverPort)
+        let preserved=try FileManager.default.contentsOfDirectory(at:repo.recovery,includingPropertiesForKeys:nil)
+        XCTAssertEqual(preserved.count,1)
+        XCTAssertEqual(try Data(contentsOf:preserved[0]),corrupt)
+    }
+
+    func testInvalidLibraryBackupNeverCreatesEmptyReplacement() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let repo=try LibraryRepository(root:root),corrupt=Data("synthetic primary bytes".utf8)
+        try corrupt.write(to:repo.manifest);try Data("synthetic backup bytes".utf8).write(to:repo.stateBackup)
+        XCTAssertThrowsError(try repo.restoreStateBackup())
+        XCTAssertEqual(try Data(contentsOf:repo.manifest),corrupt)
+    }
+
     func testPhase6MacPreferencesMigrateStableSignalKeysAndKeepDuplicates() throws {
         var legacy=VehiclePreferences()
         legacy.signalKeys=nil

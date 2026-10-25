@@ -59,6 +59,34 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(loaded.trips,state.trips)
         XCTAssertEqual(loaded.preferences.signals["drive.0"],.voltage)
     }
+    @MainActor func testCorruptStateIsPreservedReadOnlyAndRestoresOnlyValidatedBackup() throws {
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let store=LocalStore(url:directory.appendingPathComponent("state.json"))
+        var original=StoredState();original.onboardingCompleted=true
+        try store.save(original)
+        var newer=original;newer.server.address="http://127.0.0.1:8765"
+        try store.save(newer)
+        XCTAssertEqual(store.validBackup()?.server.address,original.server.address)
+        try Data("{ corrupt synthetic state".utf8).write(to:store.url)
+        let app=AppStore(disk:store,scannerAvailable:{_ in false})
+        XCTAssertTrue(app.libraryReadOnly);XCTAssertTrue(app.backupAvailable)
+        XCTAssertTrue(app.error?.contains("original bytes are preserved") == true)
+        XCTAssertTrue((try FileManager.default.contentsOfDirectory(at:store.recoveryURL,includingPropertiesForKeys:nil)).count >= 1)
+        app.restoreStateBackup()
+        XCTAssertFalse(app.libraryReadOnly);XCTAssertNil(app.error)
+        XCTAssertEqual(try store.load()?.server.address,original.server.address)
+    }
+    func testInvalidBackupDoesNotReplaceCorruptPrimary() throws {
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let store=LocalStore(url:directory.appendingPathComponent("state.json"))
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        let corrupt=Data("synthetic corrupt primary".utf8)
+        try corrupt.write(to:store.url);try Data("synthetic corrupt backup".utf8).write(to:store.backupURL)
+        XCTAssertThrowsError(try store.restoreBackup())
+        XCTAssertEqual(try Data(contentsOf:store.url),corrupt)
+    }
     func testGPSWarmupRejectsCachedAndPoorFixesUntilFreshPoint() {
         let began = Date(timeIntervalSince1970:1_700_000_000)
         XCTAssertFalse(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(-1),accuracy:9,beganAt:began,now:began.addingTimeInterval(1)))

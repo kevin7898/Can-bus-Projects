@@ -9,6 +9,8 @@ public final class LibraryRepository {
     public var originals: URL { root.appendingPathComponent("Originals", isDirectory: true) }
     public var receiptFiles:URL { root.appendingPathComponent("Receipts",isDirectory:true) }
     public var manifest: URL { root.appendingPathComponent("library.json") }
+    public var stateBackup:URL { root.appendingPathComponent("library.backup.json") }
+    public var recovery:URL { root.appendingPathComponent("Recovery",isDirectory:true) }
     public init(root: URL) throws {
         self.root = root
         try FileManager.default.createDirectory(at: originals, withIntermediateDirectories: true)
@@ -23,7 +25,35 @@ public final class LibraryRepository {
     }
     public func save(_ state: LibraryState) throws {
         let data = try Self.encoder().encode(state)
+        _ = try Self.decoder().decode(LibraryState.self,from:data)
+        if FileManager.default.fileExists(atPath:manifest.path),
+           let current=try? Data(contentsOf:manifest),
+           let decoded=try? Self.decoder().decode(LibraryState.self,from:current),
+           (1...3).contains(decoded.schemaVersion) {
+            try current.write(to:stateBackup,options:.atomic)
+        }
         try data.write(to: manifest, options: .atomic)
+    }
+    public func validStateBackup() ->LibraryState? {
+        guard let bytes=try? Data(contentsOf:stateBackup),
+              let decoded=try? Self.decoder().decode(LibraryState.self,from:bytes),
+              (1...3).contains(decoded.schemaVersion) else { return nil }
+        var value=decoded;value.schemaVersion=3;return value
+    }
+    @discardableResult public func preserveUnreadableManifest() throws ->URL? {
+        guard FileManager.default.fileExists(atPath:manifest.path) else { return nil }
+        try FileManager.default.createDirectory(at:recovery,withIntermediateDirectories:true)
+        let destination=recovery.appendingPathComponent("library-unreadable-\(UUID().uuidString).json")
+        try FileManager.default.copyItem(at:manifest,to:destination)
+        return destination
+    }
+    public func restoreStateBackup() throws ->LibraryState {
+        guard let value=validStateBackup(),let bytes=try? Data(contentsOf:stateBackup) else {
+            throw CANError.invalid("The library backup is unavailable or invalid. Existing files remain preserved.")
+        }
+        _ = try preserveUnreadableManifest()
+        try bytes.write(to:manifest,options:.atomic)
+        return value
     }
     public func originalURL(_ receipt: ImportReceipt) -> URL { originals.appendingPathComponent(receipt.archiveName) }
     public func receiptURL(_ metadata:DriveLineReceiptMetadata)->URL { receiptFiles.appendingPathComponent(metadata.sha256.lowercased()) }

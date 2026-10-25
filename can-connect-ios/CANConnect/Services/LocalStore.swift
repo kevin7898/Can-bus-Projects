@@ -12,6 +12,8 @@ struct LocalStore {
         self.url = url ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("CANConnect/state.json")
     }
     var receiptsURL:URL { url.deletingLastPathComponent().appendingPathComponent("Receipts",isDirectory:true) }
+    var backupURL:URL { url.deletingPathExtension().appendingPathExtension("backup.json") }
+    var recoveryURL:URL { url.deletingLastPathComponent().appendingPathComponent("Recovery",isDirectory:true) }
     func receiptURL(_ metadata:DriveLineReceiptMetadata)->URL { receiptsURL.appendingPathComponent(metadata.sha256.lowercased()) }
     func load() throws -> StoredState? {
         guard FileManager.default.fileExists(atPath:url.path) else { return nil }
@@ -23,7 +25,35 @@ struct LocalStore {
     func save(_ state: StoredState) throws {
         try FileManager.default.createDirectory(at:url.deletingLastPathComponent(), withIntermediateDirectories:true)
         let data = try JSONEncoder().encode(state)
+        _ = try JSONDecoder().decode(StoredState.self,from:data)
+        if FileManager.default.fileExists(atPath:url.path),
+           let current=try? Data(contentsOf:url),
+           let decoded=try? JSONDecoder().decode(StoredState.self,from:current),
+           (1...4).contains(decoded.schemaVersion) {
+            try current.write(to:backupURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+        }
         try data.write(to:url, options:[.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+    func validBackup() ->StoredState? {
+        guard let data=try? Data(contentsOf:backupURL),
+              var value=try? JSONDecoder().decode(StoredState.self,from:data),
+              (1...4).contains(value.schemaVersion) else { return nil }
+        value.migrateVehicles();return value
+    }
+    @discardableResult func preserveUnreadableSource() throws ->URL? {
+        guard FileManager.default.fileExists(atPath:url.path) else { return nil }
+        try FileManager.default.createDirectory(at:recoveryURL,withIntermediateDirectories:true)
+        let destination=recoveryURL.appendingPathComponent("state-unreadable-\(UUID().uuidString).json")
+        try FileManager.default.copyItem(at:url,to:destination)
+        return destination
+    }
+    func restoreBackup() throws ->StoredState {
+        guard let value=validBackup(),let bytes=try? Data(contentsOf:backupURL) else {
+            throw AppFailure("The backup is unavailable or invalid. Original files remain preserved.")
+        }
+        _ = try preserveUnreadableSource()
+        try bytes.write(to:url,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+        return value
     }
     func prepareReceipt(_ input:URL) throws ->ReceiptAttachment {
         let access=input.startAccessingSecurityScopedResource();defer { if access { input.stopAccessingSecurityScopedResource() } }

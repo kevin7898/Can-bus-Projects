@@ -69,7 +69,9 @@ final class AppStore: ObservableObject {
             try disk.save(state)
         } catch {
             state = StoredState(); canWrite = false
-            self.error = "Could not open saved data. The original file is preserved. \(error.localizedDescription)"
+            _ = try? disk.preserveUnreadableSource()
+            let backup=disk.validBackup() == nil ? "No valid backup is available; repair is not automatic." : "A validated backup is available for explicit restore."
+            self.error = "Could not open saved data. The original bytes are preserved and the library is read-only. \(backup) \(error.localizedDescription)"
         }
         updateLiveActivity()
         source = activeVehicle?.isSample == true ? .demo : .phoneGPS
@@ -177,6 +179,8 @@ final class AppStore: ObservableObject {
         ticker = Timer.publish(every:1, on:.main, in:.common).autoconnect().sink { [weak self] date in self?.tick(date) }
     }
     var recording: Bool { state.draft != nil }
+    var libraryReadOnly:Bool { !canWrite }
+    var backupAvailable:Bool { disk.validBackup() != nil }
     var elapsed: Double { state.draft.map { max(0, now.timeIntervalSince($0.startedAt)) } ?? 0 }
     var timerText: String { let n = Int(elapsed); return n >= 3600 ? String(format:"%d:%02d:%02d",n/3600,(n%3600)/60,n%60) : String(format:"%02d:%02d",n/60,n%60) }
     var speedText: String {
@@ -605,5 +609,11 @@ final class AppStore: ObservableObject {
             try? await Task.sleep(nanoseconds:3_000_000_000)
             guard !Task.isCancelled else { return }; self?.toast = nil
         }
+    }
+    func restoreStateBackup() {
+        do {
+            state=try disk.restoreBackup();canWrite=true
+            error=nil;notify("Recovered the saved library from its validated backup")
+        } catch { self.error=error.localizedDescription }
     }
 }
