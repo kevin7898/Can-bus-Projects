@@ -76,8 +76,50 @@ public struct Vehicle: Codable, Identifiable, Equatable {
     public var model: String
     public var vin: String
     public var notes: String
-    public init(id: UUID = UUID(), name: String, year: String = "", make: String = "", model: String = "", vin: String = "", notes: String = "") {
+    public var vehicleClass: DriveLineVehicleClass
+    public var fuelType: String
+    public var preferredUnits: DriveLineUnitSystem
+    public var preferredGPS: DriveLineGPSPreference
+    public var configuredSources: [DriveLineVehicleSource]
+    public var scannerHost: String?
+    public var scannerPort: UInt16?
+    public var identification: DriveLineVehicleIdentityObservation?
+    public var isArchived: Bool
+    public var archivedAt: Date?
+    public init(id: UUID = UUID(), name: String, year: String = "", make: String = "", model: String = "", vin: String = "", notes: String = "",
+                vehicleClass: DriveLineVehicleClass = .passengerCar, fuelType: String = "Unknown",
+                preferredUnits: DriveLineUnitSystem = .metric, preferredGPS: DriveLineGPSPreference = .automatic,
+                configuredSources: [DriveLineVehicleSource] = [.manual, .phoneGPS], scannerHost: String? = nil,
+                scannerPort: UInt16? = nil, identification: DriveLineVehicleIdentityObservation? = nil,
+                isArchived: Bool = false, archivedAt: Date? = nil) {
         self.id = id; self.name = name; self.year = year; self.make = make; self.model = model; self.vin = vin; self.notes = notes
+        self.vehicleClass=vehicleClass;self.fuelType=fuelType;self.preferredUnits=preferredUnits;self.preferredGPS=preferredGPS
+        self.configuredSources=configuredSources;self.scannerHost=scannerHost;self.scannerPort=scannerPort
+        self.identification=identification;self.isArchived=isArchived;self.archivedAt=archivedAt
+    }
+    private enum CodingKeys:String,CodingKey {
+        case id,name,year,make,model,vin,notes,vehicleClass,fuelType,preferredUnits,preferredGPS
+        case configuredSources,scannerHost,scannerPort,identification,isArchived,archivedAt
+    }
+    public init(from decoder:Decoder) throws {
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        id=try values.decodeIfPresent(UUID.self,forKey:.id) ?? UUID()
+        name=try values.decodeIfPresent(String.self,forKey:.name) ?? "Vehicle"
+        year=try values.decodeIfPresent(String.self,forKey:.year) ?? ""
+        make=try values.decodeIfPresent(String.self,forKey:.make) ?? ""
+        model=try values.decodeIfPresent(String.self,forKey:.model) ?? ""
+        vin=try values.decodeIfPresent(String.self,forKey:.vin) ?? ""
+        notes=try values.decodeIfPresent(String.self,forKey:.notes) ?? ""
+        vehicleClass=try values.decodeIfPresent(DriveLineVehicleClass.self,forKey:.vehicleClass) ?? .passengerCar
+        fuelType=try values.decodeIfPresent(String.self,forKey:.fuelType) ?? "Unknown"
+        preferredUnits=try values.decodeIfPresent(DriveLineUnitSystem.self,forKey:.preferredUnits) ?? .metric
+        preferredGPS=try values.decodeIfPresent(DriveLineGPSPreference.self,forKey:.preferredGPS) ?? .automatic
+        configuredSources=try values.decodeIfPresent([DriveLineVehicleSource].self,forKey:.configuredSources) ?? [.manual,.phoneGPS]
+        scannerHost=try values.decodeIfPresent(String.self,forKey:.scannerHost)
+        scannerPort=try values.decodeIfPresent(UInt16.self,forKey:.scannerPort)
+        identification=try values.decodeIfPresent(DriveLineVehicleIdentityObservation.self,forKey:.identification)
+        isArchived=try values.decodeIfPresent(Bool.self,forKey:.isArchived) ?? false
+        archivedAt=try values.decodeIfPresent(Date.self,forKey:.archivedAt)
     }
 }
 

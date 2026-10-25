@@ -399,4 +399,41 @@ final class DriveLineSharedTests: XCTestCase {
         var other=shorter;other.recordingID=UUID();other.vehicleID=UUID()
         XCTAssertTrue(DriveLineJourneyPolicy.comparisonIneligibility(primary:first,candidate:other)?.contains("same vehicle") == true)
     }
+
+    func testPhase7VINDecoderSuggestsReviewable2014CorrectionForFictionalVolkswagen() throws {
+        let result=try DriveLineVINDecoder.decode("3VWAAAAA0EM000001",enteredModelYear:2013,currentYear:2026)
+        XCTAssertEqual(result.normalizedVIN,"3VWAAAAA0EM000001")
+        XCTAssertEqual(result.manufacturer,"Volkswagen")
+        XCTAssertEqual(result.candidateModelYears,[1984,2014])
+        XCTAssertEqual(result.suggestedModelYear,2014)
+        XCTAssertTrue(result.checksumValidated)
+    }
+
+    func testPhase7VINDecoderKeepsAmbiguousCycleAndUnknownWMIHonest() throws {
+        let result=try DriveLineVINDecoder.decode("ZZZAAAAA0EM000001",currentYear:2026)
+        XCTAssertNil(result.manufacturer)
+        XCTAssertNil(result.suggestedModelYear)
+        XCTAssertTrue(result.modelYearIsAmbiguous)
+        XCTAssertEqual(result.candidateModelYears,[1984,2014])
+    }
+
+    func testPhase7VINDecoderRejectsInvalidCharactersLengthAndNorthAmericanChecksum() {
+        XCTAssertThrowsError(try DriveLineVINDecoder.decode("3VWAAAAA1EM000001",enteredModelYear:2013,currentYear:2026))
+        XCTAssertThrowsError(try DriveLineVINDecoder.decode("3VWAAAAA0EM00000I",enteredModelYear:2013,currentYear:2026))
+        XCTAssertThrowsError(try DriveLineVINDecoder.decode("3VWAAAAA0EM0000",enteredModelYear:2013,currentYear:2026))
+    }
+
+    func testPhase7VehicleContractAddsGarageFieldsWithoutBreakingLegacyDecode() throws {
+        let id=UUID()
+        let legacy="{\"id\":\"\(id.uuidString)\",\"name\":\"Legacy\",\"year\":\"2013\",\"make\":\"Volkswagen\",\"model\":\"Jetta\"}".data(using:.utf8)!
+        let decoded=try JSONDecoder().decode(DriveLineVehicle.self,from:legacy)
+        XCTAssertEqual(decoded.id,id)
+        XCTAssertEqual(decoded.configuredSources,[])
+        XCTAssertFalse(decoded.isArchived)
+
+        let vehicle=DriveLineVehicle(id:id,name:"Fictional Jetta",year:"2013",make:"Volkswagen",model:"Jetta",
+            vehicleClass:.passengerCar,fuelType:"Diesel",vin:"3VWAAAAA0EM000001",preferredUnits:.metric,
+            preferredGPS:.phone,configuredSources:[.manual,.phoneGPS,.obdScanner])
+        XCTAssertEqual(try JSONDecoder().decode(DriveLineVehicle.self,from:JSONEncoder().encode(vehicle)),vehicle)
+    }
 }

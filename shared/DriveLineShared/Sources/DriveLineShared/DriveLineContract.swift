@@ -90,13 +90,194 @@ public struct DriveLineVehicle: Codable, Equatable, Identifiable, Sendable {
     public var year: String?
     public var make: String?
     public var model: String?
+    public var vehicleClass: DriveLineVehicleClass?
+    public var fuelType: String?
+    public var vin: String?
+    public var preferredUnits: DriveLineUnitSystem?
+    public var preferredGPS: DriveLineGPSPreference?
+    public var configuredSources: [DriveLineVehicleSource]
+    public var isArchived: Bool
 
-    public init(id: UUID, name: String, year: String? = nil, make: String? = nil, model: String? = nil) {
+    public init(id: UUID, name: String, year: String? = nil, make: String? = nil, model: String? = nil,
+                vehicleClass: DriveLineVehicleClass? = nil, fuelType: String? = nil, vin: String? = nil,
+                preferredUnits: DriveLineUnitSystem? = nil, preferredGPS: DriveLineGPSPreference? = nil,
+                configuredSources: [DriveLineVehicleSource] = [], isArchived: Bool = false) {
         self.id = id
         self.name = name
         self.year = year
         self.make = make
         self.model = model
+        self.vehicleClass = vehicleClass
+        self.fuelType = fuelType
+        self.vin = vin
+        self.preferredUnits = preferredUnits
+        self.preferredGPS = preferredGPS
+        self.configuredSources = configuredSources
+        self.isArchived = isArchived
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, year, make, model, vehicleClass, fuelType, vin
+        case preferredUnits, preferredGPS, configuredSources, isArchived
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        year = try values.decodeIfPresent(String.self, forKey: .year)
+        make = try values.decodeIfPresent(String.self, forKey: .make)
+        model = try values.decodeIfPresent(String.self, forKey: .model)
+        vehicleClass = try values.decodeIfPresent(DriveLineVehicleClass.self, forKey: .vehicleClass)
+        fuelType = try values.decodeIfPresent(String.self, forKey: .fuelType)
+        vin = try values.decodeIfPresent(String.self, forKey: .vin)
+        preferredUnits = try values.decodeIfPresent(DriveLineUnitSystem.self, forKey: .preferredUnits)
+        preferredGPS = try values.decodeIfPresent(DriveLineGPSPreference.self, forKey: .preferredGPS)
+        configuredSources = try values.decodeIfPresent([DriveLineVehicleSource].self, forKey: .configuredSources) ?? []
+        isArchived = try values.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+    }
+}
+
+public enum DriveLineVehicleClass: String, Codable, CaseIterable, Sendable {
+    case passengerCar
+    case lightTruck
+    case motorcycle
+    case heavyTruck
+    case van
+    case other
+}
+
+public enum DriveLineUnitSystem: String, Codable, CaseIterable, Sendable {
+    case metric
+    case usCustomary
+    case imperial
+}
+
+public enum DriveLineGPSPreference: String, Codable, CaseIterable, Sendable {
+    case automatic
+    case phone
+    case imported
+    case unavailable
+}
+
+public enum DriveLineVehicleSource: String, Codable, CaseIterable, Sendable {
+    case phoneGPS
+    case obdScanner
+    case importedArchive
+    case manual
+}
+
+public struct DriveLineVehicleIdentityObservation: Codable, Equatable, Sendable {
+    public var source: String
+    public var respondingAddress: String?
+    public var protocolName: String?
+    public var observedAt: Date
+
+    public init(source: String, respondingAddress: String? = nil,
+                protocolName: String? = nil, observedAt: Date) {
+        self.source = source
+        self.respondingAddress = respondingAddress
+        self.protocolName = protocolName
+        self.observedAt = observedAt
+    }
+}
+
+public struct DriveLineVINResult: Equatable, Sendable {
+    public var normalizedVIN: String
+    public var candidateModelYears: [Int]
+    public var suggestedModelYear: Int?
+    public var manufacturer: String?
+    public var checksumValidated: Bool
+
+    public var modelYearIsAmbiguous: Bool { suggestedModelYear == nil && candidateModelYears.count > 1 }
+
+    public init(normalizedVIN: String, candidateModelYears: [Int], suggestedModelYear: Int?,
+                manufacturer: String?, checksumValidated: Bool) {
+        self.normalizedVIN = normalizedVIN
+        self.candidateModelYears = candidateModelYears
+        self.suggestedModelYear = suggestedModelYear
+        self.manufacturer = manufacturer
+        self.checksumValidated = checksumValidated
+    }
+}
+
+/// Offline VIN evidence only. This decoder intentionally limits itself to facts
+/// supported by standardized VIN positions and a small, tested WMI registry.
+public enum DriveLineVINDecoder {
+    private static let allowed = Set("ABCDEFGHJKLMNPRSTUVWXYZ0123456789")
+    private static let yearCodes = Array("ABCDEFGHJKLMNPRSTVWXY123456789")
+    private static let weights = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2]
+    private static let transliteration: [Character: Int] = [
+        "A":1,"B":2,"C":3,"D":4,"E":5,"F":6,"G":7,"H":8,
+        "J":1,"K":2,"L":3,"M":4,"N":5,"P":7,"R":9,
+        "S":2,"T":3,"U":4,"V":5,"W":6,"X":7,"Y":8,"Z":9
+    ]
+    private static let manufacturers: [String: String] = [
+        "1VW":"Volkswagen", "3VW":"Volkswagen", "WVW":"Volkswagen", "9BW":"Volkswagen"
+    ]
+
+    public static func normalized(_ input: String) throws -> String {
+        let value = input.uppercased().filter { !$0.isWhitespace && $0 != "-" }
+        guard value.count == 17, value.allSatisfy({ allowed.contains($0) }) else {
+            throw DriveLineContractError.invalid("A standard VIN has 17 letters and numbers, without I, O or Q.")
+        }
+        return value
+    }
+
+    public static func decode(_ input: String, enteredModelYear: Int? = nil,
+                              currentYear: Int = Calendar(identifier: .gregorian).component(.year, from: Date())) throws -> DriveLineVINResult {
+        let vin = try normalized(input)
+        let characters = Array(vin)
+        let checksumRequired = characters.first.map { "12345".contains($0) } ?? false
+        if checksumRequired && !checksumIsValid(vin) {
+            throw DriveLineContractError.invalid("The VIN checksum is invalid. Keep the entered vehicle details and retry the complete Mode 09 response.")
+        }
+        let candidates = modelYears(code: characters[9], currentYear: currentYear)
+        let suggested: Int?
+        if candidates.count == 1 {
+            suggested = candidates.first
+        } else if let enteredModelYear {
+            let distances = candidates.map { (year: $0, distance: abs($0 - enteredModelYear)) }.sorted { $0.distance < $1.distance }
+            if let first = distances.first, first.distance <= 5,
+               distances.dropFirst().first.map({ $0.distance != first.distance }) ?? true {
+                suggested = first.year
+            } else {
+                suggested = nil
+            }
+        } else {
+            suggested = nil
+        }
+        let wmi = String(characters.prefix(3))
+        return DriveLineVINResult(normalizedVIN: vin, candidateModelYears: candidates,
+                                  suggestedModelYear: suggested, manufacturer: manufacturers[wmi],
+                                  checksumValidated: checksumRequired)
+    }
+
+    public static func checksumIsValid(_ input: String) -> Bool {
+        guard let vin = try? normalized(input) else { return false }
+        let characters = Array(vin)
+        var total = 0
+        for (index, character) in characters.enumerated() {
+            let value: Int
+            if let digit = character.wholeNumberValue { value = digit }
+            else if let mapped = transliteration[character] { value = mapped }
+            else { return false }
+            total += value * weights[index]
+        }
+        let remainder = total % 11
+        let expected: Character = remainder == 10 ? "X" : Character(String(remainder))
+        return characters[8] == expected
+    }
+
+    public static func modelYears(code: Character, currentYear: Int) -> [Int] {
+        guard let offset = yearCodes.firstIndex(of: code) else { return [] }
+        var years: [Int] = []
+        var year = 1980 + offset
+        while year <= currentYear + 2 {
+            years.append(year)
+            year += 30
+        }
+        return years
     }
 }
 

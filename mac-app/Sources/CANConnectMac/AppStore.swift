@@ -78,17 +78,50 @@ import DriveLineShared
     func perform(_ action:() throws -> Void) {
         do { try action() } catch { self.error = error.localizedDescription }
     }
-    func selectVehicle(_ id:UUID) { perform { try commit { $0.selectedVehicleID = id } }; selectedTripID = nil }
+    func selectVehicle(_ id:UUID) {
+        perform {
+            guard let vehicle=state.vehicles.first(where:{$0.id==id}),!vehicle.isArchived else { throw CANError.invalid("Restore this archived vehicle before selecting it.") }
+            try commit { $0.selectedVehicleID = id }
+        }
+        selectedTripID = nil
+    }
     func saveVehicle(_ vehicle:Vehicle) throws {
-        guard !vehicle.name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { throw CANError.invalid("Give this vehicle a name.") }
-        if !vehicle.vin.isEmpty {
-            guard vehicle.vin.count==17, vehicle.vin.allSatisfy({$0.isASCII && ($0.isLetter || $0.isNumber)}), !vehicle.vin.uppercased().contains(where:{"IOQ".contains($0)}) else { throw CANError.invalid("VIN must have 17 valid letters and numbers, excluding I, O, and Q.") }
-            guard !state.vehicles.contains(where:{$0.id != vehicle.id && $0.vin.uppercased()==vehicle.vin.uppercased()}) else { throw CANError.invalid("This VIN already has a vehicle profile.") }
+        var value=vehicle
+        value.name=value.name.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !value.name.isEmpty else { throw CANError.invalid("Give this vehicle a name.") }
+        if !value.vin.isEmpty {
+            do { value.vin=try DriveLineVINDecoder.normalized(value.vin) }
+            catch { throw CANError.invalid(error.localizedDescription) }
+            guard !state.vehicles.contains(where:{$0.id != value.id && $0.vin.uppercased()==value.vin.uppercased()}) else { throw CANError.invalid("This VIN already has a vehicle profile.") }
         }
         try commit { state in
-            if let i = state.vehicles.firstIndex(where:{$0.id==vehicle.id}) { state.vehicles[i] = vehicle }
-            else { state.vehicles.append(vehicle) }
-            state.selectedVehicleID = vehicle.id
+            if let i = state.vehicles.firstIndex(where:{$0.id==value.id}) { state.vehicles[i] = value }
+            else { state.vehicles.append(value) }
+            if !value.isArchived { state.selectedVehicleID = value.id }
+        }
+    }
+    func setVehicleArchived(_ id:UUID, archived:Bool) throws {
+        guard state.vehicles.contains(where:{$0.id==id}) else { throw CANError.invalid("Vehicle not found.") }
+        try commit { state in
+            guard let index=state.vehicles.firstIndex(where:{$0.id==id}) else { return }
+            state.vehicles[index].isArchived=archived
+            state.vehicles[index].archivedAt=archived ? Date() : nil
+            if archived,state.selectedVehicleID==id {
+                state.selectedVehicleID=state.vehicles.first(where:{$0.id != id && !$0.isArchived})?.id
+            }
+        }
+        selectedTripID=nil
+    }
+    func deleteEmptyVehicle(_ id:UUID) throws {
+        guard !state.trips.contains(where:{$0.vehicleID==id}),
+              !state.receipts.contains(where:{$0.vehicleID==id}),
+              !state.fuelEntries.contains(where:{$0.vehicleID==id}) else {
+            throw CANError.invalid("Archive this vehicle instead. A profile with recordings, imports, or fuel entries cannot be permanently deleted.")
+        }
+        try commit { state in
+            state.vehicles.removeAll {$0.id==id}
+            state.preferences.removeValue(forKey:id.uuidString)
+            if state.selectedVehicleID==id { state.selectedVehicleID=state.vehicles.first(where:{!$0.isArchived})?.id }
         }
     }
     func changePreferences(_ body:(inout VehiclePreferences)->Void) {
