@@ -181,8 +181,10 @@ No committed screenshot contains a real VIN, adapter serial, pairing credential,
 
 ## GitHub Actions
 
-- `CAN CONNECT Mac`: pending post-push run identifier.
-- `iOS companion`: pending post-push run identifier.
+Both push workflows validated implementation/evidence tip `7d0ec956d361db29ac18022644388cf8f918ad51`:
+
+- [CAN CONNECT Mac · run 40238869032](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40238869032) — run 33, completed successfully. Core tests, Xcode build, API integration, application packaging and artifact upload passed.
+- [iOS companion · run 40238869050](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40238869050) — run 52, completed successfully. Simulator selection, complete native build/test, screenshot export and retained test evidence passed.
 
 ## Physical-device acceptance — actual 2014 Jetta
 
