@@ -328,6 +328,7 @@ struct SignalsOverviewView:View {
     let initialTripID:UUID?
     @EnvironmentObject private var store:AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var selectedTripID:UUID?
     @State private var selectedSignal:DriveLineSignalDescriptor?
     @State private var search=""
@@ -354,7 +355,7 @@ struct SignalsOverviewView:View {
                 VStack(alignment:.leading,spacing:14) {
                     if let trip {
                         recordingPicker(trip)
-                        TextField("Search name, ID, alias, source or unit",text:$search)
+                        TextField(dynamicTypeSize.isAccessibilitySize ? "Search signals":"Search name, ID, alias, source or unit",text:$search)
                             .textFieldStyle(.roundedBorder).accessibilityIdentifier("signals.search")
                         if groups.isEmpty {
                             EmptyStateCard(icon:"waveform.slash",title:"No scalar signals recorded",
@@ -395,35 +396,47 @@ private struct PhoneSignalOverviewRow:View {
     let trip:Trip
     let descriptor:DriveLineSignalDescriptor
     let action:()->Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var series:DriveLineSignalSeries { DriveLineJourneyPolicy.signalSeries(descriptor.key,unit:descriptor.unit ?? "",recording:trip.sharedRecording) }
     private var stats:DriveLineSignalStatistics { DriveLineJourneyPolicy.signalStatistics(series,at:trip.startedAt.addingTimeInterval(trip.duration)) }
     private var latestPoint:DriveLineSignalPoint? { series.segments.flatMap{$0}.last }
     var body:some View {
         Button(action:action) {
             VStack(alignment:.leading,spacing:9) {
-                HStack(alignment:.top) {
+                HStack(alignment:.top,spacing:8) {
                     VStack(alignment:.leading,spacing:2) {
                         Text(descriptor.displayName).font(.system(size:15,weight:.semibold))
                         Text(descriptor.key).font(.caption2.monospaced()).foregroundStyle(Palette.tertiaryText)
                     }
                     Spacer()
-                    StatusPill(state:semanticState,text:stats.freshness.title)
+                    if !dynamicTypeSize.isAccessibilitySize {
+                        StatusPill(state:semanticState,text:stats.freshness.title)
+                    }
                     Image(systemName:"chevron.right").foregroundStyle(Palette.tertiaryText)
                 }
-                HStack(alignment:.center,spacing:12) {
-                    VStack(alignment:.leading,spacing:5) {
-                        HStack(alignment:.firstTextBaseline,spacing:4) {
-                            Text(latestPoint?.value.text(2) ?? "—").font(.title3.monospacedDigit())
-                            Text(descriptor.unit ?? "unit unavailable").captionStyle()
-                        }
-                        SourceBadge(source:stats.sourceIDs.isEmpty ? "Source unavailable":stats.sourceIDs.joined(separator:", "),verified:!stats.sourceIDs.isEmpty)
-                        Text(series.coverage.map{"\(Int(($0.fraction*100).rounded()))% coverage · \(stats.observationCount) observations"} ?? "Coverage unavailable")
-                            .captionStyle()
-                    }.frame(maxWidth:.infinity,alignment:.leading)
-                    SignalSparkline(series:series).frame(width:118,height:48)
+                if dynamicTypeSize.isAccessibilitySize {
+                    StatusPill(state:semanticState,text:stats.freshness.title)
+                    valueSummary
+                    SignalSparkline(series:series).frame(maxWidth:.infinity).frame(height:64)
+                } else {
+                    HStack(alignment:.center,spacing:12) {
+                        valueSummary
+                        SignalSparkline(series:series).frame(width:118,height:48)
+                    }
                 }
             }.card()
         }.buttonStyle(.plain).accessibilityIdentifier("signals.row.\(descriptor.key)")
+    }
+    private var valueSummary:some View {
+        VStack(alignment:.leading,spacing:5) {
+            HStack(alignment:.firstTextBaseline,spacing:4) {
+                Text(latestPoint?.value.text(2) ?? "—").font(.title3.monospacedDigit())
+                Text(descriptor.unit ?? "unit unavailable").captionStyle()
+            }
+            SourceBadge(source:stats.sourceIDs.isEmpty ? "Source unavailable":stats.sourceIDs.joined(separator:", "),verified:!stats.sourceIDs.isEmpty)
+            Text(series.coverage.map{"\(Int(($0.fraction*100).rounded()))% coverage · \(stats.observationCount) observations"} ?? "Coverage unavailable")
+                .captionStyle()
+        }.frame(maxWidth:.infinity,alignment:.leading)
     }
     private var semanticState:DriveLineSemanticState {
         stats.freshness == .fresh ? .healthy:(stats.freshness == .stale ? .stale:.unavailable)

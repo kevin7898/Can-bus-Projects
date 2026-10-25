@@ -22,7 +22,7 @@ struct CANConnectApp: App {
             let testStore = AppStore(disk:LocalStore(url:url),gps:usesPhase3Fixture ? Phase3FixtureGPS():nil)
             if !arguments.contains("--show-onboarding") { testStore.state.onboardingCompleted = true; testStore.save() }
             if arguments.contains("--record-tab") { testStore.selectedTab = .record }
-            if arguments.contains("--phase4-fixture") {
+            if arguments.contains("--phase4-fixture") || arguments.contains("--phase6-fixture") {
                 let vehicle=testStore.state.vehicles.first ?? VehicleProfile.sample
                 let start=Date().addingTimeInterval(-3_600)
                 let route=SampleData.routeCoordinates.enumerated().map { index,coordinate in
@@ -30,7 +30,7 @@ struct CANConnectApp: App {
                 }
                 let samples=(0..<route.count).map { index in
                     let indexValue=Double(index)
-                    let signals:[String:Double]=[
+                    var signals:[String:Double]=[
                         "speedKph":72+indexValue,
                         "rpm":1_600+Double(index*25),
                         "coolantC":86+indexValue/4,
@@ -39,6 +39,7 @@ struct CANConnectApp: App {
                         "barometricKpa":101,
                         "dpfRegenTrigger":indexValue*7,
                     ]
+                    if arguments.contains("--phase6-fixture") { signals["vendor.syntheticPressure"]=20+indexValue }
                     return OBDSample(
                         timestamp:route[index].timestamp,
                         signals:signals,
@@ -46,13 +47,30 @@ struct CANConnectApp: App {
                         reply:"Sanitized Phase 4 observation \(index)"
                     )
                 }
-                let trip=Trip(vehicleID:vehicle.id,name:"Sanitized sample journey",startedAt:start,duration:Double(max(1,route.count-1))*20,distanceKM:4.8,source:.demo,isSample:true,economy:8.75,fuelLitres:0.42,route:route,samples:samples)
+                let fixtureSamples=arguments.contains("--phase6-fixture") ? samples.enumerated().compactMap { index,sample -> OBDSample? in
+                    if (6...9).contains(index) { return nil }
+                    var adjusted=sample;adjusted.timestamp=start.addingTimeInterval(Double(index)*5);return adjusted
+                }:samples
+                let trip=Trip(vehicleID:vehicle.id,name:"Sanitized sample journey",startedAt:start,duration:Double(max(1,route.count-1))*20,distanceKM:4.8,source:.demo,isSample:true,economy:8.75,fuelLitres:0.42,route:route,samples:fixtureSamples)
                 let first=FuelEntry(vehicleID:vehicle.id,date:start.addingTimeInterval(-20*86_400),litres:36,costCAD:61.20,odometerKM:216_000,full:true,isSample:true,stationName:"Sample station")
                 let partial=FuelEntry(vehicleID:vehicle.id,date:start.addingTimeInterval(-10*86_400),litres:12,costCAD:21.48,odometerKM:216_260,full:false,isSample:true,stationName:"Sample station")
                 let last=FuelEntry(vehicleID:vehicle.id,date:start.addingTimeInterval(-2*86_400),litres:24,costCAD:42.96,odometerKM:216_600,full:true,isSample:true,stationName:"Sample station")
-                testStore.state.vehicles=[vehicle];testStore.state.selectedVehicleID=vehicle.id;testStore.state.trips=[trip];testStore.state.fills=[first,partial,last]
+                var fixtureTrips=[trip]
+                if arguments.contains("--phase6-fixture") {
+                    let gpsOnly=Trip(vehicleID:vehicle.id,name:"Sample GPS-only recording",startedAt:start.addingTimeInterval(-7_200),duration:trip.duration,distanceKM:3.9,source:.demo,isSample:true,route:route)
+                    let obdOnly=Trip(vehicleID:vehicle.id,name:"Sample OBD-only recording",startedAt:start.addingTimeInterval(-10_800),duration:trip.duration,distanceKM:0,source:.demo,isSample:true,
+                        samples:samples.enumerated().compactMap { index,sample in
+                            guard index != 4,index != 5 else { return nil }
+                            var adjusted=sample;adjusted.timestamp=start.addingTimeInterval(-10_800+Double(index)*5);return adjusted
+                        })
+                    let missing=Trip(vehicleID:vehicle.id,name:"Sample missing-signal recording",startedAt:start.addingTimeInterval(-14_400),duration:120,distanceKM:0,source:.demo,isSample:true)
+                    fixtureTrips += [gpsOnly,obdOnly,missing]
+                }
+                testStore.state.vehicles=[vehicle];testStore.state.selectedVehicleID=vehicle.id;testStore.state.trips=fixtureTrips;testStore.state.fills=[first,partial,last]
                 testStore.state.journeyAnnotations[trip.id.uuidString]=DriveLineJourneyAnnotation(recordingID:trip.id,purpose:.service,reviewed:true,startPlace:"Sample start",finishPlace:"Sample finish")
-                testStore.selectedTab = .drives;testStore.save()
+                testStore.selectedTab = arguments.contains("--phase6-fixture") ? .more:.drives
+                if arguments.contains("--phase6-fixture") { testStore.connectPage=2 }
+                testStore.save()
             }
             if arguments.contains("--phase5-fixture") {
                 var vehicle=VehicleProfile();vehicle.make="Volkswagen";vehicle.model="Jetta TDI";vehicle.year=2014;vehicle.fuel = .diesel;vehicle.nickname="Sanitized Jetta"

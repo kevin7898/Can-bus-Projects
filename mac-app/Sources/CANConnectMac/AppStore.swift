@@ -270,6 +270,62 @@ import DriveLineShared
             selectedTripID=trip.id;page = .fuel
         }
     }
+    func loadPhase6Fixture() {
+        loadPhase4Fixture()
+        guard let vehicle=state.vehicles.first,let primary=state.trips.first else { return }
+        perform {
+            let base=primary.start.addingTimeInterval(-7_200)
+            let primarySamples=(0..<48).compactMap { index -> TelemetrySample? in
+                if (20...25).contains(index) { return nil }
+                let elapsed=Double(index)*5
+                return TelemetrySample(timestamp:base.addingTimeInterval(elapsed),latitude:49.16+Double(index)*0.00018,
+                    longitude:-123.94-Double(index)*0.00014,
+                    signals:["speedKph":66+Double(index%9)*2,"rpm":1_520+Double(index%12)*38,"coolantC":84+Double(index%5),
+                             "fuelRateLph":3.8+Double(index%4)*0.3,"boostAbsoluteKpa":128+Double(index%6),"barometricKpa":101,
+                             "dpfRegenTrigger":Double(index%10)*10],command:index == 12 ? "01 0C":nil,reply:index == 12 ? "41 0C 1B 20":nil)
+            }
+            let comparisonSamples=(0..<15).map { index in
+                let elapsed=Double(index)*145
+                return TelemetrySample(timestamp:base.addingTimeInterval(elapsed),latitude:49.12+Double(index)*0.0018,
+                    longitude:-123.91-Double(index)*0.0012,
+                    signals:["speedKph":58+Double(index%5)*7,"rpm":1450+Double(index)*32,"coolantC":82+Double(index%4),
+                             "fuelRateLph":3.1+Double(index%3)*0.5,"vendor.syntheticPressure":101.2+Double(index)*0.08])
+            }
+            let gpsOnlySamples=(0..<10).map { index in
+                TelemetrySample(timestamp:base.addingTimeInterval(-4_000+Double(index)*90),latitude:49.07+Double(index)*0.001,
+                    longitude:-123.84-Double(index)*0.001,signals:[:])
+            }
+            var obdOnlySamples:[TelemetrySample]=[]
+            for index in 0..<8 {
+                let offset=Double(index)
+                let signals:[String:Double]=["rpm":1_200+offset*110,"coolantC":76+offset,"dpfRegenTrigger":offset*10]
+                obdOnlySamples.append(TelemetrySample(timestamp:base.addingTimeInterval(-7_000+offset*180),signals:signals))
+            }
+            let comparison=Trip(vehicleID:vehicle.id,name:"Sample comparison drive",source:"Sanitized Phase 6 fixture",
+                samples:comparisonSamples,isDemo:true)
+            let gpsOnly=Trip(vehicleID:vehicle.id,name:"Sample GPS-only drive",source:"Sanitized Phase 6 fixture",
+                samples:gpsOnlySamples,isDemo:true)
+            let obdOnly=Trip(vehicleID:vehicle.id,name:"Sample OBD-only drive",source:"Sanitized Phase 6 fixture",
+                samples:obdOnlySamples,isDemo:true)
+            let empty=Trip(vehicleID:vehicle.id,name:"Sample missing-signal drive",source:"Sanitized Phase 6 fixture",
+                samples:[],isDemo:true,recordedStartedAt:base.addingTimeInterval(-9_000),recordedEndedAt:base.addingTimeInterval(-8_400))
+            try commit { state in
+                for index in state.trips.indices { state.trips[index].isDemo=true }
+                for index in state.fuelEntries.indices { state.fuelEntries[index].isDemo=true }
+                if let index=state.trips.firstIndex(where:{$0.id == primary.id}) {
+                    state.trips[index].samples=primarySamples
+                    state.trips[index].recordedStartedAt=base
+                    state.trips[index].recordedEndedAt=base.addingTimeInterval(235)
+                    state.trips[index].recordedDistanceKm=nil
+                    state.trips[index].tripFuelLitres=nil
+                }
+                state.trips.append(contentsOf:[comparison,gpsOnly,obdOnly,empty])
+            }
+            changePreferences { $0.signalKeys=["speedKph","rpm","coolantC","fuelRateLph","vendor.syntheticPressure","speedKph"] }
+            selectedTripID=primary.id
+            page = .signals
+        }
+    }
     #endif
     private func handle(_ request:HTTPRequest) async -> HTTPResponse {
         do {

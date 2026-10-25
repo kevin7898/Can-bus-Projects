@@ -99,6 +99,69 @@ final class SmokeTests: XCTestCase {
         exercisePhase5Fuel(appearance:"dark")
     }
     @MainActor
+    func testPhase6SignalsOverviewDetailAndTripStoryEntryAreReachable() {
+        exercisePhase6Signals(appearance:"light")
+    }
+    @MainActor
+    func testPhase6SignalsRenderInDarkAppearance() {
+        exercisePhase6Signals(appearance:"dark",checkTripStory:false)
+    }
+    @MainActor
+    func testPhase6GPSOnlyOBDOnlyAndMissingSignalStatesAreHonest() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase6-fixture","--appearance-light"];app.launch()
+        XCTAssertTrue(app.buttons["more.signals"].waitForExistence(timeout:10));app.buttons["more.signals"].tap()
+        XCTAssertTrue(app.navigationBars["Signals"].waitForExistence(timeout:5))
+
+        chooseRecording(named:"Sample GPS-only recording",in:app)
+        XCTAssertTrue(app.staticTexts["GPS and motion"].waitForExistence(timeout:5))
+        let gps=XCTAttachment(screenshot:app.screenshot());gps.name="Phase 6 GPS-only Signals state";gps.lifetime = .keepAlways;add(gps)
+
+        chooseRecording(named:"Sample OBD-only recording",in:app)
+        XCTAssertTrue(app.staticTexts["Engine"].waitForExistence(timeout:5))
+        app.buttons["signals.row.rpm"].tap()
+        XCTAssertTrue(app.staticTexts["Route unavailable"].waitForExistence(timeout:5))
+        let obd=XCTAttachment(screenshot:app.screenshot());obd.name="Phase 6 OBD-only Signals state";obd.lifetime = .keepAlways;add(obd)
+        app.navigationBars["Signal Detail"].buttons["Done"].tap()
+
+        chooseRecording(named:"Sample missing-signal recording",in:app)
+        XCTAssertTrue(app.staticTexts["No scalar signals recorded"].waitForExistence(timeout:5))
+        let missing=XCTAttachment(screenshot:app.screenshot());missing.name="Phase 6 missing-signal state";missing.lifetime = .keepAlways;add(missing)
+    }
+    @MainActor
+    private func exercisePhase6Signals(appearance:String,checkTripStory:Bool = true) {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase6-fixture","--appearance-\(appearance)"];app.launch()
+        XCTAssertTrue(app.buttons["More"].waitForExistence(timeout:10));app.buttons["More"].tap();app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["more.signals"].waitForExistence(timeout:5));app.buttons["more.signals"].tap()
+        XCTAssertTrue(app.navigationBars["Signals"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Engine"].exists)
+        XCTAssertTrue(app.buttons["signals.row.rpm"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS[c] %@","coverage")).firstMatch.exists)
+        let overview=XCTAttachment(screenshot:app.screenshot());overview.name="Phase 6 Signals overview — \(appearance)";overview.lifetime = .keepAlways;add(overview)
+        app.buttons["signals.row.rpm"].tap()
+        XCTAssertTrue(app.navigationBars["Signal Detail"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Visible-range observations"].exists)
+        XCTAssertTrue(app.staticTexts["Recorded gaps"].exists)
+        XCTAssertTrue(app.sliders["signals.visible-start"].exists)
+        XCTAssertTrue(app.sliders["signals.visible-end"].exists)
+        let detail=XCTAttachment(screenshot:app.screenshot());detail.name="Phase 6 Signal detail — \(appearance)";detail.lifetime = .keepAlways;add(detail)
+        app.navigationBars["Signal Detail"].buttons["Done"].tap()
+        guard checkTripStory else { return }
+        app.navigationBars["Signals"].buttons["Done"].tap();app.buttons["Drives"].tap()
+        XCTAssertTrue(app.staticTexts["Sanitized sample journey"].waitForExistence(timeout:5));app.staticTexts["Sanitized sample journey"].tap()
+        let entry=app.buttons["trip-story.signals"]
+        for _ in 0..<8 where !entry.isHittable { app.scrollViews.firstMatch.swipeUp() }
+        XCTAssertTrue(entry.waitForExistence(timeout:5));entry.tap()
+        XCTAssertTrue(app.navigationBars["Signals"].waitForExistence(timeout:5))
+        let contextual=XCTAttachment(screenshot:app.screenshot());contextual.name="Phase 6 Trip Story contextual Signals entry";contextual.lifetime = .keepAlways;add(contextual)
+    }
+    @MainActor
+    private func chooseRecording(named name:String,in app:XCUIApplication) {
+        app.buttons["signals.recording"].tap()
+        let option=app.buttons.matching(NSPredicate(format:"label BEGINSWITH %@",name)).firstMatch
+        XCTAssertTrue(option.waitForExistence(timeout:5),"Missing recording option \(name)")
+        option.tap()
+    }
+    @MainActor
     private func exercisePhase5Fuel(appearance:String) {
         let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase5-fixture","--appearance-\(appearance)"];app.launch()
         XCTAssertTrue(app.buttons["garage.fuel-ledger"].waitForExistence(timeout:10));app.buttons["garage.fuel-ledger"].tap()

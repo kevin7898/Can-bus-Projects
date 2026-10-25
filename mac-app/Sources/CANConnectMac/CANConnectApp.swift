@@ -20,11 +20,17 @@ import AppKit
         if args.contains("--phase3-fixture") { state.loadPhase3Fixture() }
         if args.contains("--phase4-fixture") { state.loadPhase4Fixture() }
         if args.contains("--phase5-fixture") { state.loadPhase5Fixture() }
+        if args.contains("--phase6-fixture") { state.loadPhase6Fixture() }
         if let page = argument("--phase4-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
         if let page = argument("--phase5-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
+        if let page = argument("--phase6-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
         if let output = argument("--phase5-render-directory") {
             let scheme:ColorScheme = argument("--phase5-appearance") == "dark" ? .dark:.light
             DispatchQueue.main.async { renderPhase5FuelEvidence(store:state,output:URL(fileURLWithPath:output,isDirectory:true),scheme:scheme) }
+        }
+        if let output = argument("--phase6-render-directory") {
+            let scheme:ColorScheme = argument("--phase6-appearance") == "dark" ? .dark:.light
+            DispatchQueue.main.async { renderPhase6SignalsEvidence(store:state,output:URL(fileURLWithPath:output,isDirectory:true),scheme:scheme) }
         }
         #endif
         if args.contains("--headless") {
@@ -49,7 +55,7 @@ import AppKit
     do {
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
         for (name,size) in [("mac-fuel-1080x720",CGSize(width:1080,height:720)),("mac-fuel-widescreen",CGSize(width:1540,height:1000))] {
-            let renderer=ImageRenderer(content:RootView().environmentObject(store).preferredColorScheme(scheme).frame(width:size.width,height:size.height))
+            let renderer=ImageRenderer(content:RootView().environmentObject(store).environment(\.colorScheme,scheme).frame(width:size.width,height:size.height))
             renderer.proposedSize=ProposedViewSize(size);renderer.scale=2
             guard let image=renderer.cgImage else { throw CocoaError(.fileWriteUnknown) }
             let bitmap=NSBitmapImageRep(cgImage:image)
@@ -59,6 +65,27 @@ import AppKit
         NSApp.terminate(nil)
     } catch {
         fputs("Phase 5 evidence rendering failed: \(error.localizedDescription)\n",stderr);exit(3)
+    }
+}
+@MainActor private func renderPhase6SignalsEvidence(store:AppStore,output:URL,scheme:ColorScheme) {
+    do {
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let comparing=CommandLine.arguments.contains("--phase6-compare")
+        let appearance=scheme == .dark ? "dark":"light"
+        let variants:[(String,CGSize)] = comparing
+            ? [("mac-signals-compare",CGSize(width:1540,height:1000))]
+            : [("mac-signals-1080x720",CGSize(width:1080,height:720)),("mac-signals-widescreen",CGSize(width:1540,height:1000))]
+        for (name,size) in variants {
+            let renderer=ImageRenderer(content:RootView().environmentObject(store).environment(\.colorScheme,scheme).frame(width:size.width,height:size.height))
+            renderer.proposedSize=ProposedViewSize(size);renderer.scale=2
+            guard let image=renderer.cgImage else { throw CocoaError(.fileWriteUnknown) }
+            let bitmap=NSBitmapImageRep(cgImage:image)
+            guard let data=bitmap.representation(using:.png,properties:[:]) else { throw CocoaError(.fileWriteUnknown) }
+            try data.write(to:output.appendingPathComponent(name+"-"+appearance+".png"),options:.atomic)
+        }
+        NSApp.terminate(nil)
+    } catch {
+        fputs("Phase 6 evidence rendering failed: \(error.localizedDescription)\n",stderr);exit(3)
     }
 }
 #endif
@@ -78,7 +105,7 @@ struct RootView:View {
             if let error = store.error { banner(error,isError:true) }
             if let notice = store.notice { banner(notice,isError:false) }
             #if DEBUG
-            if CommandLine.arguments.contains("--phase5-render-directory") {
+            if CommandLine.arguments.contains("--phase5-render-directory") || CommandLine.arguments.contains("--phase6-render-directory") {
                 GeometryReader { proxy in
                     destination.padding(.horizontal,22).padding(.bottom,22)
                         .frame(width:proxy.size.width/0.72,alignment:.topLeading)
@@ -126,7 +153,7 @@ struct RootView:View {
     }
     @ViewBuilder var servicesMenu:some View {
         #if DEBUG
-        if CommandLine.arguments.contains("--phase5-render-directory") {
+        if CommandLine.arguments.contains("--phase5-render-directory") || CommandLine.arguments.contains("--phase6-render-directory") {
             Image(systemName:"ellipsis").frame(width:32,height:30).foregroundStyle(Theme.secondaryText)
         } else {
             productionServicesMenu
