@@ -237,7 +237,7 @@ import DriveLineShared
     }
     func loadDemo() {
         perform {
-            let vehicle = Vehicle(name:"Jetta TDI · DEMO",year:"2014",make:"Volkswagen",model:"Jetta",notes:"Synthetic demo recordings. Remove this profile from the library manually if no longer needed.")
+            let vehicle = Vehicle(name:"Fictional Jetta · DEMO",year:"2013",make:"Volkswagen",model:"Jetta",notes:"Sanitized fictional 2013 Volkswagen Jetta TDI sample. Never real vehicle data.",fuelType:"Diesel")
             let start = Date().addingTimeInterval(-3600)
             let trips = (0..<3).map { offset -> Trip in
                 let samples = (0...360).map { i -> TelemetrySample in
@@ -256,7 +256,7 @@ import DriveLineShared
     func loadPhase3Fixture() {
         guard state.vehicles.isEmpty else { return }
         perform {
-            let vehicle=Vehicle(name:"Sanitized Jetta TDI",year:"2014",make:"Volkswagen",model:"Jetta")
+            let vehicle=Vehicle(name:"Fictional Jetta TDI",year:"2013",make:"Volkswagen",model:"Jetta",fuelType:"Diesel")
             let end=Date(),start=end.addingTimeInterval(-2700)
             let samples=(0...18).map { index in
                 let fraction=Double(index)/18
@@ -357,6 +357,19 @@ import DriveLineShared
             changePreferences { $0.signalKeys=["speedKph","rpm","coolantC","fuelRateLph","vendor.syntheticPressure","speedKph"] }
             selectedTripID=primary.id
             page = .signals
+        }
+    }
+    func loadPhase7Fixture() {
+        guard state.vehicles.isEmpty else { return }
+        perform {
+            let jetta=Vehicle(name:"Fictional 2013 Jetta · SAMPLE",year:"2013",make:"Volkswagen",model:"Jetta TDI",notes:"Sanitized debug-only sample; excluded from real totals.",vehicleClass:.passengerCar,fuelType:"Diesel",configuredSources:[.manual,.phoneGPS,.importedArchive])
+            let ford=Vehicle(name:"F-150 · SAMPLE",year:"2021",make:"Ford",model:"F-150",notes:"Sanitized debug-only sample; excluded from real totals.",vehicleClass:.lightTruck,fuelType:"Gasoline",configuredSources:[.manual,.phoneGPS,.obdScanner,.importedArchive])
+            let honda=Vehicle(name:"CB500X ABS · SAMPLE",year:"2023",make:"Honda",model:"CB500X ABS",notes:"Sanitized debug-only sample; excluded from real totals.",vehicleClass:.motorcycle,fuelType:"Gasoline",configuredSources:[.manual,.phoneGPS])
+            let kenworth=Vehicle(name:"T880 · SAMPLE",year:"2025",make:"Kenworth",model:"T880",notes:"Sanitized debug-only sample; excluded from real totals.",vehicleClass:.heavyTruck,fuelType:"Diesel",configuredSources:[.manual,.importedArchive],isArchived:true,archivedAt:Date())
+            let start=Date().addingTimeInterval(-3_600)
+            let sampleTrip=Trip(vehicleID:jetta.id,name:"Sample Garage history",source:"Sanitized imported historical source",samples:[],isDemo:true,recordedStartedAt:start,recordedEndedAt:start.addingTimeInterval(900))
+            try commit { state in state.vehicles=[jetta,ford,honda,kenworth];state.selectedVehicleID=jetta.id;state.trips=[sampleTrip] }
+            page = .garage
         }
     }
     #endif

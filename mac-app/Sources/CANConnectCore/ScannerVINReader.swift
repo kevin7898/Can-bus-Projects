@@ -4,16 +4,30 @@ import Network
 /// Read-only ELM/TCP identity discovery. This is deliberately separate from raw CAN capture.
 // The connection is thread-safe; exchange state is confined to its serial callback queue.
 final class ScannerVINReader: @unchecked Sendable {
+    struct Identity:Equatable {
+        var vin:String
+        var protocolName:String
+        var respondingAddress:String?
+        var observedAt:Date
+    }
     let queue = DispatchQueue(label:"can.connect.scanner")
     let connection:NWConnection
     init(host:String,port:UInt16) { connection = NWConnection(host:NWEndpoint.Host(host),port:NWEndpoint.Port(rawValue:port)!,using:.tcp) }
     static func read(host:String,port:UInt16) async throws -> String {
+        try await identify(host:host,port:port).vin
+    }
+    static func identify(host:String,port:UInt16) async throws -> Identity {
         let reader = ScannerVINReader(host:host,port:port)
         defer { reader.connection.cancel() }
         try await reader.connect()
-        for command in ["ATZ","ATE0","ATL0","ATS0","ATH0","ATSP0"] { _ = try await reader.exchange(command) }
+        for command in ["ATZ","ATE0","ATL0","ATS1","ATH1","ATSP0"] { _ = try await reader.exchange(command) }
         let response = try await reader.exchange("0902")
-        return try parseVIN(response)
+        let vin=try parseVIN(response)
+        let address=respondingAddress(response)
+        _ = try await reader.exchange("ATH0")
+        let protocolName=clean(try await reader.exchange("ATDP"))
+        return Identity(vin:vin,protocolName:protocolName.isEmpty ? "Unavailable":protocolName,
+                        respondingAddress:address,observedAt:Date())
     }
     func connect() async throws {
         try await withCheckedThrowingContinuation { (continuation:CheckedContinuation<Void,Error>) in
@@ -36,6 +50,13 @@ final class ScannerVINReader: @unchecked Sendable {
         for line in response.uppercased().components(separatedBy:.newlines) {
             var text = line.trimmingCharacters(in:.whitespacesAndNewlines)
             if let colon = text.firstIndex(of:":") { text = String(text[text.index(after:colon)...]) }
+            var tokens=text.split(whereSeparator:\.isWhitespace).map(String.init)
+            if let first=tokens.first,[3,8].contains(first.count),first.allSatisfy(\.isHexDigit) { tokens.removeFirst() }
+            if let first=tokens.first,let pci=UInt8(first,radix:16) {
+                if pci & 0xF0 == 0x10,tokens.count>=2 { tokens.removeFirst(2) }
+                else if pci & 0xF0 == 0x20 { tokens.removeFirst() }
+            }
+            if !tokens.isEmpty { text=tokens.joined() }
             text = text.replacingOccurrences(of:" ",with:"").replacingOccurrences(of:">",with:"")
             if let marker = text.range(of:"490201") { text = String(text[marker.upperBound...]);bytes = [] }
             else if bytes.isEmpty { continue }
@@ -45,6 +66,18 @@ final class ScannerVINReader: @unchecked Sendable {
         let candidate = String(bytes:bytes.prefix(17),encoding:.ascii) ?? ""
         guard candidate.count==17,candidate.allSatisfy({$0.isASCII && ($0.isLetter || $0.isNumber) && !"IOQ".contains($0)}) else { throw CANError.invalid("The scanner did not return a complete Mode 09 VIN. Enter the profile manually.") }
         return candidate
+    }
+    static func respondingAddress(_ response:String)->String? {
+        for line in response.uppercased().components(separatedBy:.newlines) {
+            let tokens=line.trimmingCharacters(in:.whitespacesAndNewlines).split(whereSeparator:\.isWhitespace)
+            guard let first=tokens.first,[3,8].contains(first.count),first.allSatisfy(\.isHexDigit) else { continue }
+            if line.contains("49 02") || line.replacingOccurrences(of:" ",with:"").contains("4902") { return String(first) }
+        }
+        return nil
+    }
+    private static func clean(_ value:String)->String {
+        value.replacingOccurrences(of:">",with:"").components(separatedBy:.newlines)
+            .map{$0.trimmingCharacters(in:.whitespacesAndNewlines)}.filter{!$0.isEmpty && !$0.hasPrefix("AT")}.joined(separator:" ")
     }
 }
 

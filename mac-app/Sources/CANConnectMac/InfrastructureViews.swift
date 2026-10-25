@@ -3,66 +3,157 @@ import AppKit
 import ServiceManagement
 import UniformTypeIdentifiers
 
+private extension DriveLineVehicleClass {
+    var title:String { switch self { case .passengerCar:return "Passenger car";case .lightTruck:return "Light truck";case .motorcycle:return "Motorcycle";case .heavyTruck:return "Heavy truck";case .van:return "Van";case .other:return "Other" } }
+}
+private extension DriveLineUnitSystem {
+    var title:String { switch self { case .metric:return "Metric";case .usCustomary:return "US customary";case .imperial:return "Imperial" } }
+}
+private extension DriveLineGPSPreference {
+    var title:String { switch self { case .automatic:return "Automatic";case .phone:return "iPhone";case .imported:return "Imported";case .unavailable:return "Unavailable" } }
+}
+private extension DriveLineVehicleSource {
+    var title:String { switch self { case .phoneGPS:return "iPhone GPS";case .obdScanner:return "OBD scanner";case .importedArchive:return "Imports";case .manual:return "Manual" } }
+}
+
 struct GarageView:View {
     @EnvironmentObject var store:AppStore
     @State private var editing:Vehicle?
+    @State private var detail:Vehicle?
     @State private var adding = false
     var body:some View {
         VStack(alignment:.leading,spacing:14) {
             HStack { Text("Vehicle profiles are independent. Import recordings into the selected profile.").font(.system(size:12)).foregroundStyle(Theme.muted);Spacer();Button("Add vehicle",systemImage:"plus") { adding = true } }
             if store.state.vehicles.isEmpty { EmptyPanel(title:"Welcome to DriveLine",message:"Add your first vehicle, then import a recording. The garage supports cars, bikes, and trucks.") }
             LazyVGrid(columns:[GridItem(.adaptive(minimum:270))],spacing:14) {
-                ForEach(store.state.vehicles) { vehicle in
-                    Panel(title:vehicle.name,icon:store.state.selectedVehicleID==vehicle.id ? "checkmark.circle.fill":"car") {
-                        VStack(alignment:.leading,spacing:14) {
-                            Image(systemName:"car.side").font(.system(size:52)).foregroundStyle(Theme.blue).frame(maxWidth:.infinity).padding(.vertical,16)
-                            Text([vehicle.year,vehicle.make,vehicle.model].filter{!$0.isEmpty}.joined(separator:" ")).font(.system(size:12)).foregroundStyle(Theme.muted)
-                            KeyValue(label:"Recordings",value:String(store.state.trips.filter{$0.vehicleID==vehicle.id}.count))
-                            if !vehicle.vin.isEmpty { KeyValue(label:"VIN",value:vehicle.vin) }
-                            HStack { Button(store.state.selectedVehicleID==vehicle.id ? "Active vehicle":"Select vehicle") { store.selectVehicle(vehicle.id) };Spacer();Button("Edit") { editing = vehicle } }
-                        }.padding(14)
-                    }
-                }
+                ForEach(store.state.vehicles.filter{!$0.isArchived}) { vehicle in vehicleCard(vehicle) }
             }
+            if store.state.vehicles.contains(where:\.isArchived) { Text("Archived vehicles").font(.headline);LazyVGrid(columns:[GridItem(.adaptive(minimum:270))],spacing:14) { ForEach(store.state.vehicles.filter(\.isArchived)) { vehicle in vehicleCard(vehicle) } } }
             HStack { Button("Load clearly labeled demo data") { store.loadDemo() };if store.state.trips.contains(where:{$0.isDemo}) { Button("Remove demo data") { store.removeDemo() } };Spacer() }.font(.system(size:11))
         }.sheet(isPresented:$adding) { VehicleEditor(vehicle:Vehicle(name:"")) }.sheet(item:$editing) { vehicle in VehicleEditor(vehicle:vehicle) }
+            .sheet(item:$detail) { VehicleDetailView(vehicle:$0) }
+    }
+    @ViewBuilder private func vehicleCard(_ vehicle:Vehicle)->some View {
+        let trips=store.state.trips.filter{$0.vehicleID==vehicle.id && !$0.isDemo}
+        let fills=store.state.fuelEntries.filter{$0.vehicleID==vehicle.id && !$0.isDemo}
+        let imports=store.state.receipts.filter{$0.vehicleID==vehicle.id}
+        let pending=imports.filter{[.queued,.processing,.failed].contains($0.status)}
+        Panel(title:vehicle.name,icon:store.state.selectedVehicleID==vehicle.id ? "checkmark.circle.fill":vehicle.isArchived ? "archivebox":"car") {
+            VStack(alignment:.leading,spacing:10) {
+                Text([vehicle.year,vehicle.make,vehicle.model].filter{!$0.isEmpty}.joined(separator:" ")).font(.system(size:12)).foregroundStyle(Theme.muted)
+                KeyValue(label:"Class / fuel",value:"\(vehicle.vehicleClass.title) · \(vehicle.fuelType)")
+                KeyValue(label:"VIN",value:vehicle.vin.isEmpty ? "Unavailable":"Stored locally · hidden")
+                KeyValue(label:"Sources",value:vehicle.configuredSources.map(\.title).joined(separator:" · "))
+                KeyValue(label:"Scanner",value:vehicle.scannerHost == nil ? (trips.contains(where:{$0.source.lowercased().contains("obd")}) ? "Historical scanner source":"Unavailable") : "Configured · live unavailable on Mac")
+                KeyValue(label:"Last real drive",value:trips.max(by:{$0.end<$1.end})?.end.formatted(date:.abbreviated,time:.shortened) ?? "Unavailable")
+                KeyValue(label:"Data",value:"\(trips.count) drives · \(fills.count) fills")
+                KeyValue(label:"Storage",value:ByteCountFormatter.string(fromByteCount:Int64(imports.reduce(0){$0+$1.byteCount}),countStyle:.file))
+                KeyValue(label:"Import queue",value:pending.isEmpty ? "Clear":"\(pending.count) queued / failed")
+                HStack {
+                    if vehicle.isArchived { Button("Restore") { store.perform { try store.setVehicleArchived(vehicle.id,archived:false) } } }
+                    else { Button(store.state.selectedVehicleID==vehicle.id ? "Current vehicle":"Select vehicle") { store.selectVehicle(vehicle.id) }.disabled(store.state.selectedVehicleID==vehicle.id) }
+                    Spacer();Button("Details") { detail=vehicle };Button("Edit") { editing=vehicle }
+                }
+            }.padding(14)
+        }.accessibilityIdentifier("mac.garage.vehicle.\(vehicle.id.uuidString)")
     }
 }
 struct VehicleEditor:View {
     @EnvironmentObject var store:AppStore
     @Environment(\.dismiss) var dismiss
     @State var vehicle:Vehicle
-    @State private var scannerHost = "192.168.0.10"
+    @State private var stage=0
+    @State private var scannerHost = ""
     @State private var scannerPort = "35000"
+    @State private var usesGPS=true
+    @State private var usesScanner=false
+    @State private var usesImports=true
     @State private var detecting = false
     @State private var detectionMessage = ""
+    @State private var detected:DriveLineVINResult?
+    @State private var identity:ScannerVINReader.Identity?
+    private let originalID:UUID
+    init(vehicle:Vehicle) {
+        _vehicle=State(initialValue:vehicle);originalID=vehicle.id
+        _scannerHost=State(initialValue:vehicle.scannerHost ?? "")
+        _scannerPort=State(initialValue:String(vehicle.scannerPort ?? 35000))
+        _usesGPS=State(initialValue:vehicle.configuredSources.contains(.phoneGPS) || vehicle.name.isEmpty)
+        _usesScanner=State(initialValue:vehicle.configuredSources.contains(.obdScanner))
+        _usesImports=State(initialValue:vehicle.configuredSources.contains(.importedArchive) || vehicle.name.isEmpty)
+    }
     var body:some View {
         VStack(alignment:.leading,spacing:16) {
-            Text(vehicle.name.isEmpty ? "Add a vehicle":"Vehicle profile").font(.title2)
-            Form {
+            Text(vehicle.name.isEmpty ? "Add a vehicle":"Edit vehicle").font(.title2)
+            Picker("Stage",selection:$stage) { Text("1 · Vehicle").tag(0);Text("2 · Scanner").tag(1);Text("3 · Identify").tag(2);Text("4 · Finish").tag(3) }.pickerStyle(.segmented).accessibilityIdentifier("mac.onboarding.stage")
+            Form { if stage==0 {
                 TextField("Vehicle name",text:$vehicle.name).accessibilityLabel("Vehicle name")
                 HStack { TextField("Year",text:$vehicle.year).accessibilityLabel("Year");TextField("Make",text:$vehicle.make).accessibilityLabel("Make") }
                 TextField("Model",text:$vehicle.model).accessibilityLabel("Model")
-                TextField("VIN (optional)",text:$vehicle.vin).accessibilityLabel("VIN (optional)")
                 TextField("Notes",text:$vehicle.notes).accessibilityLabel("Notes")
-                Section("Scanner-assisted identity") {
-                    Text("Read VIN from an ELM-compatible Wi-Fi/TCP scanner. Review the result before saving. BLE and USB scanner adapters are not integrated yet.").font(.system(size:11)).foregroundStyle(Theme.muted)
-                    HStack { TextField("Scanner IP",text:$scannerHost);TextField("Port",text:$scannerPort).frame(width:85);Button(detecting ? "Reading…":"Read VIN") { detect() }.disabled(detecting) }
-                    if !detectionMessage.isEmpty { Text(detectionMessage).font(.system(size:11)).foregroundStyle(Theme.muted) }
+                Picker("Vehicle class",selection:$vehicle.vehicleClass) { ForEach(DriveLineVehicleClass.allCases,id:\.self) { Text($0.title).tag($0) } }
+                TextField("Fuel / power",text:$vehicle.fuelType)
+                Picker("Preferred units",selection:$vehicle.preferredUnits) { ForEach(DriveLineUnitSystem.allCases,id:\.self) { Text($0.title).tag($0) } }
+            } else if stage==1 {
+                Toggle("iPhone GPS · supported now",isOn:$usesGPS)
+                Toggle("Wi-Fi/TCP ELM scanner · supported now",isOn:$usesScanner)
+                Toggle("Imported recordings · supported now",isOn:$usesImports)
+                Text("OBDLink MX+ live recording is configured on iPhone. External CAN recorder, USB/BLE scanner, and external GPS are planned but unavailable on Mac.").font(.system(size:11)).foregroundStyle(Theme.muted)
+                Picker("Preferred GPS",selection:$vehicle.preferredGPS) { ForEach(DriveLineGPSPreference.allCases,id:\.self) { Text($0.title).tag($0) } }
+                if usesScanner { HStack { TextField("Private scanner address",text:$scannerHost);TextField("Port",text:$scannerPort).frame(width:90) } }
+            } else if stage==2 {
+                TextField("VIN (optional)",text:$vehicle.vin).accessibilityLabel("VIN (optional)")
+                Text("Read-only Mode 09. All decoding is local; DriveLine does not send the VIN to an internet service.").font(.system(size:11)).foregroundStyle(Theme.muted)
+                HStack { Button("Validate locally") { validateVIN() }.disabled(vehicle.vin.isEmpty);if usesScanner { Button(detecting ? "Reading…":"Read VIN from scanner") { detect() }.disabled(detecting) } }
+                if let detected {
+                    Text("VIN received and hidden from evidence captures.").font(.system(size:11)).foregroundStyle(Theme.green)
+                    if let year=detected.suggestedModelYear { HStack { Text("Entered year: \(vehicle.year.isEmpty ? "Unavailable":vehicle.year) · Detected year: \(year)");Button("Accept \(year)") { vehicle.year=String(year) };Button("Keep entered") {} } }
+                    else if detected.modelYearIsAmbiguous { Text("Ambiguous model-year cycle: \(detected.candidateModelYears.map(String.init).joined(separator:", ")). No suggestion applied.") }
+                    if let make=detected.manufacturer { HStack { Text("Detected manufacturer: \(make)");Button("Use suggestion") { vehicle.make=make } } }
+                    if let identity { KeyValue(label:"Source",value:"Scanner · Mode 09");KeyValue(label:"Responding ECU",value:identity.respondingAddress ?? "Unavailable");KeyValue(label:"Protocol",value:identity.protocolName);KeyValue(label:"Observed",value:identity.observedAt.formatted(date:.abbreviated,time:.standard)) }
                 }
-            }.textFieldStyle(.roundedBorder)
-            HStack { Spacer();Button("Cancel") { dismiss() };Button("Save vehicle") { do { vehicle.vin = vehicle.vin.uppercased().trimmingCharacters(in:.whitespacesAndNewlines);try store.saveVehicle(vehicle);dismiss() } catch { detectionMessage = error.localizedDescription } }.buttonStyle(.borderedProminent).disabled(vehicle.name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty) }
-        }.padding(24).frame(width:580)
+                if !detectionMessage.isEmpty { Text(detectionMessage).font(.system(size:11)).foregroundStyle(Theme.muted) }
+            } else {
+                KeyValue(label:"Stable vehicle UUID",value:String(originalID.uuidString.prefix(8))+"…")
+                KeyValue(label:"Vehicle",value:[vehicle.year,vehicle.make,vehicle.model].filter{!$0.isEmpty}.joined(separator:" "))
+                KeyValue(label:"Sources",value:configuredSources.map(\.title).joined(separator:" · "))
+                KeyValue(label:"Scanner",value:usesScanner ? "Configured · disconnected":"Unavailable")
+                KeyValue(label:"VIN",value:vehicle.vin.isEmpty ? "Unavailable":"Stored locally · hidden")
+                Text("Saving is atomic. Existing drives, fills, receipts, imports, annotations, preferences, originals and transfer payloads stay attached to this UUID.").font(.system(size:11)).foregroundStyle(Theme.muted)
+            } }.textFieldStyle(.roundedBorder)
+            HStack { Button("Cancel") { dismiss() };Spacer();if stage>0 { Button("Back") { stage-=1 } };if stage<3 { Button("Continue") { prepare();stage+=1 }.buttonStyle(.borderedProminent).disabled(vehicle.name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty) } else { Button("Save vehicle") { save() }.buttonStyle(.borderedProminent) } }
+        }.padding(24).frame(width:680).frame(minHeight:520)
     }
+    var configuredSources:[DriveLineVehicleSource] { [.manual]+(usesGPS ? [.phoneGPS]:[])+(usesScanner ? [.obdScanner]:[])+(usesImports ? [.importedArchive]:[]) }
+    func prepare() { vehicle.id=originalID;vehicle.configuredSources=configuredSources;if usesScanner,let port=UInt16(scannerPort) { vehicle.scannerHost=scannerHost.trimmingCharacters(in:.whitespacesAndNewlines);vehicle.scannerPort=port } else if !usesScanner { vehicle.scannerHost=nil;vehicle.scannerPort=nil } }
+    func validateVIN() { do { detected=try DriveLineVINDecoder.decode(vehicle.vin,enteredModelYear:Int(vehicle.year));vehicle.vin=detected!.normalizedVIN;detectionMessage="VIN validated locally. Review suggestions before saving." } catch { detected=nil;detectionMessage=error.localizedDescription } }
     func detect() {
         guard let port = UInt16(scannerPort),port>0 else { detectionMessage = "Enter a valid scanner port.";return }
         detecting = true;detectionMessage = "Connecting to the scanner for a read-only Mode 09 VIN request…"
         Task {
-            do { vehicle.vin = try await ScannerVINReader.read(host:scannerHost,port:port);detectionMessage = "VIN read successfully. Confirm year, make, and model manually before saving." }
+            do { let value=try await ScannerVINReader.identify(host:scannerHost,port:port);identity=value;vehicle.vin=value.vin;vehicle.identification=DriveLineVehicleIdentityObservation(source:"Read-only Mode 09 VIN",respondingAddress:value.respondingAddress,protocolName:value.protocolName,observedAt:value.observedAt);validateVIN() }
             catch { detectionMessage = error.localizedDescription }
             detecting = false
         }
     }
+    func save() { prepare();do { try store.saveVehicle(vehicle);dismiss() } catch { detectionMessage=error.localizedDescription } }
+}
+struct VehicleDetailView:View {
+    @EnvironmentObject var store:AppStore
+    @Environment(\.dismiss) var dismiss
+    let vehicle:Vehicle
+    var trips:[Trip] { store.state.trips.filter{$0.vehicleID==vehicle.id && !$0.isDemo} }
+    var fills:[FuelEntry] { store.state.fuelEntries.filter{$0.vehicleID==vehicle.id && !$0.isDemo} }
+    var body:some View { VStack(alignment:.leading,spacing:14) {
+        HStack { Text(vehicle.name).font(.title2);Spacer();Button("Done") { dismiss() } }
+        Form {
+            Section("Identity") { KeyValue(label:"Stable UUID",value:vehicle.id.uuidString);KeyValue(label:"Vehicle",value:[vehicle.year,vehicle.make,vehicle.model].filter{!$0.isEmpty}.joined(separator:" "));KeyValue(label:"VIN",value:vehicle.vin.isEmpty ? "Unavailable":"Stored locally · hidden") }
+            Section("Recording sources") { KeyValue(label:"Configured",value:vehicle.configuredSources.map(\.title).joined(separator:" · "));KeyValue(label:"Preferred GPS",value:vehicle.preferredGPS.title) }
+            Section("Scanner") { KeyValue(label:"Configuration",value:vehicle.scannerHost == nil ? "Unavailable":"Configured · live unavailable on Mac");KeyValue(label:"Imported evidence",value:trips.contains(where:{$0.source.lowercased().contains("obd")}) ? "Historical scanner source":"Unavailable") }
+            Section("Storage and transfer") { KeyValue(label:"Data",value:"\(trips.count) real drives · \(fills.count) fills");KeyValue(label:"Imports",value:"\(store.state.receipts.filter{$0.vehicleID==vehicle.id}.count)") }
+            Section("Capabilities") { Text("Mac analysis and import are available. Live scanner state is unavailable on Mac. iPhone recording requires per-vehicle scanner configuration and validation.") }
+        }
+        HStack { Button("Drives") { store.selectVehicle(vehicle.id);store.page = .drives;dismiss() };Button("Fuel") { store.selectVehicle(vehicle.id);store.page = .fuel;dismiss() };Button("Signals") { store.selectVehicle(vehicle.id);store.page = .signals;dismiss() };Spacer();if vehicle.isArchived { Button("Unarchive") { store.perform { try store.setVehicleArchived(vehicle.id,archived:false) };dismiss() } } else { Button("Archive") { store.perform { try store.setVehicleArchived(vehicle.id,archived:true) };dismiss() } };Button("Delete empty profile",role:.destructive) { store.perform { try store.deleteEmptyVehicle(vehicle.id) };dismiss() }.disabled(!trips.isEmpty || !fills.isEmpty || store.state.receipts.contains(where:{$0.vehicleID==vehicle.id})) }
+    }.padding(24).frame(width:720).frame(minHeight:580) }
 }
 struct ImportsView:View {
     @EnvironmentObject var store:AppStore

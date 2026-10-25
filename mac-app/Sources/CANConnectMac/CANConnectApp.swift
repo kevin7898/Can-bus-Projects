@@ -21,9 +21,11 @@ import AppKit
         if args.contains("--phase4-fixture") { state.loadPhase4Fixture() }
         if args.contains("--phase5-fixture") { state.loadPhase5Fixture() }
         if args.contains("--phase6-fixture") { state.loadPhase6Fixture() }
+        if args.contains("--phase7-fixture") { state.loadPhase7Fixture() }
         if let page = argument("--phase4-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
         if let page = argument("--phase5-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
         if let page = argument("--phase6-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
+        if let page = argument("--phase7-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
         if let output = argument("--phase5-render-directory") {
             let scheme:ColorScheme = argument("--phase5-appearance") == "dark" ? .dark:.light
             DispatchQueue.main.async { renderPhase5FuelEvidence(store:state,output:URL(fileURLWithPath:output,isDirectory:true),scheme:scheme) }
@@ -31,6 +33,10 @@ import AppKit
         if let output = argument("--phase6-render-directory") {
             let scheme:ColorScheme = argument("--phase6-appearance") == "dark" ? .dark:.light
             DispatchQueue.main.async { renderPhase6SignalsEvidence(store:state,output:URL(fileURLWithPath:output,isDirectory:true),scheme:scheme) }
+        }
+        if let output = argument("--phase7-render-directory") {
+            let scheme:ColorScheme = argument("--phase7-appearance") == "dark" ? .dark:.light
+            DispatchQueue.main.async { renderPhase7GarageEvidence(store:state,output:URL(fileURLWithPath:output,isDirectory:true),scheme:scheme) }
         }
         #endif
         if args.contains("--headless") {
@@ -88,6 +94,26 @@ import AppKit
         fputs("Phase 6 evidence rendering failed: \(error.localizedDescription)\n",stderr);exit(3)
     }
 }
+@MainActor private func renderPhase7GarageEvidence(store:AppStore,output:URL,scheme:ColorScheme) {
+    do {
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let appearance=scheme == .dark ? "dark":"light"
+        let vehicle=store.state.vehicles.first ?? Vehicle(name:"Fictional Jetta",year:"2013",make:"Volkswagen",model:"Jetta TDI",vehicleClass:.passengerCar,fuelType:"Diesel")
+        let views:[(String,AnyView,CGSize)]=[
+            ("mac-garage-1080x720-\(appearance)",AnyView(RootView().environmentObject(store)),CGSize(width:1080,height:720)),
+            ("mac-garage-widescreen-\(appearance)",AnyView(RootView().environmentObject(store)),CGSize(width:1540,height:1000)),
+            ("mac-vehicle-detail-\(appearance)",AnyView(VehicleDetailView(vehicle:vehicle).environmentObject(store)),CGSize(width:720,height:650)),
+            ("mac-add-vehicle-\(appearance)",AnyView(VehicleEditor(vehicle:Vehicle(name:"Fictional Jetta",year:"2013",make:"Volkswagen",model:"Jetta TDI",vehicleClass:.passengerCar,fuelType:"Diesel")).environmentObject(store)),CGSize(width:720,height:650))
+        ]
+        for (name,view,size) in views {
+            let renderer=ImageRenderer(content:view.environment(\.colorScheme,scheme).frame(width:size.width,height:size.height))
+            renderer.proposedSize=ProposedViewSize(size);renderer.scale=2
+            guard let image=renderer.cgImage,let data=NSBitmapImageRep(cgImage:image).representation(using:.png,properties:[:]) else { throw CocoaError(.fileWriteUnknown) }
+            try data.write(to:output.appendingPathComponent(name+".png"),options:.atomic)
+        }
+        NSApp.terminate(nil)
+    } catch { fputs("Phase 7 evidence rendering failed: \(error.localizedDescription)\n",stderr);exit(3) }
+}
 #endif
 struct MenuBarContent:View {
     @EnvironmentObject var store:AppStore
@@ -105,7 +131,7 @@ struct RootView:View {
             if let error = store.error { banner(error,isError:true) }
             if let notice = store.notice { banner(notice,isError:false) }
             #if DEBUG
-            if CommandLine.arguments.contains("--phase5-render-directory") || CommandLine.arguments.contains("--phase6-render-directory") {
+            if CommandLine.arguments.contains("--phase5-render-directory") || CommandLine.arguments.contains("--phase6-render-directory") || CommandLine.arguments.contains("--phase7-render-directory") {
                 GeometryReader { proxy in
                     destination.padding(.horizontal,22).padding(.bottom,22)
                         .frame(width:proxy.size.width/0.72,alignment:.topLeading)
@@ -146,14 +172,14 @@ struct RootView:View {
             Spacer(minLength:8)
             Picker("Vehicle",selection:Binding(get:{store.state.selectedVehicleID},set:{ if let id=$0 { store.selectVehicle(id) } })) {
                 if store.state.vehicles.isEmpty { Text("Add a vehicle").tag(nil as UUID?) }
-                ForEach(store.state.vehicles) { Text($0.name).tag(Optional($0.id)) }
+                ForEach(store.state.vehicles.filter{!$0.isArchived}) { Text($0.name).tag(Optional($0.id)) }
             }.labelsHidden().frame(width:180).accessibilityIdentifier("mac.vehicle.picker")
             servicesMenu
         }.padding(.horizontal,16).frame(height:58).background(Theme.navigationBackground)
     }
     @ViewBuilder var servicesMenu:some View {
         #if DEBUG
-        if CommandLine.arguments.contains("--phase5-render-directory") || CommandLine.arguments.contains("--phase6-render-directory") {
+        if CommandLine.arguments.contains("--phase5-render-directory") || CommandLine.arguments.contains("--phase6-render-directory") || CommandLine.arguments.contains("--phase7-render-directory") {
             Image(systemName:"ellipsis").frame(width:32,height:30).foregroundStyle(Theme.secondaryText)
         } else {
             productionServicesMenu

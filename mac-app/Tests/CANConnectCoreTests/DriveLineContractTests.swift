@@ -4,6 +4,31 @@ import DriveLineShared
 @testable import CANConnectCore
 
 final class DriveLineContractTests:XCTestCase {
+    func testPhase7FourVehicleProfilesRoundTripWithStableIndependentIdentity() throws {
+        let profiles=[
+            Vehicle(name:"Fictional Jetta",year:"2013",make:"Volkswagen",model:"Jetta TDI",vehicleClass:.passengerCar,fuelType:"Diesel"),
+            Vehicle(name:"F-150",year:"2021",make:"Ford",model:"F-150",vehicleClass:.lightTruck,fuelType:"Gasoline"),
+            Vehicle(name:"CB500X ABS",year:"2023",make:"Honda",model:"CB500X ABS",vehicleClass:.motorcycle,fuelType:"Gasoline"),
+            Vehicle(name:"T880",year:"2025",make:"Kenworth",model:"T880",vehicleClass:.heavyTruck,fuelType:"Diesel")
+        ]
+        var state=LibraryState();state.vehicles=profiles;state.selectedVehicleID=profiles[0].id
+        state.trips=[Trip(vehicleID:profiles[0].id,name:"Jetta",source:"fixture",samples:[]),Trip(vehicleID:profiles[1].id,name:"Ford",source:"fixture",samples:[])]
+        state.fuelEntries=[FuelEntry(vehicleID:profiles[2].id,date:Date(),litresPurchased:1,totalCost:1,odometerKm:1,isFullFill:true)]
+        let decoded=try LibraryRepository.decoder().decode(LibraryState.self,from:LibraryRepository.encoder().encode(state))
+        XCTAssertEqual(decoded.vehicles.map(\.id),profiles.map(\.id))
+        XCTAssertEqual(decoded.trips.filter{$0.vehicleID==profiles[0].id}.count,1)
+        XCTAssertEqual(decoded.trips.filter{$0.vehicleID==profiles[3].id}.count,0)
+        XCTAssertEqual(decoded.fuelEntries.first?.vehicleID,profiles[2].id)
+    }
+
+    func testPhase7LegacyVehicleDecodeIsAdditiveAndManualVINMayRemainMissing() throws {
+        let id=UUID()
+        let data="{\"id\":\"\(id.uuidString)\",\"name\":\"Manual custom vehicle\",\"year\":\"\",\"make\":\"\",\"model\":\"\",\"vin\":\"\",\"notes\":\"\"}".data(using:.utf8)!
+        let vehicle=try JSONDecoder().decode(Vehicle.self,from:data)
+        XCTAssertEqual(vehicle.id,id);XCTAssertEqual(vehicle.vehicleClass,.passengerCar)
+        XCTAssertEqual(vehicle.configuredSources,[.manual,.phoneGPS]);XCTAssertFalse(vehicle.isArchived)
+        XCTAssertTrue(vehicle.vin.isEmpty)
+    }
     func testMacTodayUsesOnlyRealSelectedVehicleDataAndKeepsMissingFuelUnavailable() throws {
         var calendar=Calendar(identifier:.gregorian);calendar.timeZone=try XCTUnwrap(TimeZone(secondsFromGMT:0))
         let now=try XCTUnwrap(ISO8601DateFormatter().date(from:"2026-10-25T18:00:00Z"))
