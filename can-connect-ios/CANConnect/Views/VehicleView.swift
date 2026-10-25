@@ -116,6 +116,60 @@ struct FuelHistory: View {
     } }
 }
 
+struct FuelLedgerView:View {
+    @EnvironmentObject private var store:AppStore
+    @State private var vehicleID:UUID?
+    @State private var dateDays=0
+    @State private var adding=false
+    private var cutoff:Date? { dateDays == 0 ? nil:Date().addingTimeInterval(-Double(dateDays)*86_400) }
+    private var entries:[FuelEntry] {
+        store.state.fills.filter { entry in
+            (vehicleID == nil || entry.vehicleID == vehicleID) && (cutoff == nil || entry.date >= cutoff!)
+        }.sorted { $0.date > $1.date }
+    }
+    private var sharedEntries:[DriveLineFuelEntry] {
+        entries.compactMap { entry in
+            guard let vehicleID=entry.vehicleID else { return nil }
+            return DriveLineFuelEntry(id:entry.id,vehicleID:vehicleID,date:entry.date,litresPurchased:entry.litres,totalCost:entry.costCAD,
+                currencyCode:entry.currencyCode,odometerKm:entry.odometerKM,isFullFill:entry.full,stationName:entry.stationName,
+                notes:entry.notes,receipt:entry.receipt,isSample:entry.isSample)
+        }
+    }
+    private var ledger:[DriveLineFuelLedgerItem] { DriveLineJourneyPolicy.fuelLedger(sharedEntries) }
+    private var trips:[Trip] { store.state.trips.filter { vehicleID == nil || $0.vehicleID == vehicleID } }
+    private var tripFuel:[DriveLineTripFuelPoint] { DriveLineJourneyPolicy.tripFuelSeries(trips.map(\.sharedRecording)).filter { cutoff == nil || $0.date >= cutoff! } }
+    var body:some View {
+        SheetShell(title:"Fuel Ledger") {
+            HStack {
+                Picker("Vehicle",selection:$vehicleID) { Text("All vehicles").tag(nil as UUID?);ForEach(store.state.vehicles) { Text($0.title).tag(Optional($0.id)) } }
+                Picker("Date",selection:$dateDays) { Text("Any date").tag(0);Text("90 days").tag(90);Text("1 year").tag(365) }
+            }
+            HStack { Metric(title:"Purchased fuel",value:entries.filter{!$0.isSample}.reduce(0){$0+$1.litres}.text(1),unit:"L");Metric(title:"Recorded fills",value:String(entries.filter{!$0.isSample}.count)) }
+            InfoNote(text:"Purchased quantity, full-tank economy, and measured trip fuel are separate evidence series. Sample entries are labelled and excluded from totals.",icon:"checkmark.shield")
+            if entries.isEmpty { EmptyStateCard(icon:"fuelpump",title:"No fuel entries match",message:"Log a fill or change the vehicle and date filters. Tank economy appears only after two valid full-fill boundaries.") }
+            ForEach(entries) { entry in
+                let item=ledger.first(where:{$0.id==entry.id})
+                SectionCard(title:entry.stationName ?? "Fuel fill",icon:"fuelpump.fill") {
+                    HStack { Text(entry.date.formatted(date:.abbreviated,time:.shortened));Spacer();StatusPill(state:entry.isSample ? .unavailable:(entry.full ? .healthy:.stale),text:entry.isSample ? "Sample":(entry.full ? "Full fill":"Partial fill")) }.font(.caption)
+                    DataRow(label:"Purchased",value:"\(entry.litres.text(2)) L")
+                    DataRow(label:"Cost",value:entry.costCAD.formatted(.currency(code:entry.currencyCode)))
+                    DataRow(label:"Cost per litre",value:(item?.costPerLitre).map { $0.formatted(.currency(code:entry.currencyCode))+"/L" } ?? "Unavailable")
+                    DataRow(label:"Odometer",value:"\(entry.odometerKM.text(0)) km")
+                    DataRow(label:"Tank-to-tank economy",value:(item?.tankEconomyL100Km).map { "\($0.text(2)) L/100 km" } ?? "Insufficient full-fill boundaries")
+                    if let receipt=entry.receipt { DataRow(label:"Receipt",value:"\(receipt.fileName) · \(ByteCountFormatter.string(fromByteCount:Int64(receipt.byteCount),countStyle:.file))") }
+                }
+            }
+            SectionCard(title:"Measured trip fuel",icon:"road.lanes") {
+                if tripFuel.isEmpty { InfoNote(text:"No journey has qualifying measured fuel-rate coverage in this selection.") }
+                ForEach(tripFuel.suffix(12).reversed()) { point in
+                    DataRow(label:point.date.formatted(date:.abbreviated,time:.shortened),value:"\(point.litres.text(2)) L · \(point.source)")
+                }
+            }
+            AppButton(title:"Log a fill-up",icon:"plus") { adding=true }
+        }.onAppear { vehicleID=store.state.selectedVehicleID }.sheet(isPresented:$adding) { FuelForm() }
+    }
+}
+
 #if DEBUG
 #Preview("Vehicle data · Sample data") { DriveLineCanvas(tab:.more) }
 #endif
