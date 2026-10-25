@@ -177,6 +177,25 @@ final class SmokeTests: XCTestCase {
         let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Phase 7 compact largest accessibility onboarding";shot.lifetime = .keepAlways;add(shot)
     }
     @MainActor
+    func testPhase8RecoveryStatesExposeStatusEvidenceAndTargetedActions() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase8-state","29,33,39,47,49,53,58","--appearance-light"];app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["phase8.evidence"].waitForExistence(timeout:10),app.debugDescription)
+        for id in [29,33,39,47,49,53,58] { XCTAssertTrue(app.descendants(matching:.any)["phase8.state.\(id)"].exists,"Missing Phase 8 state \(id)") }
+        XCTAssertTrue(app.staticTexts["Degraded"].exists)
+        XCTAssertTrue(app.staticTexts["Processing"].exists)
+        XCTAssertTrue(app.staticTexts["Complete"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS[c] %@","preserved")).firstMatch.exists)
+        let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Phase 8 iPhone degraded transfer recovery states";shot.lifetime = .keepAlways;add(shot)
+    }
+    @MainActor
+    func testPhase8CompactLargestAccessibilityStateCardsRemainReachable() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase8-state","14,19,29,33","--appearance-dark"];app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["phase8.state.14"].waitForExistence(timeout:10))
+        for _ in 0..<8 where !app.descendants(matching:.any)["phase8.state.33"].exists { app.swipeUp() }
+        XCTAssertTrue(app.descendants(matching:.any)["phase8.state.33"].exists)
+        let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Phase 8 compact largest accessibility recovery";shot.lifetime = .keepAlways;add(shot)
+    }
+    @MainActor
     private func exercisePhase6Signals(appearance:String,checkTripStory:Bool = true) {
         let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase6-fixture","--appearance-\(appearance)"];app.launch()
         XCTAssertTrue(app.buttons["More"].waitForExistence(timeout:10));app.buttons["More"].tap();app.buttons["Settings"].tap()

@@ -36,7 +36,7 @@ struct LiveView: View {
     private var recordingHeader:some View {
         VStack(alignment:.leading,spacing:9) {
             HStack {
-                StatusPill(state:presentation.phase == .active || presentation.phase == .degraded ? .recording:phaseSemantic,
+                StatusPill(state:presentation.phase == .active ? .active:(presentation.phase == .degraded ? .degraded:phaseSemantic),
                            text:presentation.statusTitle)
                 Spacer()
                 if store.recording { Text(store.timerText).font(.headline).monospacedDigit() }
@@ -63,10 +63,13 @@ struct LiveView: View {
                 Text(sourceExplanation).font(.caption).foregroundStyle(Palette.secondaryText)
             }
             SectionCard(title:"Preflight",icon:"checklist") {
-                preflightRow("Vehicle",value:store.activeVehicle?.title,state:store.activeVehicle == nil ? .unavailable:.healthy)
-                preflightRow("iPhone GPS",value:store.gps.status,state:presentation.gpsState)
+                preflightRow("Vehicle",value:store.activeVehicle?.title,state:store.activeVehicle == nil ? .unavailable:.ready)
+                preflightRow("iPhone GPS",value:gpsPreflightText,state:gpsPreflightState)
                 preflightRow("Scanner",value:store.source == .scanner ? store.scanner.status:"Optional",state:store.source == .scanner ? presentation.scannerState:.unavailable)
-                preflightRow("Storage",value:"Saves on this iPhone first",state:.healthy)
+                preflightRow("Storage",value:store.libraryReadOnly ? "Unavailable · saved file preserved":"Writable · saves on this iPhone first",state:store.libraryReadOnly ? .readOnly:.ready)
+                if store.source == .scanner && !store.scanner.connected {
+                    Text("GPS-only recording remains available. Scanner coverage is not claimed until the selected vehicle's scanner is ready.").font(.caption).foregroundStyle(Palette.secondaryText)
+                }
             }
         }
     }
@@ -121,7 +124,18 @@ struct LiveView: View {
     private var sourceExplanation:String {
         switch store.source { case .phoneGPS:return "Records route, speed, distance and duration. Engine telemetry stays unavailable.";case .scanner:return "Records actual scanner observations while GPS independently records the route.";case .demo:return "Clearly labelled sample data for preview only.";case .imported:return "Imported recordings cannot be used as a live source." }
     }
-    private var phaseSemantic:DriveLineSemanticState { presentation.phase == .starting ? .stale:(presentation.phase == .idle ? .healthy:.queued) }
+    private var gpsPreflightState:DriveLineSemanticState {
+        switch store.gps.permissionState { case .notDetermined:return .waiting;case .denied,.restricted:return .unavailable;case .available:return presentation.gpsState }
+    }
+    private var gpsPreflightText:String {
+        switch store.gps.permissionState {
+        case .notDetermined:return "Permission not determined · open Settings if the prompt is unavailable"
+        case .denied:return "Permission denied · enable Location in Settings"
+        case .restricted:return "Permission restricted by this device"
+        case .available:return store.gps.status
+        }
+    }
+    private var phaseSemantic:DriveLineSemanticState { presentation.phase == .starting ? .waiting:(presentation.phase == .idle ? .ready:.processing) }
     private func color(_ state:DriveLineSemanticState)->Color { switch state {
         case .ready,.complete,.recovered:return Palette.healthy
         case .waiting,.queued,.processing,.degraded,.stale:return Palette.fuelAttention

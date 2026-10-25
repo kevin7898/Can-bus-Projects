@@ -2,12 +2,15 @@ import CoreLocation
 import Combine
 import UIKit
 
+enum GPSPermissionState:Equatable { case notDetermined,denied,restricted,available }
+
 @MainActor
 protocol GPSRecording: AnyObject {
     var objectWillChange: ObservableObjectPublisher { get }
     var speedKMH: Double? { get }
     var lastFix: Date? { get }
     var status: String { get }
+    var permissionState:GPSPermissionState { get }
     var onPoint: ((RoutePoint) -> Void)? { get set }
     var onReady: (() -> Void)? { get set }
     var onFailure: ((String) -> Void)? { get set }
@@ -15,6 +18,8 @@ protocol GPSRecording: AnyObject {
     func start()
     func stop()
 }
+
+extension GPSRecording { var permissionState:GPSPermissionState { .available } }
 
 @MainActor
 final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurrency CLLocationManagerDelegate {
@@ -29,6 +34,14 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
     private var foregroundObserver: NSObjectProtocol?
     private var upgradeAfterPermission = false
     private var wantsRecording = false
+    var permissionState:GPSPermissionState {
+        switch manager.authorizationStatus {
+        case .notDetermined:return .notDetermined
+        case .denied:return .denied
+        case .restricted:return .restricted
+        default:return .available
+        }
+    }
     private var updatesBeganAt: Date?
     // Core Location delivers delegate calls on the run loop where its manager was created.
     // This manager is created on the main actor; the conformance checks that at runtime.

@@ -40,7 +40,10 @@ struct RootView: View {
         .sheet(isPresented:$store.garagePresented) { GarageView() }
         .fullScreenCover(isPresented:Binding(get:{!store.state.onboardingCompleted || store.vehicleSetupPresented},set:{store.vehicleSetupPresented = $0})) { VehicleSetupView() }
         .fileImporter(isPresented:$importFile, allowedContentTypes:[.json]) { result in importRecording(result, store:store) }
-        .alert("DriveLine", isPresented:Binding(get:{ store.error != nil }, set:{ if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
+        .alert("DriveLine", isPresented:Binding(get:{ store.error != nil }, set:{ if !$0 { store.error = nil } })) {
+            if store.libraryReadOnly && store.backupAvailable { Button("Restore validated backup") { store.restoreStateBackup() } }
+            Button("Keep read-only",role:.cancel) { store.error = nil }
+        } message: { Text(store.error ?? "") }
     }
     private var tabBar: some View {
         HStack(spacing:0) { ForEach(AppTab.allCases) { tab in

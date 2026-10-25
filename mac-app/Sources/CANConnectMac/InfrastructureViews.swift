@@ -190,8 +190,9 @@ struct ImportsView:View {
                 ForEach(store.receiptList) { receipt in
                     Divider().overlay(Theme.line)
                     VStack(alignment:.leading,spacing:8) {
-                        HStack { Text(receipt.originalName).font(.system(size:12,weight:.medium));Spacer();Text(receipt.status.rawValue.uppercased()).foregroundStyle(receipt.status == .processed ? Theme.green:Theme.muted);if receipt.status == .failed { Button("Retry") { store.retry(receipt.id) } } }
+                        HStack { Text(receipt.originalName).font(.system(size:12,weight:.medium));Spacer();StatusPill(state:receipt.semanticState,text:receipt.statusTitle);if receipt.status == .failed { Button("Retry import") { store.retry(receipt.id) } } }
                         Text(receipt.message).font(.system(size:11)).foregroundStyle(receipt.status == .failed ? Color.orange:Theme.muted).textSelection(.enabled)
+                        Text("Original preserved · \(receipt.archiveName)").font(.system(size:10)).foregroundStyle(Theme.secondaryText)
                         HStack { Text(store.state.vehicles.first(where:{$0.id==receipt.vehicleID})?.name ?? "Unknown vehicle");Text(ByteCountFormatter.string(fromByteCount:Int64(receipt.byteCount),countStyle:.file));Spacer();Text(receipt.createdAt.formatted(date:.abbreviated,time:.shortened)) }.font(.system(size:10)).foregroundStyle(Theme.muted)
                     }.padding(13)
                 }
@@ -206,7 +207,7 @@ struct ServerView:View {
     @State private var loginStatus = ""
     var body:some View {
         VStack(alignment:.leading,spacing:14) {
-            HStack { Label(store.serverStatus,systemImage:"server.rack").foregroundStyle(store.serverStatus=="Listening" ? Theme.green:Theme.muted);Spacer();Button(store.serverStatus=="Listening" ? "Stop server":"Start server") { if store.serverStatus=="Listening" { store.stopServer() } else if apply() { store.startServer() } } }.font(.system(size:13))
+            HStack { StatusPill(state:store.serverSemanticState,text:store.serverStatusTitle);Spacer();Button(store.serverStatus=="Listening" ? "Stop server":"Start server") { if store.serverStatus=="Listening" { store.stopServer() } else if apply() { store.startServer() } } }.font(.system(size:13))
             HStack(alignment:.top,spacing:14) {
                 VStack(spacing:14) {
                     Panel(title:"Companion API") {
@@ -234,7 +235,8 @@ struct ServerView:View {
                     }
                     Panel(title:"Mac lifecycle") {
                         VStack(alignment:.leading,spacing:14) {
-                            Text("Closing the window keeps ingestion running while the app remains open. Use the menu-bar icon to reopen it or quit.").font(.system(size:12)).foregroundStyle(Theme.muted)
+                            HStack { StatusPill(state:.active,text:"App active");StatusPill(state:store.ingestionPaused ? .waiting:.active,text:store.ingestionPaused ? "Ingestion paused":"Ingestion active") }
+                            Text("Closing the main window keeps the current server and ingestion worker running only while the DriveLine app remains open. Quitting stops the listener; no daemon is claimed.").font(.system(size:12)).foregroundStyle(Theme.muted)
                             Button("Enable start at login") { do { try SMAppService.mainApp.register();loginStatus = "Registration requested. Check System Settings → General → Login Items." } catch { loginStatus = error.localizedDescription } }
                             Button("Disable start at login") { do { try SMAppService.mainApp.unregister();loginStatus = "Start at login disabled." } catch { loginStatus = error.localizedDescription } }
                             if !loginStatus.isEmpty { Text(loginStatus).font(.system(size:11)).foregroundStyle(Theme.muted) }

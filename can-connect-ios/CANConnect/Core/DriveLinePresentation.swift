@@ -99,7 +99,7 @@ struct PhoneRecordingPresentation: Equatable {
         if let obd=observations["speedKph"],draft?.source == .scanner {
             speedObservation=signal(key:"speedKph",title:"Speed",unit:"km/h",observation:obd,now:now)
         } else if gpsFresh,let speed=gpsSpeedKMH {
-            speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:speed,unit:"km/h",observedAt:gpsLastFix,state:.healthy,source:"iPhone GPS")
+            speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:speed,unit:"km/h",observedAt:gpsLastFix,state:.ready,source:"iPhone GPS")
         } else {
             speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:nil,unit:"km/h",observedAt:gpsLastFix,state:gpsLastFix == nil ? .unavailable:.stale,source:"iPhone GPS")
         }
@@ -125,9 +125,9 @@ struct PhoneRecordingPresentation: Equatable {
         return Self(phase:phase,sourceTitle:source.title,statusTitle:title(phase),
                     statusMessage:message(phase,scannerStatus:scannerStatus,gpsStatus:gpsStatus),elapsed:elapsed,
                     distanceKM:draft?.distanceKM ?? 0,speed:speedObservation,metrics:metrics,route:draft?.route ?? [],
-                    gpsState:gpsFresh ? .healthy:(draft == nil ? .stale:.unavailable),
-                    scannerState:scannerConnected ? .healthy:(scannerConnecting ? .stale:.unavailable),
-                    localState:draft == nil ? .healthy:.recording,queuedTransfers:queue,
+                    gpsState:gpsFresh ? .ready:(pendingGPS ? .waiting:(draft == nil ? .stale:.unavailable)),
+                    scannerState:scannerConnected ? .ready:(scannerConnecting ? .processing:.unavailable),
+                    localState:draft == nil ? .ready:.active,queuedTransfers:queue,
                     recoveryTitle:recovery.0,recoveryMessage:recovery.1)
     }
 
@@ -147,7 +147,7 @@ struct PhoneRecordingPresentation: Equatable {
         let freshness=key == "boostGaugeKpa" ? 10:max(OBDDecoder.freshness(for:key),VWMeasurementDecoder.freshness(for:key))
         let age=now.timeIntervalSince(observation.timestamp)
         return PhoneSignalPresentation(key:key,title:title,value:observation.value,unit:unit,observedAt:observation.timestamp,
-                                       state:(0...freshness).contains(age) ? .healthy:.stale,source:"OBD")
+                                       state:(0...freshness).contains(age) ? .ready:.stale,source:"OBD")
     }
 
     private static func title(_ phase:PhoneRecordingPhase)->String {

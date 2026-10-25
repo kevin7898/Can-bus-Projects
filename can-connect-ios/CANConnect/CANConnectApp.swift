@@ -119,9 +119,29 @@ struct CANConnectApp: App {
             _store = StateObject(wrappedValue:testStore)
         } else { _store = StateObject(wrappedValue:AppStore()) }
     }
-    var body: some Scene { WindowGroup { RootView().environmentObject(store)
-        .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme).tint(Palette.blue)
-        .onOpenURL { store.openDeepLink($0) } } }
+    var body: some Scene { WindowGroup {
+        #if DEBUG
+        if let ids=Self.phase8EvidenceIDs {
+            Phase8StateEvidenceView(ids:ids)
+                .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme).tint(Palette.blue)
+        } else {
+            RootView().environmentObject(store)
+                .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme).tint(Palette.blue)
+                .onOpenURL { store.openDeepLink($0) }
+        }
+        #else
+        RootView().environmentObject(store)
+            .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme).tint(Palette.blue)
+            .onOpenURL { store.openDeepLink($0) }
+        #endif
+    } }
+    #if DEBUG
+    private static var phase8EvidenceIDs:[Int]? {
+        let arguments=ProcessInfo.processInfo.arguments
+        guard let index=arguments.firstIndex(of:"--phase8-state"),arguments.indices.contains(index+1) else { return nil }
+        return arguments[index+1].split(separator:",").compactMap { Int($0) }
+    }
+    #endif
 }
 
 #if DEBUG

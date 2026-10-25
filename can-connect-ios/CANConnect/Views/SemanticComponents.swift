@@ -130,6 +130,54 @@ struct EmptyStateCard:View {
 }
 
 #if DEBUG
+struct Phase8StateEvidenceView:View {
+    let ids:[Int]
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var states:[DriveLineStateDescriptor] { ids.compactMap(DriveLineStateMatrix.state) }
+    private var heading:some View {
+        VStack(alignment:.leading,spacing:4) {
+            Text(dynamicTypeSize.isAccessibilitySize ? "SANITIZED\nSAMPLE" : "SANITIZED SAMPLE")
+                .font(.caption2.weight(.bold)).tracking(dynamicTypeSize.isAccessibilitySize ? 0:1.4)
+                .foregroundStyle(Palette.fuelAttention).fixedSize(horizontal:false,vertical:true)
+            Text("Recovery states").font(.title2.weight(.semibold)).fixedSize(horizontal:false,vertical:true)
+            Text("Fictional 2013 Volkswagen Jetta TDI · debug-only evidence").font(.caption).foregroundStyle(Palette.secondaryText).fixedSize(horizontal:false,vertical:true)
+        }
+    }
+    var body:some View {
+        VStack(alignment:.leading,spacing:12) {
+            if dynamicTypeSize.isAccessibilitySize {
+                heading
+            } else {
+                HStack {
+                    heading
+                    Spacer();Image(systemName:"shield.checkered").foregroundStyle(Palette.cobalt)
+                }
+            }
+            ScrollView {
+                LazyVStack(spacing:12) {
+                    ForEach(states) { item in
+                        SectionCard(title:item.title,icon:item.state.icon) {
+                            HStack { StatusPill(state:item.state);Spacer();Text(item.platform.rawValue).font(.caption2).foregroundStyle(Palette.tertiaryText) }
+                            Text(item.wording).font(.subheadline).foregroundStyle(Palette.primaryText)
+                            VStack(alignment:.leading,spacing:5) {
+                                Label("Safe: \(item.persistedEvidence)",systemImage:"lock.shield").accessibilityLabel("Persisted evidence. \(item.persistedEvidence)")
+                                Label(item.recoveryResult,systemImage:"arrow.counterclockwise").accessibilityLabel("Recovery result. \(item.recoveryResult)")
+                            }.font(.caption).foregroundStyle(Palette.secondaryText)
+                            if !item.actions.isEmpty {
+                                HStack { ForEach(item.actions.prefix(2),id:\.self) { action in Button(action.title) {}.buttonStyle(.bordered).disabled(true) } }
+                                Text("Fixture actions are disabled; production enables only safe implemented targets.").font(.caption2).foregroundStyle(Palette.tertiaryText)
+                            }
+                        }.accessibilityIdentifier("phase8.state.\(item.id)")
+                    }
+                }.padding(.bottom,12)
+            }
+        }.padding(18).background(Palette.appBackground.ignoresSafeArea()).foregroundStyle(Palette.primaryText)
+            .accessibilityIdentifier("phase8.evidence")
+    }
+}
+#endif
+
+#if DEBUG
 struct PhoneSemanticStateGallery:View {
     var body:some View { ScrollView { VStack(alignment:.leading,spacing:14) {
         AppearancePreferencePicker()

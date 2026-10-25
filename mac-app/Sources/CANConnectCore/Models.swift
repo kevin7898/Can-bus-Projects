@@ -284,6 +284,14 @@ public struct ImportReceipt: Codable, Identifiable {
         self.vehicleID = vehicleID; self.originalName = originalName; self.archiveName = archiveName; self.contentHash = contentHash; self.byteCount = byteCount
     }
 }
+public extension ImportReceipt {
+    var semanticState:DriveLineSemanticState {
+        switch status { case .queued:return .queued;case .processing:return .processing;case .processed:return .complete;case .failed:return .failed }
+    }
+    var statusTitle:String {
+        switch status { case .queued:return "Queued";case .processing:return "Processing preserved original";case .processed:return "Processed";case .failed:return "Failed · original preserved" }
+    }
+}
 public struct MapViewport: Codable, Equatable {
     public var latitude: Double = 49.19
     public var longitude: Double = -123.97

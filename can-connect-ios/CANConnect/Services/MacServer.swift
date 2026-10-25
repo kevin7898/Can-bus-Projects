@@ -21,6 +21,14 @@ struct TransferItem: Codable, Identifiable {
     var contentHash: String { Self.hash(payload) }
     static func hash(_ payload:Data)->String { SHA256.hash(data:payload).map { String(format:"%02x",$0) }.joined() }
 }
+extension TransferItem {
+    var semanticState:DriveLineSemanticState {
+        switch status { case .queued:return .queued;case .awaitingReceipt:return .processing;case .complete:return .complete;case .failed:return .failed }
+    }
+    var statusTitle:String {
+        switch status { case .queued:return "Queued";case .awaitingReceipt:return "Acknowledged · processing";case .complete:return "Transferred · processed";case .failed:return "Failed" }
+    }
+}
 
 // Stable source payload: retry sends the identical bytes, allowing Mac content-hash deduplication.
 enum MacRecording {

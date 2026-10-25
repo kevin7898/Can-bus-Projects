@@ -54,7 +54,7 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertTrue(matrix.allSatisfy { !$0.trigger.isEmpty && !$0.persistedEvidence.isEmpty && !$0.wording.isEmpty && !$0.recoveryResult.isEmpty })
         XCTAssertTrue(matrix.allSatisfy { DriveLineSemanticState.allCases.contains($0.state) })
         XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(42)).state,.failed)
-        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(42)).actions,[.restoreBackup,.retrySave])
+        XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(42)).actions,[.retrySave])
         XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(42)).wording.contains("draft"))
         XCTAssertEqual(try XCTUnwrap(DriveLineStateMatrix.state(49)).state,.processing)
         XCTAssertTrue(try XCTUnwrap(DriveLineStateMatrix.state(49)).wording.contains("acknowledged"))

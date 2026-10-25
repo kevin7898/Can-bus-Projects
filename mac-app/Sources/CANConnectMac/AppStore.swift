@@ -47,6 +47,18 @@ import DriveLineShared
     }
     var libraryURL: URL { repository?.root ?? FileManager.default.homeDirectoryForCurrentUser }
     var receiptList: [ImportReceipt] { state.receipts.sorted { $0.createdAt>$1.createdAt } }
+    var serverSemanticState:DriveLineSemanticState {
+        if serverStatus=="Listening" { return .ready }
+        if serverStatus=="Starting" { return .processing }
+        if serverStatus.hasPrefix("Failed") { return .failed }
+        return .unavailable
+    }
+    var serverStatusTitle:String {
+        if serverStatus=="Listening" { return state.allowLAN ? "Active · trusted LAN":"Ready · local-only" }
+        if serverStatus=="Starting" { return "Processing · starting" }
+        if serverStatus.hasPrefix("Failed") { return "Failed to start" }
+        return serverStatus
+    }
     init(root:URL? = nil) {
         let path = root ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("CANConnect",isDirectory:true)
         var repo:LibraryRepository?
@@ -205,7 +217,7 @@ import DriveLineShared
     }
     func togglePause() { ingestionPaused.toggle(); if !ingestionPaused { Task { await processPending() } } }
     func startServer() {
-        perform {
+        do {
             let token = try apiToken ?? PairingKeychain.token(); apiToken = token
             serverStatus = "Starting"
             try server.start(port:state.serverPort,allowLAN:state.allowLAN,token:token) { [weak self] request in
@@ -213,7 +225,7 @@ import DriveLineShared
                 return await self.handle(request)
             }
             try commit { $0.autoStartServer = true }
-        }
+        } catch { serverStatus="Failed: \(error.localizedDescription)";self.error="Server failed to start. Local library data remains available. \(error.localizedDescription)" }
     }
     func startHeadless(port:UInt16,token:String) throws {
         apiToken = token
@@ -222,6 +234,7 @@ import DriveLineShared
         }
     }
     func stopServer() { server.stop(); serverStatus = "Stopped"; perform { try commit { $0.autoStartServer = false } } }
+    func stopServerForQuit() { server.stop();serverStatus="Stopped after quit" }
     func configureServer(port:UInt16,lan:Bool) { perform { try commit { $0.serverPort = port; $0.allowLAN = lan } }; if serverStatus=="Listening" { startServer() } }
     func copyToken() { perform { let token = try apiToken ?? PairingKeychain.token(); apiToken = token; NSPasteboard.general.clearContents(); NSPasteboard.general.setString(token,forType:.string); notice = "Pairing token copied." } }
     func openLibrary() { NSWorkspace.shared.open(libraryURL) }

@@ -131,6 +131,41 @@ struct EmptyStateCard:View {
 }
 
 #if DEBUG
+struct Phase8MacEvidenceView:View {
+    let title:String
+    let ids:[Int]
+    private var states:[DriveLineStateDescriptor] { ids.compactMap(DriveLineStateMatrix.state) }
+    var body:some View {
+        VStack(alignment:.leading,spacing:16) {
+            HStack {
+                VStack(alignment:.leading,spacing:5) {
+                    Text("SANITIZED SAMPLE · DEBUG ONLY").font(.system(size:10,weight:.bold)).tracking(1.5).foregroundStyle(Theme.fuelAttention)
+                    Text(title).font(.system(size:25,weight:.semibold))
+                    Text("Fictional 2013 Volkswagen Jetta TDI · excluded from real totals").font(.system(size:11)).foregroundStyle(Theme.secondaryText)
+                }
+                Spacer();Image(systemName:"shield.checkered").font(.system(size:28)).foregroundStyle(Theme.cobalt)
+            }
+            LazyVGrid(columns:[GridItem(.adaptive(minimum:340),spacing:14)],spacing:14) {
+                ForEach(states) { item in
+                    Panel(title:item.title,icon:item.state.icon) {
+                        VStack(alignment:.leading,spacing:10) {
+                            HStack { StatusPill(state:item.state);Spacer();Text("State \(item.id)").foregroundStyle(Theme.tertiaryText) }
+                            Text(item.wording).font(.system(size:12))
+                            Label(item.persistedEvidence,systemImage:"lock.shield").foregroundStyle(Theme.secondaryText)
+                            Label(item.recoveryResult,systemImage:"arrow.counterclockwise").foregroundStyle(Theme.secondaryText)
+                            if !item.actions.isEmpty { HStack { ForEach(item.actions.prefix(2),id:\.self) { Button($0.title) {}.disabled(true) } } }
+                        }.font(.system(size:10)).padding(14).frame(maxWidth:.infinity,alignment:.leading)
+                    }.accessibilityIdentifier("mac.phase8.state.\(item.id)")
+                }
+            }
+            Spacer(minLength:0)
+        }.padding(22).background(Theme.background).foregroundStyle(Theme.primaryText)
+            .accessibilityIdentifier("mac.phase8.evidence")
+    }
+}
+#endif
+
+#if DEBUG
 struct MacSemanticStateGallery:View {
     var body:some View { VStack(alignment:.leading,spacing:14) {
         AppearancePreferencePicker().frame(width:320)

@@ -22,6 +22,7 @@ import AppKit
         if args.contains("--phase5-fixture") { state.loadPhase5Fixture() }
         if args.contains("--phase6-fixture") { state.loadPhase6Fixture() }
         if args.contains("--phase7-fixture") { state.loadPhase7Fixture() }
+        if args.contains("--phase8-fixture") { state.loadPhase7Fixture() }
         if let page = argument("--phase4-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
         if let page = argument("--phase5-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
         if let page = argument("--phase6-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
@@ -38,6 +39,9 @@ import AppKit
             let scheme:ColorScheme = argument("--phase7-appearance") == "dark" ? .dark:.light
             DispatchQueue.main.async { renderPhase7GarageEvidence(store:state,output:URL(fileURLWithPath:output,isDirectory:true),scheme:scheme) }
         }
+        if let output = argument("--phase8-render-directory") {
+            DispatchQueue.main.async { renderPhase8Evidence(output:URL(fileURLWithPath:output,isDirectory:true)) }
+        }
         #endif
         if args.contains("--headless") {
             guard let token = ProcessInfo.processInfo.environment["CAN_CONNECT_TEST_TOKEN"],token.count>=16,let port = UInt16(argument("--port") ?? "18765") else { fputs("Headless validation needs CAN_CONNECT_TEST_TOKEN (16+ characters) and a valid --port.\n",stderr);exit(2) }
@@ -49,6 +53,7 @@ import AppKit
             RootView().environmentObject(store)
                 .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme)
                 .frame(minWidth:1080,minHeight:720)
+                .onReceive(NotificationCenter.default.publisher(for:NSApplication.willTerminateNotification)) { _ in store.stopServerForQuit() }
         }.defaultSize(width:1540,height:1000)
             .commands {
                 CommandGroup(after:.newItem) { Button("Import recordings…") { store.importFiles() }.keyboardShortcut("i",modifiers:.command);Button("Open data folder") { store.openLibrary() } }
@@ -114,6 +119,29 @@ import AppKit
         NSApp.terminate(nil)
     } catch { fputs("Phase 7 evidence rendering failed: \(error.localizedDescription)\n",stderr);exit(3) }
 }
+
+@MainActor private func renderPhase8Evidence(output:URL) {
+    do {
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let groups:[(String,String,[Int],CGSize)]=[
+            ("mac-empty-library","Empty library",[1,2,5,7,11],CGSize(width:1080,height:720)),
+            ("mac-library-recovery","Read-only and corrupt library recovery",[95,97,98,99,100,101],CGSize(width:1540,height:1000)),
+            ("mac-import-states","Import preservation and processing",[71,72,73,74,75],CGSize(width:1540,height:1000)),
+            ("mac-missing-receipt","Missing external receipt",[69,104,105],CGSize(width:1080,height:720)),
+            ("mac-server-states","Server failure and local-only lifecycle",[110,112,117,118,119],CGSize(width:1540,height:1000))
+        ]
+        for scheme in [ColorScheme.light,.dark] {
+            let appearance=scheme == .dark ? "dark":"light"
+            for (name,title,ids,size) in groups {
+                let renderer=ImageRenderer(content:Phase8MacEvidenceView(title:title,ids:ids).environment(\.colorScheme,scheme).frame(width:size.width,height:size.height))
+                renderer.proposedSize=ProposedViewSize(size);renderer.scale=2
+                guard let image=renderer.cgImage,let data=NSBitmapImageRep(cgImage:image).representation(using:.png,properties:[:]) else { throw CocoaError(.fileWriteUnknown) }
+                try data.write(to:output.appendingPathComponent("\(name)-\(Int(size.width))x\(Int(size.height))-\(appearance).png"),options:.atomic)
+            }
+        }
+        NSApp.terminate(nil)
+    } catch { fputs("Phase 8 evidence rendering failed: \(error.localizedDescription)\n",stderr);exit(3) }
+}
 #endif
 struct MenuBarContent:View {
     @EnvironmentObject var store:AppStore
@@ -128,7 +156,16 @@ struct RootView:View {
             topNavigation
             Divider().overlay(Theme.border)
             HStack { VStack(alignment:.leading,spacing:4) { Text(store.page.title).font(.system(size:25,weight:.semibold));Text(store.page.subtitle).font(.system(size:11)).foregroundStyle(Theme.secondaryText) };Spacer() }.padding(.horizontal,22).padding(.vertical,18)
-            if let error = store.error { banner(error,isError:true) }
+            if let error = store.error {
+                HStack(spacing:12) {
+                    Image(systemName:"exclamationmark.triangle")
+                    Text(error).textSelection(.enabled)
+                    Spacer()
+                    if store.readOnly,store.repository?.validStateBackup() != nil { Button("Restore validated backup") { store.restoreStateBackup() } }
+                    Button { store.error=nil } label:{Image(systemName:"xmark")}
+                }.font(.system(size:12)).padding(12).background(Theme.recordingFault.opacity(0.13)).padding(.horizontal,22).padding(.bottom,12)
+                    .accessibilityIdentifier("mac.library.recovery")
+            }
             if let notice = store.notice { banner(notice,isError:false) }
             #if DEBUG
             if CommandLine.arguments.contains("--phase5-render-directory") || CommandLine.arguments.contains("--phase6-render-directory") || CommandLine.arguments.contains("--phase7-render-directory") {
@@ -145,8 +182,8 @@ struct RootView:View {
             #endif
             Divider().overlay(Theme.line)
             HStack(spacing:14) {
-                Button { store.page = .server } label:{ Label("Server: "+store.serverStatus,systemImage:store.serverStatus=="Listening" ? "checkmark.circle.fill":"server.rack") }.accessibilityIdentifier("mac.secondary.server")
-                Button { store.page = .imports } label:{ Label(store.processing ? "Processing imports":"Imports",systemImage:"square.and.arrow.down") }.accessibilityIdentifier("mac.secondary.imports")
+                Button { store.page = .server } label:{ Label("Server: "+store.serverStatusTitle,systemImage:store.serverSemanticState.icon) }.accessibilityIdentifier("mac.secondary.server")
+                Button { store.page = .imports } label:{ Label(store.processing ? "Processing imports":(store.ingestionPaused ? "Imports paused":"Imports ready"),systemImage:store.processing ? DriveLineSemanticState.processing.icon:"square.and.arrow.down") }.accessibilityIdentifier("mac.secondary.imports")
                 Text("\(store.state.vehicles.count) vehicles")
                 Spacer()
                 Text(store.readOnly ? "READ ONLY":"Local library")

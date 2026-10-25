@@ -17,6 +17,16 @@ private final class HTTPFixture: URLProtocol {
     override func stopLoading() {}
 }
 final class TransferTests: XCTestCase {
+    func testPhase8TransferStatesDistinguishQueueAcknowledgementProcessingAndCompletion() {
+        let vehicle=VehicleProfile(),payload=Data("sanitized frozen transfer".utf8)
+        var item=TransferItem(tripID:UUID(),name:"Fixture",endpoint:"http://127.0.0.1:8765",vehicle:vehicle,payload:payload)
+        XCTAssertEqual(item.semanticState,.queued);XCTAssertEqual(item.statusTitle,"Queued")
+        item.status = .awaitingReceipt
+        XCTAssertEqual(item.semanticState,.processing);XCTAssertTrue(item.statusTitle.contains("processing"))
+        item.status = .failed;XCTAssertEqual(item.semanticState,.failed)
+        item.status = .complete;XCTAssertEqual(item.semanticState,.complete)
+        XCTAssertEqual(item.payload,payload,"Presentation state must never rebuild frozen bytes")
+    }
     private func client() throws -> MacServerClient {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [HTTPFixture.self]
         return try MacServerClient(address:"http://mac-mini.local:8765",token:"synthetic-test-token",configuration:config)

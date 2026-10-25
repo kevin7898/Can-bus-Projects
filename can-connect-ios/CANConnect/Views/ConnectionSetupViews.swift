@@ -94,11 +94,11 @@ struct TransferQueueView: View {
         if store.state.transfers.isEmpty { InfoNote(text:"No recordings queued. Sample recordings are excluded. Pair your server, then send recordings from Transfers.") }
         ForEach(store.state.transfers.reversed()) { item in
             VStack(alignment:.leading,spacing:8) {
-                Text(item.name).font(.system(size:16))
-                Text(item.status.rawValue == "awaitingReceipt" ? "Awaiting Mac processing" : item.status.rawValue.capitalized).foregroundStyle(item.status == .complete ? Palette.green : Palette.blue)
+                HStack { Text(item.name).font(.system(size:16));Spacer();StatusPill(state:item.semanticState,text:item.statusTitle) }
                 Text(item.message).captionStyle()
+                Text(item.status == .complete ? "Original retained on this iPhone.":"Frozen payload retained for retry · \(item.payload.count) bytes").captionStyle()
                 Text(item.endpoint).captionStyle()
-            }.card()
+            }.card().accessibilityElement(children:.contain).accessibilityIdentifier("transfer.\(item.status.rawValue)")
         }
         AppButton(title:store.transferring ? "Transferring…" : "Retry / check receipts",icon:"arrow.clockwise") { Task { await store.sendQueued() } }.disabled(store.transferring)
     } }

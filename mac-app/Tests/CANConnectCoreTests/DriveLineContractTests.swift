@@ -4,6 +4,14 @@ import DriveLineShared
 @testable import CANConnectCore
 
 final class DriveLineContractTests:XCTestCase {
+    func testPhase8ImportReceiptStatesKeepAcknowledgementSeparateFromProcessing() {
+        let vehicle=UUID()
+        var receipt=ImportReceipt(vehicleID:vehicle,originalName:"fixture.json",archiveName:"preserved.json",contentHash:String(repeating:"a",count:64),byteCount:20)
+        XCTAssertEqual(receipt.semanticState,.queued);XCTAssertEqual(receipt.statusTitle,"Queued")
+        receipt.status = .processing;XCTAssertEqual(receipt.semanticState,.processing)
+        receipt.status = .failed;XCTAssertEqual(receipt.semanticState,.failed);XCTAssertTrue(receipt.statusTitle.contains("original preserved"))
+        receipt.status = .processed;XCTAssertEqual(receipt.semanticState,.complete)
+    }
     func testPhase7FourVehicleProfilesRoundTripWithStableIndependentIdentity() throws {
         let profiles=[
             Vehicle(name:"Fictional Jetta",year:"2013",make:"Volkswagen",model:"Jetta TDI",vehicleClass:.passengerCar,fuelType:"Diesel"),

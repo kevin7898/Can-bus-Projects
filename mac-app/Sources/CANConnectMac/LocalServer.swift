@@ -7,6 +7,7 @@ final class LocalServer {
     private let queue = DispatchQueue(label:"can.connect.http")
     private var connections: [UUID:NWConnection] = [:]
     var onState: ((String) -> Void)?
+    deinit { listener?.cancel();connections.values.forEach { $0.cancel() } }
     func start(port:UInt16, allowLAN:Bool, token:String, handler:@escaping (HTTPRequest) async -> HTTPResponse) throws {
         stop()
         guard let nwPort = NWEndpoint.Port(rawValue:port) else { throw CANError.invalid("Choose a port from 1 to 65535.") }
