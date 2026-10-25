@@ -54,14 +54,13 @@ struct AppearancePreferencePicker:View {
             .pickerStyle(.segmented).accessibilityIdentifier("appearance.picker")
     }
 }
-enum Workspace: String, CaseIterable, Identifiable {
-    case overview = "Overview", trips = "Trips", compare = "Compare", signals = "Signals", garage = "Garage", imports = "Imports", server = "Server"
-    var id: String { rawValue }
+typealias Workspace=DriveLineMacDestination
+extension DriveLineMacDestination {
     var icon: String {
-        switch self { case .overview:return "square.grid.2x2";case .trips:return "point.topleft.down.curvedto.point.bottomright.up";case .compare:return "rectangle.split.2x1";case .signals:return "waveform.path.ecg";case .garage:return "car";case .imports:return "square.and.arrow.down";case .server:return "server.rack" }
+        switch self { case .today:return "sun.max";case .drives:return "point.topleft.down.curvedto.point.bottomright.up";case .fuel:return "fuelpump";case .signals:return "waveform.path.ecg";case .garage:return "car";case .imports:return "square.and.arrow.down";case .server:return "server.rack" }
     }
     var subtitle: String {
-        switch self {case .overview:return "Your roads. Your data. All in one place.";case .trips:return "Explore each drive with its original data source.";case .compare:return "Two recordings. One synchronized workspace.";case .signals:return "Independent cards for recorded vehicle signals.";case .garage:return "One system for every vehicle.";case .imports:return "From phone or recorder to your Mac.";case .server:return "Ingestion, storage, and background services."}
+        switch self {case .today:return "Current status, recent activity, and summaries.";case .drives:return "Your drive ledger, playback, and comparisons.";case .fuel:return "Purchased fills and receipt history.";case .signals:return "Independent cards for recorded vehicle signals.";case .garage:return "One system for every vehicle.";case .imports:return "From phone or recorder to your Mac.";case .server:return "Ingestion, storage, and background services."}
     }
 }
 struct Panel<Content:View>: View {

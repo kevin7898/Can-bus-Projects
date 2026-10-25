@@ -40,44 +40,61 @@ struct MenuBarContent:View {
 }
 struct RootView:View {
     @EnvironmentObject var store:AppStore
+    @AppStorage(DriveLineAppearance.storageKey) private var appearanceRaw=DriveLineAppearance.system.rawValue
     var body:some View {
         VStack(spacing:0) {
-            HStack(spacing:0) {
-                sidebar.frame(width:190)
-                VStack(alignment:.leading,spacing:0) {
-                    HStack { VStack(alignment:.leading,spacing:4) { Text(store.page.rawValue).font(.system(size:25,weight:.semibold));Text(store.page.subtitle).font(.system(size:11)).foregroundStyle(Theme.muted) };Spacer();Button("Import",systemImage:"square.and.arrow.down") { store.importFiles() } }.padding(22)
-                    if let error = store.error { banner(error,isError:true) }
-                    if let notice = store.notice { banner(notice,isError:false) }
-                    ScrollView { Group { switch store.page { case .overview:OverviewView();case .trips:TripsView();case .compare:CompareView();case .signals:SignalsView();case .garage:GarageView();case .imports:ImportsView();case .server:ServerView() } }.padding(.horizontal,22).padding(.bottom,22).frame(maxWidth:.infinity,alignment:.topLeading) }
-                }.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
-            }
+            topNavigation
+            Divider().overlay(Theme.border)
+            HStack { VStack(alignment:.leading,spacing:4) { Text(store.page.title).font(.system(size:25,weight:.semibold));Text(store.page.subtitle).font(.system(size:11)).foregroundStyle(Theme.secondaryText) };Spacer() }.padding(.horizontal,22).padding(.vertical,18)
+            if let error = store.error { banner(error,isError:true) }
+            if let notice = store.notice { banner(notice,isError:false) }
+            ScrollView { destination.padding(.horizontal,22).padding(.bottom,22).frame(maxWidth:.infinity,alignment:.topLeading) }
             Divider().overlay(Theme.line)
-            HStack(spacing:16) { Circle().fill(store.serverStatus=="Listening" ? Theme.green:Theme.muted).frame(width:6,height:6);Text("Server: "+store.serverStatus);Text("\(store.state.vehicles.count) vehicles");Text(store.processing ? "Processing imports":"Local library");Spacer();Text(store.readOnly ? "READ ONLY":"No live vehicle connection") }.font(.system(size:10)).foregroundStyle(Theme.muted).padding(.horizontal,14).padding(.vertical,8)
+            HStack(spacing:14) {
+                Button { store.page = .server } label:{ Label("Server: "+store.serverStatus,systemImage:store.serverStatus=="Listening" ? "checkmark.circle.fill":"server.rack") }.accessibilityIdentifier("mac.secondary.server")
+                Button { store.page = .imports } label:{ Label(store.processing ? "Processing imports":"Imports",systemImage:"square.and.arrow.down") }.accessibilityIdentifier("mac.secondary.imports")
+                Text("\(store.state.vehicles.count) vehicles")
+                Spacer()
+                Text(store.readOnly ? "READ ONLY":"Local library")
+            }.buttonStyle(.plain).font(.system(size:10)).foregroundStyle(Theme.secondaryText).padding(.horizontal,14).padding(.vertical,8).background(Theme.navigationBackground)
         }.background(Theme.background).foregroundStyle(Theme.text).tint(Theme.blue)
             .onAppear { if store.state.vehicles.isEmpty { store.page = .garage } }
     }
-    var sidebar:some View {
-        VStack(alignment:.leading,spacing:18) {
-            Text("DriveLine").font(.system(size:11,weight:.semibold)).tracking(2).padding(.top,8)
-            VStack(alignment:.leading,spacing:5) {
-                Text("YOUR GARAGE").font(.system(size:9)).tracking(1.5).foregroundStyle(Theme.muted)
-                Picker("Vehicle",selection:Binding(get:{store.state.selectedVehicleID},set:{ if let id = $0 { store.selectVehicle(id) } })) { if store.state.vehicles.isEmpty { Text("Add a vehicle").tag(nil as UUID?) };ForEach(store.state.vehicles) { vehicle in Text(vehicle.name).tag(Optional(vehicle.id)) } }.labelsHidden()
-            }.padding(10).background(Theme.raised).clipShape(RoundedRectangle(cornerRadius:7))
-            VStack(alignment:.leading,spacing:4) {
-                Text("WORKSPACE").font(.system(size:9)).tracking(1.5).foregroundStyle(Theme.muted).padding(.horizontal,8).padding(.bottom,5)
-                ForEach(Workspace.allCases.filter{$0 != .imports && $0 != .server}) { page in navigation(page) }
-            }
-            VStack(alignment:.leading,spacing:4) {
-                Text("INFRASTRUCTURE").font(.system(size:9)).tracking(1.5).foregroundStyle(Theme.muted).padding(.horizontal,8).padding(.bottom,5)
-                navigation(.imports);navigation(.server)
-            }
-            Spacer()
-            Divider().overlay(Theme.line)
-            VStack(alignment:.leading,spacing:7) { Text("HOME SERVER").font(.system(size:9)).tracking(1.5);Text(Host.current().localizedName ?? "This Mac").font(.system(size:12));Text(store.serverStatus).font(.system(size:10)).foregroundStyle(Theme.muted) }.padding(8)
-        }.padding(12).background(Theme.sidebar).overlay(alignment:.trailing) { Rectangle().fill(Theme.line).frame(width:1) }
+    @ViewBuilder var destination:some View {
+        switch store.page {
+        case .today: OverviewView()
+        case .drives: DrivesDestinationView()
+        case .fuel: FuelDestinationView()
+        case .signals: SignalsView()
+        case .garage: GarageView()
+        case .imports: ImportsView()
+        case .server: ServerView()
+        }
+    }
+    var topNavigation:some View {
+        HStack(spacing:8) {
+            Label("DriveLine",systemImage:"road.lanes").font(.system(size:17,weight:.bold)).foregroundStyle(Theme.primaryText).frame(width:140,alignment:.leading)
+            ForEach(Workspace.primary) { page in navigation(page) }
+            Spacer(minLength:8)
+            Picker("Vehicle",selection:Binding(get:{store.state.selectedVehicleID},set:{ if let id=$0 { store.selectVehicle(id) } })) {
+                if store.state.vehicles.isEmpty { Text("Add a vehicle").tag(nil as UUID?) }
+                ForEach(store.state.vehicles) { Text($0.name).tag(Optional($0.id)) }
+            }.labelsHidden().frame(width:180).accessibilityIdentifier("mac.vehicle.picker")
+            Menu {
+                Button("Imports",systemImage:"square.and.arrow.down") { store.page = .imports }
+                Button("Server",systemImage:"server.rack") { store.page = .server }
+                Divider()
+                Menu("Appearance") { ForEach(DriveLineAppearance.allCases) { appearance in Button { appearanceRaw=appearance.rawValue } label:{ if appearanceRaw==appearance.rawValue { Label(appearance.title,systemImage:"checkmark") } else { Text(appearance.title) } } } }
+                Divider()
+                Button("Open data folder",systemImage:"folder") { store.openLibrary() }
+            } label:{ Image(systemName:"ellipsis").frame(width:32,height:30) }.menuStyle(.borderlessButton).accessibilityLabel("Services and appearance").accessibilityIdentifier("mac.secondary.menu")
+        }.padding(.horizontal,16).frame(height:58).background(Theme.navigationBackground)
     }
     func navigation(_ page:Workspace) -> some View {
-        Button { store.page = page } label: { HStack(spacing:10) { Image(systemName:page.icon).frame(width:18);Text(page.rawValue);Spacer() }.font(.system(size:12)).foregroundStyle(store.page==page ? Theme.text:Theme.muted).padding(10).background(store.page==page ? Theme.blue.opacity(0.19):Color.clear).clipShape(RoundedRectangle(cornerRadius:6)).contentShape(Rectangle()) }.buttonStyle(.plain)
+        Button { store.page = page } label: {
+            VStack(spacing:7) { Label(page.title,systemImage:page.icon).labelStyle(.titleOnly).font(.system(size:12,weight:store.page==page ? .semibold:.regular));Rectangle().fill(store.page==page ? Theme.cobalt:Color.clear).frame(height:3).clipShape(Capsule()) }
+                .foregroundStyle(store.page==page ? Theme.cobalt:Theme.secondaryText).frame(width:70,height:48).contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityIdentifier("mac.nav.\(page.rawValue)").accessibilityAddTraits(store.page==page ? .isSelected:[])
     }
-    func banner(_ text:String,isError:Bool) -> some View { HStack { Image(systemName:isError ? "exclamationmark.triangle":"info.circle");Text(text).textSelection(.enabled);Spacer();Button { if isError { store.error = nil } else { store.notice = nil } } label:{Image(systemName:"xmark")} }.font(.system(size:12)).padding(12).background(isError ? Color.orange.opacity(0.15):Theme.blue.opacity(0.12)).padding(.horizontal,22).padding(.bottom,12) }
+    func banner(_ text:String,isError:Bool) -> some View { HStack { Image(systemName:isError ? "exclamationmark.triangle":"info.circle");Text(text).textSelection(.enabled);Spacer();Button { if isError { store.error = nil } else { store.notice = nil } } label:{Image(systemName:"xmark")} }.font(.system(size:12)).padding(12).background(isError ? Theme.recordingFault.opacity(0.13):Theme.cobalt.opacity(0.11)).padding(.horizontal,22).padding(.bottom,12) }
 }

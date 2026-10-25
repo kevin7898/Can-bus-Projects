@@ -79,15 +79,15 @@ struct OverviewView:View {
             HStack { Text("\(store.filteredTrips.count) recordings · select a recorded trace to inspect").font(.system(size:11)).foregroundStyle(Theme.muted);Spacer();Picker("Map",selection:Binding(get:{store.preferences.mapStyle},set:{value in store.changePreferences{$0.mapStyle = value}})) { Text("Roads").tag("standard");Text("Satellite").tag("satellite") }.labelsHidden().frame(width:120);Button { expanded.toggle() } label:{Image(systemName:expanded ? "arrow.down.right.and.arrow.up.left":"arrow.up.left.and.arrow.down.right")}.help(expanded ? "Restore map":"Expand map") }.padding(12)
             MapPanel(trips:store.filteredTrips,viewport:$viewport,style:store.preferences.mapStyle,height:expanded ? 650:350,onSelect:{corridor = $0})
             if let corridor = corridor {
-                HStack { Text(corridor.name);Text(corridor.start.formatted(date:.abbreviated,time:.shortened)).foregroundStyle(Theme.muted);Spacer();Button("Inspect drive") { store.selectedTripID = corridor.id;store.page = .trips } }.font(.system(size:11)).padding(12)
+                HStack { Text(corridor.name);Text(corridor.start.formatted(date:.abbreviated,time:.shortened)).foregroundStyle(Theme.muted);Spacer();Button("Inspect drive") { store.selectedTripID = corridor.id;store.page = .drives } }.font(.system(size:11)).padding(12)
             }
         }
     }
     var recentTrips:some View {
         Panel(title:"Recent drives") {
             if store.filteredTrips.isEmpty { EmptyPanel(title:"Your next drive starts here",message:"Import a recording for the selected vehicle. GPS-only data is welcome; unavailable signals stay blank.") }
-            ForEach(store.filteredTrips.prefix(4)) { trip in TripRow(trip:trip) { store.selectedTripID = trip.id;store.page = .trips };Divider().overlay(Theme.line) }
-            HStack { Spacer();Button("View all drives") { store.page = .trips } }.padding(10)
+            ForEach(store.filteredTrips.prefix(4)) { trip in TripRow(trip:trip) { store.selectedTripID = trip.id;store.page = .drives };Divider().overlay(Theme.line) }
+            HStack { Spacer();Button("View all drives") { store.page = .drives } }.padding(10)
         }
     }
     var inspector:some View {

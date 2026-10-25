@@ -10,7 +10,7 @@ import DriveLineShared
     @Published private(set) var state = LibraryState()
     @Published var error: String?
     @Published var notice: String?
-    @Published var page: Workspace = .overview
+    @Published var page: Workspace = .today
     @Published var selectedTripID: UUID?
     @Published var serverStatus = "Stopped"
     @Published var ingestionPaused = false

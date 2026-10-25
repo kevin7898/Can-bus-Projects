@@ -21,6 +21,12 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(DriveLineAppearance.dark.resolved(systemIsDark: false), .dark)
     }
 
+    func testMacNavigationContractKeepsPrimaryAndSecondaryDestinationsReachable() {
+        XCTAssertEqual(DriveLineMacDestination.primary, [.today,.drives,.fuel,.signals,.garage])
+        XCTAssertEqual(DriveLineMacDestination.secondary, [.imports,.server])
+        XCTAssertEqual(Set(DriveLineMacDestination.primary + DriveLineMacDestination.secondary), Set(DriveLineMacDestination.allCases))
+    }
+
     private func fixture(_ name: String) throws -> Data {
         try Data(contentsOf: XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")))
     }
