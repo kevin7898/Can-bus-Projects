@@ -1,0 +1,30 @@
+name: CAN CONNECT Mac
+on:
+  push:
+    paths: ['mac-app/**', 'branding/driveline/**', '.github/workflows/mac-app.yml']
+  pull_request:
+    paths: ['mac-app/**', 'branding/driveline/**', '.github/workflows/mac-app.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: xcodebuild -version && swift --version
+      - name: Core tests
+        working-directory: mac-app
+        run: swift test
+      - name: Xcode build
+        run: xcodebuild -project mac-app/CANConnect.xcodeproj -scheme CANConnect -configuration Debug -derivedDataPath mac-app/DerivedData CODE_SIGNING_ALLOWED=NO build
+      - name: API integration
+        run: python3 mac-app/scripts/api_integration.py mac-app/DerivedData/Build/Products/Debug/CANConnect.app/Contents/MacOS/CANConnect
+      - name: Package local-build application
+        run: ditto -c -k --keepParent mac-app/DerivedData/Build/Products/Debug/CANConnect.app CANConnect-Mac-Debug.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CANConnect-Mac-Debug
+          path: CANConnect-Mac-Debug.zip
