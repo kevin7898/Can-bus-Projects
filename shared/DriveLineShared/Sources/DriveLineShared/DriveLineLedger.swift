@@ -299,25 +299,28 @@ public enum DriveLineJourneyPolicy {
     }
 
     public static func fuelLedger(_ entries: [DriveLineFuelEntry], includeSamples: Bool = false) -> [DriveLineFuelLedgerItem] {
-        let sorted = entries.filter { includeSamples || !$0.isSample }.sorted { lhs, rhs in
-            lhs.odometerKm == rhs.odometerKm ? lhs.date < rhs.date : lhs.odometerKm < rhs.odometerKm
-        }
-        var lastFullIndex: Int?
-        return sorted.enumerated().map { index, entry in
-            var economy: Double?
-            var boundaryID: UUID?
-            if entry.isFullFill, let start = lastFullIndex {
-                let distance = entry.odometerKm - sorted[start].odometerKm
-                if distance > 0 {
-                    economy = sorted[(start + 1)...index].reduce(0) { $0 + $1.litresPurchased } * 100 / distance
-                    boundaryID = sorted[start].id
+        let included=entries.filter { includeSamples || !$0.isSample }
+        var result:[UUID:DriveLineFuelLedgerItem]=[:]
+        for vehicleEntries in Dictionary(grouping:included,by:\.vehicleID).values {
+            let sorted=vehicleEntries.sorted { lhs,rhs in lhs.odometerKm == rhs.odometerKm ? lhs.date < rhs.date:lhs.odometerKm < rhs.odometerKm }
+            var lastFullIndex:Int?
+            for (index,entry) in sorted.enumerated() {
+                var economy:Double?
+                var boundaryID:UUID?
+                if entry.isFullFill,let start=lastFullIndex {
+                    let distance=entry.odometerKm-sorted[start].odometerKm
+                    if distance>0 {
+                        economy=sorted[(start+1)...index].reduce(0) { $0+$1.litresPurchased }*100/distance
+                        boundaryID=sorted[start].id
+                    }
                 }
+                if entry.isFullFill { lastFullIndex=index }
+                result[entry.id]=DriveLineFuelLedgerItem(entry:entry,
+                    costPerLitre:entry.litresPurchased>0 ? entry.totalCost/entry.litresPurchased:nil,
+                    tankEconomyL100Km:economy,boundaryStartID:boundaryID)
             }
-            if entry.isFullFill { lastFullIndex = index }
-            return DriveLineFuelLedgerItem(entry: entry,
-                costPerLitre: entry.litresPurchased > 0 ? entry.totalCost / entry.litresPurchased : nil,
-                tankEconomyL100Km: economy, boundaryStartID: boundaryID)
         }
+        return included.sorted { $0.date<$1.date }.compactMap { result[$0.id] }
     }
 
     public static func tripFuelSeries(_ recordings: [DriveLineRecording], includeSamples: Bool = false) -> [DriveLineTripFuelPoint] {

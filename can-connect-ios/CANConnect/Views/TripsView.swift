@@ -167,6 +167,7 @@ struct TripStoryView:View {
     let trip:Trip
     @EnvironmentObject private var store:AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var exporting=false
     @State private var document=JSONDocument(data:Data())
     @State private var delete=false
@@ -186,7 +187,14 @@ struct TripStoryView:View {
             VStack(alignment:.leading,spacing:7) {
                 Text(trip.name).font(.title3)
                 Text(trip.startedAt.formatted(date:.complete,time:.shortened)).captionStyle()
-                HStack { ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) };Spacer();StatusPill(state:summary.quality == .complete ? .healthy:.stale,text:summary.quality.title) }
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment:.leading,spacing:8) {
+                        ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) }
+                        StatusPill(state:summary.quality == .complete ? .healthy:.stale,text:summary.quality.title)
+                    }
+                } else {
+                    HStack { ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) };Spacer();StatusPill(state:summary.quality == .complete ? .healthy:.stale,text:summary.quality.title) }
+                }
             }
             if !trip.route.isEmpty { NativeRouteMap(route:trip.route,selectedPoint:selectedRoutePoint).frame(height:230).clipShape(RoundedRectangle(cornerRadius:14)) }
             else { EmptyStateCard(icon:"map",title:"Route unavailable",message:"This recording has no saved GPS coordinates. No route is inferred from scanner data.") }
@@ -232,6 +240,7 @@ struct TripStoryView:View {
                 }
             }
             if let samples=trip.samples,!samples.isEmpty {
+                DataRow(label:"Measured OBD responses",value:"\(samples.count)")
                 DisclosureGroup("Raw command and reply evidence · \(samples.count)") {
                     VStack(alignment:.leading,spacing:8) {
                         ForEach(Array(samples.prefix(30).enumerated()),id:\.offset) { _,sample in

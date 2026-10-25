@@ -73,6 +73,24 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["Logbook"].isSelected)
     }
     @MainActor
+    func testPhase4JourneyStoryFuelAndSignalsAreReachable() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase4-fixture"];app.launch()
+        XCTAssertTrue(app.staticTexts["Sanitized sample journey"].waitForExistence(timeout:10))
+        let ledgerShot=XCTAttachment(screenshot:app.screenshot());ledgerShot.name="Phase 4 Journey Ledger — sanitized sample";ledgerShot.lifetime = .keepAlways;add(ledgerShot)
+        app.staticTexts["Sanitized sample journey"].tap()
+        XCTAssertTrue(app.navigationBars["Trip Story"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Evidence timeline"].exists)
+        XCTAssertTrue(app.staticTexts["Synchronized signals"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS[c] %@","normalized")).firstMatch.exists)
+        let storyShot=XCTAttachment(screenshot:app.screenshot());storyShot.name="Phase 4 Trip Story — shared cursor";storyShot.lifetime = .keepAlways;add(storyShot)
+        app.buttons["Done"].tap();app.buttons["Garage"].tap()
+        XCTAssertTrue(app.buttons["garage.fuel-ledger"].waitForExistence(timeout:5));app.buttons["garage.fuel-ledger"].tap()
+        XCTAssertTrue(app.navigationBars["Fuel Ledger"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Purchased fuel"].exists)
+        XCTAssertTrue(app.staticTexts["Measured trip fuel"].exists)
+        let fuelShot=XCTAttachment(screenshot:app.screenshot());fuelShot.name="Phase 4 Fuel Ledger — sample excluded from totals";fuelShot.lifetime = .keepAlways;add(fuelShot)
+    }
+    @MainActor
     func testSootCardExplainsRegenTriggerWithoutChangingCardSize() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.staticTexts["Sample vehicle selected"].waitForExistence(timeout:10))

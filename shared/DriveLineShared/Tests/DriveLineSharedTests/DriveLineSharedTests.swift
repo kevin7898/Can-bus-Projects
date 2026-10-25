@@ -211,6 +211,41 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(ledger[2].entry.litresPurchased,20)
     }
 
+    func testPhase4FuelLedgerNeverCrossesVehicleBoundaries() throws {
+        let a=UUID(),b=UUID(),date=Date(timeIntervalSince1970:1_700_000_000)
+        let entries=[
+            DriveLineFuelEntry(vehicleID:a,date:date,litresPurchased:40,totalCost:60,odometerKm:1_000,isFullFill:true),
+            DriveLineFuelEntry(vehicleID:b,date:date.addingTimeInterval(1),litresPurchased:30,totalCost:50,odometerKm:1_100,isFullFill:true),
+            DriveLineFuelEntry(vehicleID:a,date:date.addingTimeInterval(2),litresPurchased:20,totalCost:32,odometerKm:1_400,isFullFill:true)
+        ]
+        let ledger=DriveLineJourneyPolicy.fuelLedger(entries)
+        XCTAssertNil(ledger.first(where:{$0.entry.vehicleID == b})?.tankEconomyL100Km)
+        XCTAssertEqual(try XCTUnwrap(ledger.first(where:{$0.entry.vehicleID == a && $0.entry.odometerKm == 1_400})?.tankEconomyL100Km),5,accuracy:0.000_001)
+    }
+
+    func testPhase4GPSOnlyOBDOnlyAndMixedQualityRemainDistinct() {
+        let vehicleID=UUID(),start=Date(timeIntervalSince1970:1_700_000_000),end=start.addingTimeInterval(10)
+        let gps=[DriveLineGPSPoint(timestamp:start,latitude:49,longitude:-124),DriveLineGPSPoint(timestamp:end,latitude:49.001,longitude:-124)]
+        let obd=[DriveLineSignalSample(timestamp:start,values:["rpm":1_500],sourceID:"obd"),DriveLineSignalSample(timestamp:end,values:["rpm":1_600],sourceID:"obd")]
+        let gpsOnly=DriveLineJourneyPolicy.summary(for:DriveLineRecording(recordingID:UUID(),vehicleID:vehicleID,name:"GPS",startedAt:start,endedAt:end,sourceIDs:["gps"],gpsPoints:gps))
+        let obdOnly=DriveLineJourneyPolicy.summary(for:DriveLineRecording(recordingID:UUID(),vehicleID:vehicleID,name:"OBD",startedAt:start,endedAt:end,sourceIDs:["obd"],signalSamples:obd))
+        let mixed=DriveLineJourneyPolicy.summary(for:DriveLineRecording(recordingID:UUID(),vehicleID:vehicleID,name:"Mixed",startedAt:start,endedAt:end,sourceIDs:["gps","obd"],gpsPoints:gps,signalSamples:obd))
+        XCTAssertEqual(gpsOnly.quality,.limited);XCTAssertNotNil(gpsOnly.gpsCoverage);XCTAssertNil(gpsOnly.obdCoverage)
+        XCTAssertEqual(obdOnly.quality,.limited);XCTAssertNil(obdOnly.gpsCoverage);XCTAssertNotNil(obdOnly.obdCoverage)
+        XCTAssertEqual(mixed.quality,.complete);XCTAssertEqual(Set(mixed.sourceKinds),Set([.gps,.obd]))
+    }
+
+    func testPhase4MissingInputsNeverFabricateEvidence() {
+        let recording=DriveLineRecording(recordingID:UUID(),vehicleID:UUID(),name:"Empty",startedAt:Date(timeIntervalSince1970:100),endedAt:Date(timeIntervalSince1970:120),sourceIDs:[])
+        let summary=DriveLineJourneyPolicy.summary(for:recording)
+        XCTAssertEqual(summary.quality,.unavailable)
+        XCTAssertNil(summary.metrics.distanceKm);XCTAssertNil(summary.metrics.tripFuelLitres)
+        XCTAssertNil(summary.gpsCoverage);XCTAssertNil(summary.obdCoverage)
+        let events=DriveLineJourneyPolicy.timeline(for:recording)
+        XCTAssertEqual(Set(events.map(\.kind)),Set(["recordingStarted","recordingFinished"]))
+        XCTAssertTrue(DriveLineJourneyPolicy.signalSeries("dpfRegenTrigger",unit:"%",recording:recording).segments.isEmpty)
+    }
+
     func testExtendedEventDecodesLegacyShapeAndExtensionDataSurvivesRoundTrip() throws {
         let json=#"{"id":"99999999-9999-4999-8999-999999999999","timestamp":1700000000,"kind":"scannerDisconnected","note":"Observed disconnect"}"#.data(using:.utf8)!
         let event=try DriveLineJSON.decoder().decode(DriveLineTripEvent.self,from:json)

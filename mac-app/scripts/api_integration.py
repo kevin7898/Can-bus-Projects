@@ -54,11 +54,11 @@ with tempfile.TemporaryDirectory() as directory:
   assert [s['values']['rpm'] for s in trip['signalSamples']]==[832,840]
   assert archive['fuelEntries'][0]['receipt']['sha256']=='a'*64
   assert call('/v1/recordings?vehicleID='+str(uuid.uuid4()),recording)[0]==422
-  manifest=json.loads((pathlib.Path(directory)/'library.json').read_text());assert manifest['schemaVersion']==2 and len(manifest['receipts'])==1
+  manifest=json.loads((pathlib.Path(directory)/'library.json').read_text());assert manifest['schemaVersion']==3 and len(manifest['receipts'])==1
   assert manifest['fuelEntries'][0]['id'].lower()==fill_id.lower() and manifest['fuelEntries'][0]['receipt']['sha256']=='a'*64
   assert len(list((pathlib.Path(directory)/'Originals').iterdir()))==1
   original=next((pathlib.Path(directory)/'Originals').iterdir()); assert json.loads(original.read_text())==recording
-  print('API integration passed: v2 mixed GPS/OBD and fill receipt, stable IDs, exact original, auth, processing receipt, hash deduplication/conflict, trip retrieval, vehicle validation.')
+  print('API integration passed: v2 archive in v3 annotation-sidecar library, mixed GPS/OBD and fill receipt, stable IDs, exact original, auth, processing receipt, hash deduplication/conflict, trip retrieval, vehicle validation.')
  finally:
   p.terminate()
   try:p.wait(timeout=5)

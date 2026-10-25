@@ -231,6 +231,22 @@ import DriveLineShared
             try commit { $0.vehicles=[vehicle];$0.selectedVehicleID=vehicle.id;$0.trips=[trip];$0.fuelEntries=[fill] }
         }
     }
+    func loadPhase4Fixture() {
+        loadPhase3Fixture()
+        guard let vehicle=state.vehicles.first,let trip=state.trips.first else { return }
+        perform {
+            let end=trip.end
+            let partial=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(-1_800),litresPurchased:12,totalCost:21.48,odometerKm:216_500,isFullFill:false,stationName:"Sanitized sample station",isDemo:true)
+            let full=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(600),litresPurchased:24,totalCost:42.96,odometerKm:216_874,isFullFill:true,stationName:"Sanitized sample station",isDemo:true)
+            try commit { state in
+                for index in state.trips.indices { state.trips[index].isDemo=true }
+                for index in state.fuelEntries.indices { state.fuelEntries[index].isDemo=true }
+                state.fuelEntries.append(contentsOf:[partial,full])
+                state.journeyAnnotations[trip.id.uuidString]=DriveLineJourneyAnnotation(recordingID:trip.id,purpose:.service,reviewed:true,startPlace:"Sample start",finishPlace:"Sample finish")
+            }
+            selectedTripID=trip.id;page = .drives
+        }
+    }
     #endif
     private func handle(_ request:HTTPRequest) async -> HTTPResponse {
         do {

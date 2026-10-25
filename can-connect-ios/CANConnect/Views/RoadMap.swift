@@ -57,7 +57,7 @@ struct NativeRouteMap: UIViewRepresentable {
         private var selection:RoutePoint?
         private let location = MKPointAnnotation()
 
-        func update(_ view:MKMapView,route:[RoutePoint],isLive:Bool,isSample:Bool,selectedPoint:RoutePoint?) {
+        func update(_ view:MKMapView,route:[RoutePoint],isLive:Bool,isSample:Bool,selectedPoint:RoutePoint? = nil) {
             guard points != route || live != isLive || sample != isSample || selection != selectedPoint else { return }
             points=route;live=isLive;sample=isSample;selection=selectedPoint
             view.accessibilityIdentifier = isLive ? "live.route" : "recorded.route"

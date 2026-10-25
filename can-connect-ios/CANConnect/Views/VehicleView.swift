@@ -118,6 +118,7 @@ struct FuelHistory: View {
 
 struct FuelLedgerView:View {
     @EnvironmentObject private var store:AppStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var vehicleID:UUID?
     @State private var dateDays=0
     @State private var adding=false
@@ -135,14 +136,19 @@ struct FuelLedgerView:View {
                 notes:entry.notes,receipt:entry.receipt,isSample:entry.isSample)
         }
     }
-    private var ledger:[DriveLineFuelLedgerItem] { DriveLineJourneyPolicy.fuelLedger(sharedEntries) }
+    private var ledger:[DriveLineFuelLedgerItem] {
+        let real=DriveLineJourneyPolicy.fuelLedger(sharedEntries.filter{!$0.isSample})
+        let sample=DriveLineJourneyPolicy.fuelLedger(sharedEntries.filter(\.isSample),includeSamples:true)
+        return real+sample
+    }
     private var trips:[Trip] { store.state.trips.filter { vehicleID == nil || $0.vehicleID == vehicleID } }
     private var tripFuel:[DriveLineTripFuelPoint] { DriveLineJourneyPolicy.tripFuelSeries(trips.map(\.sharedRecording)).filter { cutoff == nil || $0.date >= cutoff! } }
     var body:some View {
         SheetShell(title:"Fuel Ledger") {
-            HStack {
-                Picker("Vehicle",selection:$vehicleID) { Text("All vehicles").tag(nil as UUID?);ForEach(store.state.vehicles) { Text($0.title).tag(Optional($0.id)) } }
-                Picker("Date",selection:$dateDays) { Text("Any date").tag(0);Text("90 days").tag(90);Text("1 year").tag(365) }
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment:.leading) { fuelVehiclePicker;fuelDatePicker }
+                } else { HStack { fuelVehiclePicker;fuelDatePicker } }
             }
             HStack { Metric(title:"Purchased fuel",value:entries.filter{!$0.isSample}.reduce(0){$0+$1.litres}.text(1),unit:"L");Metric(title:"Recorded fills",value:String(entries.filter{!$0.isSample}.count)) }
             InfoNote(text:"Purchased quantity, full-tank economy, and measured trip fuel are separate evidence series. Sample entries are labelled and excluded from totals.",icon:"checkmark.shield")
@@ -150,7 +156,11 @@ struct FuelLedgerView:View {
             ForEach(entries) { entry in
                 let item=ledger.first(where:{$0.id==entry.id})
                 SectionCard(title:entry.stationName ?? "Fuel fill",icon:"fuelpump.fill") {
-                    HStack { Text(entry.date.formatted(date:.abbreviated,time:.shortened));Spacer();StatusPill(state:entry.isSample ? .unavailable:(entry.full ? .healthy:.stale),text:entry.isSample ? "Sample":(entry.full ? "Full fill":"Partial fill")) }.font(.caption)
+                    Group {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            VStack(alignment:.leading,spacing:8) { Text(entry.date.formatted(date:.abbreviated,time:.shortened));StatusPill(state:entry.isSample ? .unavailable:(entry.full ? .healthy:.stale),text:entry.isSample ? "Sample":(entry.full ? "Full fill":"Partial fill")) }
+                        } else { HStack { Text(entry.date.formatted(date:.abbreviated,time:.shortened));Spacer();StatusPill(state:entry.isSample ? .unavailable:(entry.full ? .healthy:.stale),text:entry.isSample ? "Sample":(entry.full ? "Full fill":"Partial fill")) } }
+                    }.font(.caption)
                     DataRow(label:"Purchased",value:"\(entry.litres.text(2)) L")
                     DataRow(label:"Cost",value:entry.costCAD.formatted(.currency(code:entry.currencyCode)))
                     DataRow(label:"Cost per litre",value:(item?.costPerLitre).map { $0.formatted(.currency(code:entry.currencyCode))+"/L" } ?? "Unavailable")
@@ -168,6 +178,8 @@ struct FuelLedgerView:View {
             AppButton(title:"Log a fill-up",icon:"plus") { adding=true }
         }.onAppear { vehicleID=store.state.selectedVehicleID }.sheet(isPresented:$adding) { FuelForm() }
     }
+    private var fuelVehiclePicker:some View { Picker("Vehicle",selection:$vehicleID) { Text("All vehicles").tag(nil as UUID?);ForEach(store.state.vehicles) { Text($0.title).tag(Optional($0.id)) } } }
+    private var fuelDatePicker:some View { Picker("Date",selection:$dateDays) { Text("Any date").tag(0);Text("90 days").tag(90);Text("1 year").tag(365) } }
 }
 
 #if DEBUG

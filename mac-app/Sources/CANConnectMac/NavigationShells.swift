@@ -24,7 +24,11 @@ struct FuelDestinationView:View {
     private var cutoff:Date? { dateDays == 0 ? nil:Date().addingTimeInterval(-Double(dateDays)*86_400) }
     var entries:[FuelEntry] { store.state.fuelEntries.filter { $0.vehicleID==store.state.selectedVehicleID && (cutoff == nil || $0.date >= cutoff!) }.sorted { $0.date>$1.date } }
     var sharedEntries:[DriveLineFuelEntry] { entries.map { DriveLineFuelEntry(id:$0.id,vehicleID:$0.vehicleID,date:$0.date,litresPurchased:$0.litresPurchased,totalCost:$0.totalCost,currencyCode:$0.currencyCode,odometerKm:$0.odometerKm,isFullFill:$0.isFullFill,stationName:$0.stationName,notes:$0.notes,receipt:$0.receipt,isSample:$0.isDemo) } }
-    var ledger:[DriveLineFuelLedgerItem] { DriveLineJourneyPolicy.fuelLedger(sharedEntries) }
+    var ledger:[DriveLineFuelLedgerItem] {
+        let real=DriveLineJourneyPolicy.fuelLedger(sharedEntries.filter{!$0.isSample})
+        let sample=DriveLineJourneyPolicy.fuelLedger(sharedEntries.filter(\.isSample),includeSamples:true)
+        return real+sample
+    }
     var tripFuel:[DriveLineTripFuelPoint] { DriveLineJourneyPolicy.tripFuelSeries(store.vehicleTrips.map(\.sharedRecording)).filter { cutoff == nil || $0.date >= cutoff! } }
     var body:some View {
         VStack(alignment:.leading,spacing:14) {
