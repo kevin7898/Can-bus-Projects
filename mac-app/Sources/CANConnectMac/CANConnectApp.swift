@@ -98,3 +98,16 @@ struct RootView:View {
     }
     func banner(_ text:String,isError:Bool) -> some View { HStack { Image(systemName:isError ? "exclamationmark.triangle":"info.circle");Text(text).textSelection(.enabled);Spacer();Button { if isError { store.error = nil } else { store.notice = nil } } label:{Image(systemName:"xmark")} }.font(.system(size:12)).padding(12).background(isError ? Theme.recordingFault.opacity(0.13):Theme.cobalt.opacity(0.11)).padding(.horizontal,22).padding(.bottom,12) }
 }
+
+#if DEBUG
+@MainActor struct MacNavigationCanvas:View {
+    @StateObject private var store:AppStore
+    init() {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("DriveLineMacPreviews/\(UUID().uuidString)",isDirectory:true)
+        _store=StateObject(wrappedValue:AppStore(root:root))
+    }
+    var body:some View { RootView().environmentObject(store).frame(width:1080,height:720) }
+}
+#Preview("Mac navigation · Light") { MacNavigationCanvas().preferredColorScheme(.light) }
+#Preview("Mac navigation · Dark") { MacNavigationCanvas().preferredColorScheme(.dark) }
+#endif

@@ -112,12 +112,13 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Honda CB500X · recorded values"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["Starting odometer"].exists == false)
         let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "New vehicle without sample telemetry"; shot.lifetime = .keepAlways; add(shot)
-        app.buttons["Choose vehicle"].tap()
+        app.buttons["Done"].tap()
+        app.buttons["Garage"].tap()
         let sample = app.buttons["garage.select.sample"]
         let ready = XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == true AND hittable == true"),object:sample)
         await fulfillment(of:[ready],timeout:5)
-        sample.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
-        XCTAssertTrue(app.staticTexts["Sample vehicle snapshot · recorded values"].waitForExistence(timeout:5))
+        sample.tap()
+        XCTAssertEqual(sample.value as? String, "Selected")
     }
 
     @MainActor

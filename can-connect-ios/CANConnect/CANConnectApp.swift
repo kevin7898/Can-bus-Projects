@@ -16,6 +16,7 @@ struct CANConnectApp: App {
             try? FileManager.default.removeItem(at:url.deletingLastPathComponent())
             let testStore = AppStore(disk:LocalStore(url:url))
             if !ProcessInfo.processInfo.arguments.contains("--show-onboarding") { testStore.state.onboardingCompleted = true; testStore.save() }
+            if ProcessInfo.processInfo.arguments.contains("--record-tab") { testStore.selectedTab = .record }
             _store = StateObject(wrappedValue:testStore)
         } else { _store = StateObject(wrappedValue:AppStore()) }
     }

@@ -160,7 +160,11 @@ struct GarageDestinationView: View {
         VStack(alignment:.leading,spacing:14) {
         ForEach(store.state.vehicles) { vehicle in VStack(alignment:.leading,spacing:13) {
             HStack(spacing:12) { Image(systemName:vehicle.kind.icon).foregroundStyle(Palette.blue); VStack(alignment:.leading,spacing:4) { Text(vehicle.title).font(.system(size:16)); Text(vehicle.detail.isEmpty ? vehicle.identificationSource : vehicle.detail).captionStyle() }; Spacer(); if store.state.selectedVehicleID == vehicle.id { Image(systemName:"checkmark.circle.fill").foregroundStyle(Palette.blue) } }
-            HStack { Button("Use vehicle") { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } }.disabled(store.recording || store.pendingGPS); Spacer(); Button("Edit details") { editing = vehicle }.disabled(store.recording || store.pendingGPS) }.font(.system(size:12))
+            HStack { Button("Use vehicle") { do { try store.chooseVehicle(vehicle.id) } catch { store.error = error.localizedDescription } }
+                    .disabled(store.recording || store.pendingGPS)
+                    .accessibilityIdentifier(vehicle.isSample ? "garage.select.sample" : "garage.select.\(vehicle.id.uuidString)")
+                    .accessibilityValue(store.state.selectedVehicleID == vehicle.id ? "Selected" : "Not selected")
+                Spacer(); Button("Edit details") { editing = vehicle }.disabled(store.recording || store.pendingGPS) }.font(.system(size:12))
         }.card() }
         AppButton(title:"Add a vehicle",icon:"plus") { adding = true }.disabled(store.recording || store.pendingGPS)
         InfoNote(text:"Finish a recording before switching vehicles. Trips, fills and dashboard choices stay with the vehicle they belong to.")

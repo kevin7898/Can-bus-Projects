@@ -38,6 +38,14 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertNil(DriveLinePhoneRoute.destination(for:try XCTUnwrap(URL(string:"https://example.com/recording"))))
     }
 
+    func testEveryRequiredSemanticStateHasTextAndIcon() {
+        XCTAssertEqual(DriveLineSemanticState.allCases,[.healthy,.stale,.unavailable,.queued,.recording])
+        for state in DriveLineSemanticState.allCases {
+            XCTAssertFalse(state.title.isEmpty)
+            XCTAssertFalse(state.icon.isEmpty)
+        }
+    }
+
     private func fixture(_ name: String) throws -> Data {
         try Data(contentsOf: XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")))
     }

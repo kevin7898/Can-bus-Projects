@@ -64,8 +64,10 @@ func importRecording(_ result: Result<URL, Error>, store: AppStore) {
 @MainActor
 struct DriveLineCanvas: View {
     @StateObject private var store: AppStore
+    private let scheme:ColorScheme
 
-    init(tab: AppTab = .today, recording: Bool = false) {
+    init(tab: AppTab = .today, recording: Bool = false, scheme:ColorScheme = .dark) {
+        self.scheme=scheme
         _store = StateObject(wrappedValue:Self.makeStore(tab:tab, recording:recording))
     }
 
@@ -91,7 +93,7 @@ struct DriveLineCanvas: View {
 
     var body: some View {
         RootView().environmentObject(store)
-            .preferredColorScheme(.dark).tint(Palette.blue)
+            .preferredColorScheme(scheme).tint(Palette.blue)
     }
 }
 
@@ -126,6 +128,8 @@ private final class CanvasScanner: ScannerTransport {
 }
 
 #Preview("Today · Sample data") { DriveLineCanvas() }
+#Preview("iPhone navigation · Light") { DriveLineCanvas(scheme:.light) }
+#Preview("iPhone navigation · Dark") { DriveLineCanvas(scheme:.dark) }
 #Preview("Drives · Sample data") { DriveLineCanvas(tab:.drives) }
 #Preview("Record · Sample data") { DriveLineCanvas(tab:.record) }
 #Preview("Garage · Sample data") { DriveLineCanvas(tab:.garage) }

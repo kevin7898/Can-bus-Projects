@@ -9,16 +9,16 @@ enum Theme {
     static let fieldSurface = semantic(light:0xEEF1F5,dark:0x101923)
     static let primaryText = semantic(light:0x0D1A2B,dark:0xF3F6FB)
     static let secondaryText = semantic(light:0x43536A,dark:0xA3B1C4)
-    static let tertiaryText = semantic(light:0x708096,dark:0x7F8DA1)
+    static let tertiaryText = semantic(light:0x5F6F84,dark:0x7F8DA1)
     static let border = semantic(light:0xD8DDE5,dark:0x263344)
     static let selectedBorder = semantic(light:0x086CF0,dark:0x4C9FFF)
-    static let cobalt = semantic(light:0x066FF9,dark:0x3D99FF)
+    static let cobalt = semantic(light:0x005FC9,dark:0x3D99FF)
     static let cobaltPressed = semantic(light:0x0056C7,dark:0x1D7EDF)
     static let cobaltDisabled = semantic(light:0xA7C8EF,dark:0x345472)
-    static let healthy = semantic(light:0x138A4A,dark:0x36C477)
+    static let healthy = semantic(light:0x08773D,dark:0x36C477)
     static let fuelAttention = semantic(light:0xA65E00,dark:0xE7A62B)
-    static let recordingFault = semantic(light:0xD83443,dark:0xFF5C62)
-    static let unavailable = semantic(light:0x737E8D,dark:0x7B8798)
+    static let recordingFault = semantic(light:0xC52637,dark:0xFF5C62)
+    static let unavailable = semantic(light:0x5F6F84,dark:0x7B8798)
     static let chartSeries:[Color] = [
         semantic(light:0x0068D7,dark:0x4CA6FF), semantic(light:0xB84A00,dark:0xFF9B52),
         semantic(light:0x167A43,dark:0x50D890), semantic(light:0x7D43A8,dark:0xC68CFF),
