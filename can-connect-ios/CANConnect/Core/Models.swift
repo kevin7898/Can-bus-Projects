@@ -85,9 +85,12 @@ struct Trip: Codable, Identifiable, Equatable {
 extension Trip {
     var sharedRecording: DriveLineRecording {
         let readings = (samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") }
+        var sourceIDs=Array(Set((route.isEmpty ? [] : ["gps"])+(readings.isEmpty ? [] : ["obd"]))).sorted()
+        if source == .imported { sourceIDs.append("imported") }
+        if isSample { sourceIDs.append("synthetic") }
         return DriveLineRecording(recordingID:id,vehicleID:vehicleID ?? UUID(uuidString:"00000000-0000-0000-0000-000000000000")!,name:name,startedAt:startedAt,
                                   endedAt:startedAt.addingTimeInterval(duration),
-                                  sourceIDs:Array(Set((route.isEmpty ? [] : ["gps"])+(readings.isEmpty ? [] : ["obd"]))).sorted(),
+                                  sourceIDs:Array(Set(sourceIDs)).sorted(),
                                   gpsPoints:route.map(\.shared),signalSamples:readings,recordedDistanceKm:distanceKM,tripFuelLitres:fuelLitres,isSample:isSample)
     }
 }
@@ -174,7 +177,7 @@ struct RecordingDraft: Codable {
     }
 }
 struct StoredState: Codable {
-    var schemaVersion = 3
+    var schemaVersion = 4
     var regenTrackingStartedAt: Date? = nil
     var vehicles: [VehicleProfile] = []
     var selectedVehicleID: UUID?
@@ -186,6 +189,9 @@ struct StoredState: Codable {
     var scanner = ScannerSettings()
     var server = ServerSettings()
     var transfers: [TransferItem] = []
+    /// User-authored metadata lives beside recordings so preserved archive bytes
+    /// and frozen transfer payloads never change when a drive is classified.
+    var journeyAnnotations: [String: DriveLineJourneyAnnotation] = [:]
 }
 struct TripArchive: Codable {
     var schemaVersion = 2
@@ -302,7 +308,14 @@ struct TripArchive: Codable {
                                       notes:fill.notes,receipt:fill.receipt,isSample:fill.isSample)
         }
         let sourceIDs=Set(recordings.flatMap(\.sourceIDs))
-        let sources=sourceIDs.sorted().map { DriveLineSourceDescriptor(id:$0,kind:$0 == "gps" ? .gps : .obd,name:$0 == "gps" ? "iPhone GPS" : "OBD scanner") }
+        let sources=sourceIDs.sorted().map { id -> DriveLineSourceDescriptor in
+            switch id {
+            case "gps": return DriveLineSourceDescriptor(id:id,kind:.gps,name:"iPhone GPS")
+            case "obd": return DriveLineSourceDescriptor(id:id,kind:.obd,name:"OBD scanner")
+            case "synthetic": return DriveLineSourceDescriptor(id:id,kind:.synthetic,name:"Labelled sample data")
+            default: return DriveLineSourceDescriptor(id:id,kind:.imported,name:"Imported recording")
+            }
+        }
         let profileData=try JSONEncoder().encode(vehicles ?? [])
         let producerVersion=Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "development"
         return try DriveLineArchive(producer:DriveLineProducer(app:"DriveLine iPhone",version:producerVersion,platform:"iOS"),sources:sources,

@@ -43,7 +43,7 @@ final class VehicleTests: XCTestCase {
         object.removeValue(forKey:"vehicles"); object.removeValue(forKey:"selectedVehicleID"); object.removeValue(forKey:"onboardingCompleted")
         var decoded = try JSONDecoder().decode(StoredState.self,from:JSONSerialization.data(withJSONObject:object))
         decoded.migrateVehicles()
-        XCTAssertEqual(decoded.schemaVersion,3); XCTAssertEqual(decoded.trips.count,1)
+        XCTAssertEqual(decoded.schemaVersion,4); XCTAssertEqual(decoded.trips.count,1)
         XCTAssertEqual(decoded.vehicles.first?.title,"Previous vehicle"); XCTAssertEqual(decoded.vehicles.first?.make,"")
         XCTAssertEqual(decoded.trips[0].vehicleID,decoded.selectedVehicleID)
         XCTAssertFalse(decoded.onboardingCompleted)

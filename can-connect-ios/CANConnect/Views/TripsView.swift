@@ -1,75 +1,214 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct TripsView: View {
-    @EnvironmentObject private var store: AppStore
-    @Binding var filter: Int
-    @Binding var page: Int
-    @State private var selected: Trip?
-    private var filtered: [Trip] { store.sortedTrips.filter { filter == 0 || (filter == 1 ? $0.source == .phoneGPS : $0.source != .phoneGPS) } }
-    var body: some View {
-        GeometryReader { geometry in
-            let rows = max(1,min(3,Int((geometry.size.height-110)/120)))
-            let pages = max(1,Int(ceil(Double(filtered.count)/Double(rows))))
-            VStack(alignment:.leading,spacing:13) {
-                PageControl(labels:["All trips","Phone GPS","Vehicle data"],selection:$filter)
-                HStack { Text("\(filtered.count) trips").font(.system(size:16)); Spacer(); Text("\(filtered.reduce(0) { $0 + $1.distanceKM }.text()) km").captionStyle() }
-                if filtered.isEmpty { Spacer(); VStack(spacing:12) { Image(systemName:"point.topleft.down.to.point.bottomright.curvepath").font(.system(size:32)).foregroundStyle(Palette.blue); Text("No drives here yet").font(.system(size:18)); Text("Record a GPS drive or import a recording.").captionStyle() }.frame(maxWidth:.infinity); Spacer() }
-                else {
-                    TabView(selection:$page) { ForEach(0..<pages,id:\.self) { index in
-                        VStack(spacing:11) { ForEach(Array(filtered.dropFirst(index*rows).prefix(rows))) { trip in TripCard(trip:trip) { selected = trip } }; Spacer(minLength:0) }.padding(.horizontal,1).tag(index)
-                    } }.tabViewStyle(.page(indexDisplayMode:.never))
-                }
-                HStack { Button { page = max(0,page-1) } label: { Image(systemName:"chevron.left").frame(width:44,height:36) }.disabled(page == 0); Spacer(); Text("Page \(min(page+1,pages)) of \(pages)").captionStyle(); Spacer(); Button { page = min(pages-1,page+1) } label: { Image(systemName:"chevron.right").frame(width:44,height:36) }.disabled(page >= pages-1) }
-            }.onChange(of:filter) { _,_ in page = 0 }.onChange(of:filtered.count) { _,_ in page = min(page,pages-1) }.onChange(of:rows) { _,_ in page = 0 }
-        }.sheet(item:$selected) { TripDetailView(trip:$0) }
+private enum JourneyDateFilter:String,CaseIterable,Identifiable {
+    case all,seven,thirty
+    var id:String { rawValue }
+    var title:String { switch self { case .all:"Any date";case .seven:"Last 7 days";case .thirty:"Last 30 days" } }
+    var interval:TimeInterval? { switch self { case .all:nil;case .seven:7*86_400;case .thirty:30*86_400 } }
+}
+
+private enum JourneySourceFilter:String,CaseIterable,Identifiable {
+    case all,gps,obd,imported,synthetic
+    var id:String { rawValue }
+    var title:String { rawValue == "all" ? "Any source":rawValue.uppercased() }
+}
+
+private enum JourneyQualityFilter:String,CaseIterable,Identifiable {
+    case all,complete,degraded,limited
+    var id:String { rawValue }
+    var title:String { rawValue == "all" ? "Any quality":rawValue.capitalized }
+}
+
+struct TripsView:View {
+    @EnvironmentObject private var store:AppStore
+    @Binding var filter:Int
+    @Binding var page:Int
+    @State private var selected:Trip?
+    @State private var vehicleID:UUID?
+    @State private var dateFilter:JourneyDateFilter = .all
+    @State private var sourceFilter:JourneySourceFilter = .all
+    @State private var purpose:DriveLineJourneyPurpose?
+    @State private var quality:JourneyQualityFilter = .all
+
+    private var filteredTrips:[Trip] {
+        store.state.trips.sorted { $0.startedAt > $1.startedAt }.filter { trip in
+            let summary=DriveLineJourneyPolicy.summary(for:trip.sharedRecording)
+            let annotation=store.journeyAnnotation(for:trip.id)
+            let sourceMatch=sourceFilter == .all || trip.sharedRecording.sourceIDs.contains(sourceFilter.rawValue)
+            let qualityMatch=quality == .all || summary.quality.rawValue == quality.rawValue
+            let vehicleMatch=vehicleID == nil || trip.vehicleID == vehicleID
+            let dateMatch=dateFilter.interval.map { trip.startedAt >= Date().addingTimeInterval(-$0) } ?? true
+            return sourceMatch && qualityMatch && vehicleMatch && dateMatch && (purpose == nil || annotation.purpose == purpose)
+        }
     }
-}
-struct TripCard: View {
-    let trip: Trip; let action: () -> Void
-    var body: some View { Button(action:action) { VStack(alignment:.leading,spacing:9) {
-        HStack { Text(trip.name).font(.system(size:14,weight:.medium)).lineLimit(1); Spacer(minLength:4); Image(systemName:"chevron.right").font(.system(size:10)).foregroundStyle(Palette.muted) }
-        Text("\(trip.startedAt.formatted(date:.abbreviated,time:.shortened)) · \(trip.isSample ? "Sample · " : "")\(trip.source.title)").captionStyle().lineLimit(1).minimumScaleFactor(0.8)
-        HStack(spacing:12) { Text("\(trip.distanceKM.text()) km").fontWeight(.medium); Text(trip.durationText).foregroundStyle(Palette.muted); Spacer(minLength:0); Text(trip.economy.map { "\($0.text()) L/100 km" } ?? (trip.source == .phoneGPS ? "GPS only" : "Fuel unavailable")).foregroundStyle(Palette.muted) }.font(.system(size:11)).lineLimit(1).minimumScaleFactor(0.8)
-    }.card().foregroundStyle(Palette.text) }.buttonStyle(.plain) }
-}
-struct JSONDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
-    var data: Data
-    init(data: Data) { self.data = data }
-    init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents:data) }
-}
-struct TripDetailView: View {
-    let trip: Trip
-    @EnvironmentObject private var store: AppStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var exporting = false
-    @State private var document = JSONDocument(data:Data())
-    @State private var delete = false
-    var body: some View { SheetShell(title:"Drive details") {
-        VStack(alignment:.leading,spacing:7) { Text(trip.name).font(.title3); Text(trip.startedAt.formatted(date:.complete,time:.shortened)).captionStyle() }
-        if !trip.route.isEmpty { NativeRouteMap(route:trip.route).frame(height:230).clipShape(RoundedRectangle(cornerRadius:14)) }
-        else { InfoNote(text:"This recording has no GPS route.",icon:"map") }
-        HStack { Metric(title:"Distance",value:trip.distanceKM.text(),unit:"km"); Metric(title:"Duration",value:trip.durationText) }
-        HStack { Metric(title:"Average fuel",value:trip.economy?.text() ?? "—",unit:"L/100 km"); Metric(title:"Fuel used",value:trip.fuelLitres?.text(2) ?? "—",unit:"L") }
-        InfoNote(text:"\(trip.isSample ? "Sample data · " : "")\(trip.source.title) · Stored on this iPhone. \(trip.source == .phoneGPS ? "GPS does not provide engine or fuel readings." : "")")
-        if let samples = trip.samples, !samples.isEmpty {
-            DataRow(label:"Measured OBD responses",value:String(samples.count))
-            ForEach(OBDDecoder.definitions.filter { d in samples.contains(where:{$0.signals[d.key] != nil}) }, id:\.key) { definition in
-                if let sample = samples.last(where:{$0.signals[definition.key] != nil}), let value = sample.signals[definition.key] {
-                    let label = OBDDecoder.labels[definition.key]!
-                    DataRow(label:label.title,value:"\(value.text()) \(label.unit) · \(sample.timestamp.formatted(date:.omitted,time:.standard))")
+
+    var body:some View {
+        VStack(alignment:.leading,spacing:12) {
+            ScrollView(.horizontal,showsIndicators:false) {
+                HStack(spacing:8) {
+                    filterMenu(title:vehicleID.flatMap { id in store.state.vehicles.first(where:{$0.id==id})?.title } ?? "All vehicles",icon:"car.2") {
+                        Button("All vehicles") { vehicleID=nil }
+                        ForEach(store.state.vehicles) { vehicle in Button(vehicle.title) { vehicleID=vehicle.id } }
+                    }
+                    filterMenu(title:dateFilter.title,icon:"calendar") {
+                        ForEach(JourneyDateFilter.allCases) { value in Button(value.title) { dateFilter=value } }
+                    }
+                    filterMenu(title:sourceFilter.title,icon:"antenna.radiowaves.left.and.right") {
+                        ForEach(JourneySourceFilter.allCases) { value in Button(value.title) { sourceFilter=value } }
+                    }
+                    filterMenu(title:purpose?.title ?? "Any purpose",icon:"tag") {
+                        Button("Any purpose") { purpose=nil }
+                        ForEach(DriveLineJourneyPurpose.allCases) { value in Button(value.title) { purpose=value } }
+                    }
+                    filterMenu(title:quality.title,icon:"checkmark.shield") {
+                        ForEach(JourneyQualityFilter.allCases) { value in Button(value.title) { quality=value } }
+                    }
+                }.padding(.vertical,1)
+            }.accessibilityIdentifier("journey.filters")
+            HStack {
+                Text("\(filteredTrips.count) journeys").font(.system(size:14,weight:.medium))
+                Spacer()
+                Text("\(filteredTrips.filter{!$0.isSample}.reduce(0){$0+$1.distanceKM}.text()) km real history").captionStyle()
+            }
+            if filteredTrips.isEmpty {
+                EmptyStateCard(icon:"point.topleft.down.to.point.bottomright.curvepath",title:"No journeys match",message:"Change a filter or record a drive. Sample recordings remain labelled and never count toward real totals.")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing:10) {
+                        ForEach(filteredTrips) { trip in
+                            JourneyRow(trip:trip,annotation:store.journeyAnnotation(for:trip.id),
+                                       transfer:store.state.transfers.first(where:{$0.tripID==trip.id})) { selected=trip }
+                        }
+                    }.padding(.bottom,4)
                 }
             }
-        }
-        AppButton(title:"Export recording",icon:"square.and.arrow.up") { do { document = JSONDocument(data:try store.archive([trip]).encoded()); exporting = true } catch { store.error = error.localizedDescription } }
-        Button("Delete recording",role:.destructive) { delete = true }.frame(maxWidth:.infinity).padding(.top,8)
-    }.fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error) = result { store.error = error.localizedDescription } }
-        .confirmationDialog("Delete this recording from this iPhone?",isPresented:$delete,titleVisibility:.visible) { Button("Delete recording",role:.destructive) { store.removeTrip(trip.id); dismiss() } }
+        }.onAppear { if vehicleID == nil { vehicleID=store.state.selectedVehicleID } }
+            .sheet(item:$selected) { TripStoryView(trip:$0) }
+    }
+
+    @ViewBuilder private func filterMenu<Content:View>(title:String,icon:String,@ViewBuilder content:()->Content)->some View {
+        Menu(content:content) { Label(title,systemImage:icon).font(.system(size:11,weight:.medium)).padding(.horizontal,10).frame(minHeight:38).background(Palette.raisedSurface,in:Capsule()) }
+            .foregroundStyle(Palette.primaryText)
+    }
+}
+
+private struct JourneyRow:View {
+    let trip:Trip
+    let annotation:DriveLineJourneyAnnotation
+    let transfer:TransferItem?
+    let action:()->Void
+    private var summary:DriveLineJourneySummary { DriveLineJourneyPolicy.summary(for:trip.sharedRecording) }
+    var body:some View {
+        Button(action:action) {
+            VStack(alignment:.leading,spacing:10) {
+                HStack(alignment:.top) {
+                    VStack(alignment:.leading,spacing:3) {
+                        Text(trip.name).font(.system(size:15,weight:.semibold)).lineLimit(1)
+                        Text(trip.startedAt.formatted(date:.abbreviated,time:.shortened)).captionStyle()
+                    }
+                    Spacer()
+                    qualityBadge
+                    Image(systemName:"chevron.right").font(.caption).foregroundStyle(Palette.tertiaryText)
+                }
+                HStack(spacing:12) {
+                    Label("\(trip.distanceKM.text()) km",systemImage:"road.lanes")
+                    Label(trip.durationText,systemImage:"clock")
+                    if let purpose=annotation.purpose { Label(purpose.title,systemImage:"tag") }
+                }.font(.system(size:11)).foregroundStyle(Palette.secondaryText)
+                HStack(spacing:10) {
+                    ForEach(sourceTitles,id:\.self) { SourceBadge(source:$0,verified:true) }
+                    Spacer()
+                    if let transfer { StatusPill(state:transfer.status == .complete ? .healthy:.queued,text:transfer.status.rawValue.capitalized) }
+                    Label(annotation.reviewed ? "Reviewed":"Unreviewed",systemImage:annotation.reviewed ? "checkmark.circle.fill":"circle")
+                        .font(.caption2).foregroundStyle(annotation.reviewed ? Palette.healthy:Palette.tertiaryText)
+                }
+                if annotation.startPlace != nil || annotation.finishPlace != nil {
+                    Text("\(annotation.startPlace ?? "Start unknown") → \(annotation.finishPlace ?? "Finish unknown")").captionStyle().lineLimit(1)
+                }
+            }.padding(14).background(Palette.primarySurface,in:RoundedRectangle(cornerRadius:14))
+                .overlay(RoundedRectangle(cornerRadius:14).stroke(Palette.border))
+        }.buttonStyle(.plain).accessibilityIdentifier("journey.row.\(trip.id.uuidString)")
+    }
+    private var sourceTitles:[String] {
+        trip.sharedRecording.sourceIDs.map { id in switch id { case "gps":"GPS";case "obd":"OBD";case "synthetic":"Synthetic";default:"Imported" } }
+    }
+    private var qualityBadge:some View {
+        let state:DriveLineSemanticState=summary.quality == .complete ? .healthy:(summary.quality == .unavailable ? .unavailable:.stale)
+        return StatusPill(state:state,text:summary.quality.title)
+    }
+}
+
+struct JSONDocument:FileDocument {
+    static var readableContentTypes:[UTType] { [.json] }
+    var data:Data
+    init(data:Data) { self.data=data }
+    init(configuration:ReadConfiguration) throws { data=configuration.file.regularFileContents ?? Data() }
+    func fileWrapper(configuration:WriteConfiguration) throws ->FileWrapper { FileWrapper(regularFileWithContents:data) }
+}
+
+struct TripStoryView:View {
+    let trip:Trip
+    @EnvironmentObject private var store:AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var exporting=false
+    @State private var document=JSONDocument(data:Data())
+    @State private var delete=false
+    @State private var editingAnnotation=false
+    private var summary:DriveLineJourneySummary { DriveLineJourneyPolicy.summary(for:trip.sharedRecording) }
+    var body:some View {
+        SheetShell(title:"Trip Story") {
+            VStack(alignment:.leading,spacing:7) {
+                Text(trip.name).font(.title3)
+                Text(trip.startedAt.formatted(date:.complete,time:.shortened)).captionStyle()
+                HStack { ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) };Spacer();StatusPill(state:summary.quality == .complete ? .healthy:.stale,text:summary.quality.title) }
+            }
+            if !trip.route.isEmpty { NativeRouteMap(route:trip.route).frame(height:230).clipShape(RoundedRectangle(cornerRadius:14)) }
+            else { EmptyStateCard(icon:"map",title:"Route unavailable",message:"This recording has no saved GPS coordinates. No route is inferred from scanner data.") }
+            HStack { Metric(title:"Measured distance",value:summary.metrics.distanceKm?.text() ?? "—",unit:"km");Metric(title:"Duration",value:trip.durationText) }
+            HStack { Metric(title:"Trip economy",value:summary.metrics.economyL100Km?.text() ?? "—",unit:"L/100 km");Metric(title:"Measured trip fuel",value:summary.metrics.tripFuelLitres?.text(2) ?? "—",unit:"L") }
+            InfoNote(text:summary.statement,icon:"checkmark.shield")
+            Button { editingAnnotation=true } label: {
+                HStack { Label("Purpose and review",systemImage:"tag");Spacer();Text(store.journeyAnnotation(for:trip.id).purpose?.title ?? "Unclassified").foregroundStyle(Palette.secondaryText);Image(systemName:"chevron.right") }.frame(minHeight:44)
+            }
+            AppButton(title:"Export preserved recording",icon:"square.and.arrow.up") {
+                do { document=JSONDocument(data:try store.archive([trip]).encoded());exporting=true }
+                catch { store.error=error.localizedDescription }
+            }
+            Button("Delete recording",role:.destructive) { delete=true }.frame(maxWidth:.infinity).padding(.top,8)
+        }.sheet(isPresented:$editingAnnotation) { JourneyAnnotationEditor(recordingID:trip.id) }
+            .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error)=result { store.error=error.localizedDescription } }
+            .confirmationDialog("Delete this recording from this iPhone?",isPresented:$delete,titleVisibility:.visible) { Button("Delete recording",role:.destructive) { store.removeTrip(trip.id);dismiss() } }
+    }
+}
+
+typealias TripDetailView = TripStoryView
+
+private struct JourneyAnnotationEditor:View {
+    let recordingID:UUID
+    @EnvironmentObject private var store:AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var value:DriveLineJourneyAnnotation
+    init(recordingID:UUID) { self.recordingID=recordingID;_value=State(initialValue:DriveLineJourneyAnnotation(recordingID:recordingID)) }
+    var body:some View {
+        SheetShell(title:"Journey details") {
+            Picker("Purpose",selection:$value.purpose) {
+                Text("Unclassified").tag(Optional<DriveLineJourneyPurpose>.none)
+                ForEach(DriveLineJourneyPurpose.allCases) { purpose in Text(purpose.title).tag(Optional(purpose)) }
+            }
+            Toggle("Reviewed",isOn:$value.reviewed)
+            TextField("Start place, when known",text:optional($value.startPlace)).textFieldStyle(.roundedBorder)
+            TextField("Finish place, when known",text:optional($value.finishPlace)).textFieldStyle(.roundedBorder)
+            TextField("Note",text:optional($value.note),axis:.vertical).lineLimit(2...5).textFieldStyle(.roundedBorder)
+            InfoNote(text:"Saved locally as sidecar metadata. It does not alter the original recording or queued transfer payload, and is not synchronized to another device.")
+            AppButton(title:"Save locally",icon:"checkmark") { store.saveJourneyAnnotation(value);dismiss() }
+        }.onAppear { value=store.journeyAnnotation(for:recordingID) }
+    }
+    private func optional(_ binding:Binding<String?>)->Binding<String> {
+        Binding(get:{binding.wrappedValue ?? ""},set:{binding.wrappedValue=$0.isEmpty ? nil:$0})
     }
 }
 
 #if DEBUG
-#Preview("Drives · Sample data") { DriveLineCanvas(tab:.drives) }
+#Preview("Journey Ledger · Sample data") { DriveLineCanvas(tab:.drives) }
 #endif

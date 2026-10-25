@@ -14,8 +14,8 @@ public final class LibraryRepository {
     public func load() throws -> LibraryState {
         guard FileManager.default.fileExists(atPath: manifest.path) else { return LibraryState() }
         let result = try Self.decoder().decode(LibraryState.self, from: Data(contentsOf: manifest))
-        guard (1...2).contains(result.schemaVersion) else { throw CANError.invalid("This library uses an unsupported schema. Keep the original file and update the app.") }
-        var migrated=result;migrated.schemaVersion=2
+        guard (1...3).contains(result.schemaVersion) else { throw CANError.invalid("This library uses an unsupported schema. Keep the original file and update the app.") }
+        var migrated=result;migrated.schemaVersion=3
         return migrated
     }
     public func save(_ state: LibraryState) throws {
@@ -41,8 +41,12 @@ public enum TripExport {
         var recording = trip.sharedRecording
         recording.coverage = DriveLineMetricPolicy.coverageSummaries(recording)
         let sources = recording.sourceIDs.map { id -> DriveLineSourceDescriptor in
-            if id == "gps" { return DriveLineSourceDescriptor(id:id,kind:.gps,name:"Recorded GPS") }
-            return DriveLineSourceDescriptor(id:id,kind:.obd,name:"Recorded vehicle signals",detail:trip.source)
+            switch id {
+            case "gps": return DriveLineSourceDescriptor(id:id,kind:.gps,name:"Recorded GPS")
+            case "obd": return DriveLineSourceDescriptor(id:id,kind:.obd,name:"Recorded vehicle signals",detail:trip.source)
+            case "synthetic": return DriveLineSourceDescriptor(id:id,kind:.synthetic,name:"Labelled synthetic source",detail:trip.source)
+            default: return DriveLineSourceDescriptor(id:id,kind:.imported,name:"Imported recording",detail:trip.source)
+            }
         }
         let fills=fuelEntries.filter { $0.vehicleID == trip.vehicleID }.map {
             DriveLineFuelEntry(id:$0.id,vehicleID:$0.vehicleID,date:$0.date,litresPurchased:$0.litresPurchased,

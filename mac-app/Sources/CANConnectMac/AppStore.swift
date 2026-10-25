@@ -23,6 +23,17 @@ import DriveLineShared
     var selectedVehicle: Vehicle? { state.vehicles.first { $0.id==state.selectedVehicleID } }
     var vehicleTrips: [Trip] { state.trips.filter { $0.vehicleID==state.selectedVehicleID }.sorted { $0.start>$1.start } }
     var selectedTrip: Trip? { vehicleTrips.first { $0.id==selectedTripID } ?? vehicleTrips.first }
+    func journeyAnnotation(for recordingID:UUID)->DriveLineJourneyAnnotation {
+        state.journeyAnnotations[recordingID.uuidString] ?? DriveLineJourneyAnnotation(recordingID:recordingID)
+    }
+    func saveJourneyAnnotation(_ annotation:DriveLineJourneyAnnotation) {
+        var value=annotation
+        value.note=value.note?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.startPlace=value.startPlace?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.finishPlace=value.finishPlace?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.updatedAt=Date()
+        perform { try commit { $0.journeyAnnotations[value.recordingID.uuidString]=value } }
+    }
     var preferences: VehiclePreferences { state.preferences[state.selectedVehicleID?.uuidString ?? ""] ?? VehiclePreferences() }
     var filteredTrips: [Trip] {
         guard preferences.periodDays > 0 else { return vehicleTrips }

@@ -70,4 +70,23 @@ final class DriveLineContractTests:XCTestCase {
         XCTAssertThrowsError(try store.importTrips(bytes))
         XCTAssertEqual(store.state.vehicles,originalVehicles)
     }
+    @MainActor func testJourneyAnnotationPersistsWithoutChangingFrozenTransferPayload() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let disk=LocalStore(url:root.appendingPathComponent("state.json"))
+        let store=AppStore(disk:disk,scannerAvailable:{_ in false})
+        var vehicle=VehicleProfile();vehicle.make="Synthetic";vehicle.model="Fixture";try store.saveVehicle(vehicle)
+        let trip=Trip(vehicleID:vehicle.id,name:"Evidence",startedAt:Date(),duration:10,distanceKM:0.1,source:.scanner,isSample:false,
+                      samples:[OBDSample(timestamp:Date(),signals:["rpm":1_500],command:"010C",reply:"SYNTHETIC")])
+        let payload=try MacRecording.encode(trip)
+        store.state.trips=[trip]
+        store.state.transfers=[TransferItem(tripID:trip.id,name:trip.name,endpoint:"http://mac.local",vehicle:vehicle,payload:payload)]
+        store.save()
+        store.saveJourneyAnnotation(DriveLineJourneyAnnotation(recordingID:trip.id,purpose:.business,reviewed:true,note:"Fixture visit"))
+        XCTAssertEqual(store.state.transfers.first?.payload,payload)
+        let restarted=AppStore(disk:disk,scannerAvailable:{_ in false})
+        XCTAssertEqual(restarted.journeyAnnotation(for:trip.id).purpose,.business)
+        XCTAssertTrue(restarted.journeyAnnotation(for:trip.id).reviewed)
+        XCTAssertEqual(restarted.state.transfers.first?.payload,payload)
+    }
 }

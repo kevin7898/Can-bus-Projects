@@ -86,7 +86,7 @@ struct OverviewView:View {
     var recentTrips:some View {
         Panel(title:"Recent drives") {
             if store.filteredTrips.isEmpty { EmptyPanel(title:"Your next drive starts here",message:"Import a recording for the selected vehicle. GPS-only data is welcome; unavailable signals stay blank.") }
-            ForEach(store.filteredTrips.prefix(4)) { trip in TripRow(trip:trip) { store.selectedTripID = trip.id;store.page = .drives };Divider().overlay(Theme.line) }
+            ForEach(store.filteredTrips.prefix(4)) { trip in TripRow(trip:trip,annotation:store.journeyAnnotation(for:trip.id)) { store.selectedTripID = trip.id;store.page = .drives };Divider().overlay(Theme.line) }
             HStack { Spacer();Button("View all drives") { store.page = .drives } }.padding(10)
         }
     }

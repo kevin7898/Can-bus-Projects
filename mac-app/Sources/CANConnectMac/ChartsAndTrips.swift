@@ -45,16 +45,26 @@ struct TripStats:View {
 }
 struct TripRow:View {
     let trip:Trip
+    let annotation:DriveLineJourneyAnnotation
     var selected = false
     var action:()->Void
     var body:some View {
         Button(action:action) {
-            HStack {
-                VStack(alignment:.leading,spacing:5) { Text(trip.name).font(.system(size:12,weight:.medium)).lineLimit(2); Text(trip.start.formatted(date:.abbreviated,time:.shortened)+" · "+trip.source).font(.system(size:10)).foregroundStyle(Theme.muted) }
-                Spacer()
-                Text(number(trip.distanceKm)+" km").font(.system(size:12,design:.monospaced))
-                Text(duration(trip.duration)).font(.system(size:11)).foregroundStyle(Theme.muted).frame(width:60,alignment:.trailing)
-                if trip.isDemo { Text("DEMO").font(.system(size:9)).foregroundStyle(Theme.blue) }
+            VStack(alignment:.leading,spacing:7) {
+                HStack {
+                    VStack(alignment:.leading,spacing:4) { Text(trip.name).font(.system(size:12,weight:.medium)).lineLimit(2); Text(trip.start.formatted(date:.abbreviated,time:.shortened)+" · "+trip.source).font(.system(size:10)).foregroundStyle(Theme.muted) }
+                    Spacer()
+                    Text(number(trip.distanceKm)+" km").font(.system(size:12,design:.monospaced))
+                    Text(duration(trip.duration)).font(.system(size:11)).foregroundStyle(Theme.muted).frame(width:60,alignment:.trailing)
+                }
+                HStack(spacing:8) {
+                    let summary=DriveLineJourneyPolicy.summary(for:trip.sharedRecording)
+                    StatusPill(state:summary.quality == .complete ? .healthy:(summary.quality == .unavailable ? .unavailable:.stale),text:summary.quality.title)
+                    if let purpose=annotation.purpose { Label(purpose.title,systemImage:"tag") }
+                    Spacer()
+                    Label(annotation.reviewed ? "Reviewed":"Unreviewed",systemImage:annotation.reviewed ? "checkmark.circle.fill":"circle")
+                    if trip.isDemo { Text("SAMPLE").foregroundStyle(Theme.cobalt) }
+                }.font(.system(size:9)).foregroundStyle(Theme.secondaryText)
             }.padding(12).background(selected ? Theme.blue.opacity(0.17) : Color.clear).contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
@@ -66,16 +76,33 @@ struct TripsView:View {
     @State private var playing = false
     @State private var selectedDate:Date?
     @State private var signal = Signal.speedKph
+    @State private var dateDays=0
+    @State private var source="all"
+    @State private var purpose="all"
+    @State private var quality="all"
+    @State private var editingAnnotation=false
     let timer = Timer.publish(every:0.25,on:.main,in:.common).autoconnect()
+    var filteredTrips:[Trip] {
+        store.vehicleTrips.filter { trip in
+            let annotation=store.journeyAnnotation(for:trip.id)
+            let summary=DriveLineJourneyPolicy.summary(for:trip.sharedRecording)
+            let dateMatch=dateDays == 0 || trip.end >= Date().addingTimeInterval(-Double(dateDays)*86_400)
+            return dateMatch && (source == "all" || trip.sharedRecording.sourceIDs.contains(source)) &&
+                (purpose == "all" || annotation.purpose?.rawValue == purpose) &&
+                (quality == "all" || summary.quality.rawValue == quality)
+        }
+    }
     var body:some View {
-        if let trip = store.selectedTrip {
-            HStack(alignment:.top,spacing:14) {
-                Panel(title:"Drive history") { ScrollView { LazyVStack(spacing:0) { ForEach(store.vehicleTrips) { item in TripRow(trip:item,selected:item.id==trip.id) { store.selectedTripID = item.id } } } }.frame(maxHeight:700) }.frame(width:285)
+        if let trip = filteredTrips.first(where:{$0.id==store.selectedTripID}) ?? filteredTrips.first {
+            VStack(alignment:.leading,spacing:12) {
+                filterBar
+                HStack(alignment:.top,spacing:14) {
+                Panel(title:"Journey Ledger · \(filteredTrips.count)") { ScrollView { LazyVStack(spacing:0) { ForEach(filteredTrips) { item in TripRow(trip:item,annotation:store.journeyAnnotation(for:item.id),selected:item.id==trip.id) { store.selectedTripID = item.id } } } }.frame(maxHeight:700) }.frame(width:310)
                 VStack(spacing:14) {
                     Panel(title:trip.name,icon:trip.isDemo ? "testtube.2" : "route") {
                         MapPanel(trips:[trip],viewport:$viewport,style:store.preferences.mapStyle,height:330,marker:playbackSample(trip))
                         TripStats(trip:trip)
-                        HStack { Text(trip.source).foregroundStyle(Theme.muted); Spacer(); Button("Export JSON") { store.export(trip) }; Button("Export CSV") { store.export(trip,asJSON:false) } }.font(.system(size:11)).padding(12)
+                        HStack { Text(trip.source).foregroundStyle(Theme.muted);Spacer();Button("Purpose and review") { editingAnnotation=true };Button("Export JSON") { store.export(trip) }; Button("Export CSV") { store.export(trip,asJSON:false) } }.font(.system(size:11)).padding(12)
                     }
                     Panel(title:"Drive playback") {
                         HStack { Picker("Signal",selection:$signal) { ForEach(Signal.allCases) { s in Text(s.title).tag(s) } }.frame(maxWidth:300); Spacer(); Text("Historical recording").foregroundStyle(Theme.muted) }.font(.system(size:11)).padding(12)
@@ -89,16 +116,54 @@ struct TripsView:View {
                     }
                     if trip.rawFrameCount>0 { Panel(title:"Raw CAN IDs · no decoder applied") { ForEach(trip.arbitrationIDs.keys.sorted(),id:\.self) { key in KeyValue(label:key,value:String(trip.arbitrationIDs[key] ?? 0)+" frames").padding(.horizontal,14).padding(.vertical,5) } } }
                 }
+                }
             }.id(trip.id).onAppear { viewport = RouteMap.fitted([trip]); selectedDate = trip.start; playSeconds = 0 }
                 .onChange(of:trip.id) { _,_ in viewport = RouteMap.fitted([trip]); playSeconds = 0; playing = false; selectedDate = trip.start }
                 .onReceive(timer) { _ in guard playing else { return }; playSeconds = min(trip.duration,playSeconds+0.25); if playSeconds>=trip.duration { playing = false } }
                 .onChange(of:selectedDate) { _,date in if let date = date { playSeconds = min(max(0,date.timeIntervalSince(trip.start)),trip.duration) } }
-        } else { EmptyPanel(title:"No drives yet",message:"Select a vehicle and import a recording to explore trips, signals, and playback.") }
+                .sheet(isPresented:$editingAnnotation) { MacJourneyAnnotationEditor(recordingID:trip.id).environmentObject(store) }
+        } else { EmptyStateCard(icon:"point.topleft.down.to.point.bottomright.curvepath",title:"No journeys match",message:"Choose another vehicle or change the date, source, purpose, or quality filter. Sample content is always labelled and excluded from real totals.") }
+    }
+    var filterBar:some View {
+        HStack(spacing:10) {
+            Picker("Date",selection:$dateDays) { Text("Any date").tag(0);Text("7 days").tag(7);Text("30 days").tag(30) }.frame(width:120)
+            Picker("Source",selection:$source) { Text("Any source").tag("all");Text("GPS").tag("gps");Text("OBD").tag("obd");Text("Imported").tag("imported");Text("Synthetic").tag("synthetic") }.frame(width:135)
+            Picker("Purpose",selection:$purpose) { Text("Any purpose").tag("all");ForEach(DriveLineJourneyPurpose.allCases) { Text($0.title).tag($0.rawValue) } }.frame(width:140)
+            Picker("Quality",selection:$quality) { Text("Any quality").tag("all");ForEach(DriveLineJourneyQuality.allCases,id:\.self) { Text($0.title).tag($0.rawValue) } }.frame(width:165)
+            Spacer()
+            Text("Vehicle: \(store.selectedVehicle?.name ?? "None")").foregroundStyle(Theme.secondaryText)
+        }.font(.system(size:11)).accessibilityIdentifier("mac.journey.filters")
     }
     func playbackSample(_ trip:Trip) -> TelemetrySample? {
         guard let date = selectedDate else { return nil }
         let closest = trip.coordinates.min { abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date)) }
         guard let closest = closest,abs(closest.timestamp.timeIntervalSince(date))<=10 else { return nil }; return closest
+    }
+}
+
+private struct MacJourneyAnnotationEditor:View {
+    let recordingID:UUID
+    @EnvironmentObject private var store:AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var value:DriveLineJourneyAnnotation
+    init(recordingID:UUID) { self.recordingID=recordingID;_value=State(initialValue:DriveLineJourneyAnnotation(recordingID:recordingID)) }
+    var body:some View {
+        VStack(alignment:.leading,spacing:16) {
+            Text("Journey details").font(.title2.weight(.semibold))
+            Picker("Purpose",selection:$value.purpose) {
+                Text("Unclassified").tag(Optional<DriveLineJourneyPurpose>.none)
+                ForEach(DriveLineJourneyPurpose.allCases) { Text($0.title).tag(Optional($0)) }
+            }
+            Toggle("Reviewed",isOn:$value.reviewed)
+            TextField("Start place, when known",text:optional($value.startPlace))
+            TextField("Finish place, when known",text:optional($value.finishPlace))
+            TextField("Note",text:optional($value.note),axis:.vertical).lineLimit(3...6)
+            Text("Stored only in this Mac library as sidecar metadata. The preserved original and import receipt hash remain unchanged.").font(.caption).foregroundStyle(Theme.secondaryText)
+            HStack { Spacer();Button("Cancel",role:.cancel) { dismiss() };Button("Save locally") { store.saveJourneyAnnotation(value);dismiss() }.keyboardShortcut(.defaultAction) }
+        }.padding(24).frame(width:460).onAppear { value=store.journeyAnnotation(for:recordingID) }
+    }
+    private func optional(_ binding:Binding<String?>)->Binding<String> {
+        Binding(get:{binding.wrappedValue ?? ""},set:{binding.wrappedValue=$0.isEmpty ? nil:$0})
     }
 }
 struct CompareView:View {
