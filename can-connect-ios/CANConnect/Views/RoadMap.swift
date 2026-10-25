@@ -39,6 +39,7 @@ struct NativeRouteMap: UIViewRepresentable {
     var isLive = false
     var isSample = false
     var selectedPoint:RoutePoint? = nil
+    var fitRequest = 0
 
     func makeUIView(context: Context) -> MKMapView {
         let view = MKMapView(); view.delegate = context.coordinator
@@ -46,7 +47,7 @@ struct NativeRouteMap: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: MKMapView, context: Context) {
-        context.coordinator.update(view,route:route,isLive:isLive,isSample:isSample,selectedPoint:selectedPoint)
+        context.coordinator.update(view,route:route,isLive:isLive,isSample:isSample,selectedPoint:selectedPoint,fitRequest:fitRequest)
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -55,18 +56,24 @@ struct NativeRouteMap: UIViewRepresentable {
         private var live = false
         private var sample = false
         private var selection:RoutePoint?
+        private var lastFitRequest:Int?
         private let location = MKPointAnnotation()
 
-        func update(_ view:MKMapView,route:[RoutePoint],isLive:Bool,isSample:Bool,selectedPoint:RoutePoint? = nil) {
-            guard points != route || live != isLive || sample != isSample || selection != selectedPoint else { return }
-            points=route;live=isLive;sample=isSample;selection=selectedPoint
+        func update(_ view:MKMapView,route:[RoutePoint],isLive:Bool,isSample:Bool,selectedPoint:RoutePoint? = nil,fitRequest:Int = 0) {
+            let routeChanged=points != route || live != isLive || sample != isSample
+            let selectionChanged=selection != selectedPoint
+            let fitChanged=lastFitRequest != fitRequest
+            guard routeChanged || selectionChanged || fitChanged else { return }
+            points=route;live=isLive;sample=isSample;selection=selectedPoint;lastFitRequest=fitRequest
             view.accessibilityIdentifier = isLive ? "live.route" : "recorded.route"
             view.accessibilityLabel = isLive ? "Recording route and latest GPS location" : "Recorded route"
             view.accessibilityValue = "\(route.count) GPS points"
-            view.removeOverlays(view.overlays)
-            for segment in RoutePoint.segments(route) where segment.count > 1 {
-                let positions = segment.map { CLLocationCoordinate2D(latitude:$0.latitude, longitude:$0.longitude) }
-                view.addOverlay(MKPolyline(coordinates:positions,count:positions.count))
+            if routeChanged {
+                view.removeOverlays(view.overlays)
+                for segment in RoutePoint.segments(route) where segment.count > 1 {
+                    let positions = segment.map { CLLocationCoordinate2D(latitude:$0.latitude, longitude:$0.longitude) }
+                    view.addOverlay(MKPolyline(coordinates:positions,count:positions.count))
+                }
             }
             if let selected=selectedPoint ?? (isLive ? route.last:nil) {
                 location.coordinate=CLLocationCoordinate2D(latitude:selected.latitude,longitude:selected.longitude)
@@ -75,7 +82,7 @@ struct NativeRouteMap: UIViewRepresentable {
                 if !view.annotations.contains(where:{ $0 === location }) { view.addAnnotation(location) }
             } else { view.removeAnnotation(location) }
 
-            guard let first = route.first else { return }
+            guard routeChanged || fitChanged,let first = route.first else { return }
             let coords = route.map { CLLocationCoordinate2D(latitude:$0.latitude,longitude:$0.longitude) }
             // Keep both the latest fix and the recorded route visible. A minimum
             // extent avoids extreme zoom for stationary or near-identical fixes.

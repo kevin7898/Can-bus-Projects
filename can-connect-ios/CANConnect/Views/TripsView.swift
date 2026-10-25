@@ -172,6 +172,7 @@ struct TripStoryView:View {
     @State private var document=JSONDocument(data:Data())
     @State private var delete=false
     @State private var editingAnnotation=false
+    @State private var signalsOverview=false
     @State private var playbackSeconds=0.0
     @State private var signalKeys=["speedKph","rpm","boostKpa"]
     private var summary:DriveLineJourneySummary { DriveLineJourneyPolicy.summary(for:trip.sharedRecording) }
@@ -224,6 +225,9 @@ struct TripStoryView:View {
                     PhoneSignalChart(trip:trip,choice:choice,playbackSeconds:$playbackSeconds)
                 }
                 InfoNote(text:"Signal choices are independent, including duplicates. Lines use real observation times, break at gaps, and never smooth or forward-fill missing values.")
+                Button { signalsOverview=true } label: {
+                    HStack { Label("Open complete Signals workspace",systemImage:"waveform.path.ecg");Spacer();Image(systemName:"chevron.right") }.frame(minHeight:44)
+                }.accessibilityIdentifier("trip-story.signals")
             }
             SectionCard(title:"Evidence timeline",icon:"list.bullet.rectangle") {
                 ForEach(events) { event in
@@ -259,6 +263,7 @@ struct TripStoryView:View {
             }
             Button("Delete recording",role:.destructive) { delete=true }.frame(maxWidth:.infinity).padding(.top,8)
         }.sheet(isPresented:$editingAnnotation) { JourneyAnnotationEditor(recordingID:trip.id) }
+            .sheet(isPresented:$signalsOverview) { SignalsOverviewView(initialTripID:trip.id) }
             .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error)=result { store.error=error.localizedDescription } }
             .confirmationDialog("Delete this recording from this iPhone?",isPresented:$delete,titleVisibility:.visible) { Button("Delete recording",role:.destructive) { store.removeTrip(trip.id);dismiss() } }
     }
@@ -310,6 +315,264 @@ private struct PhoneSignalChart:View {
                     } }
             }
         }.padding(.vertical,5)
+    }
+}
+
+private struct PhoneSignalGroup:Identifiable {
+    var id:DriveLineSignalGroup { group }
+    var group:DriveLineSignalGroup
+    var signals:[DriveLineSignalDescriptor]
+}
+
+struct SignalsOverviewView:View {
+    let initialTripID:UUID?
+    @EnvironmentObject private var store:AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedTripID:UUID?
+    @State private var selectedSignal:DriveLineSignalDescriptor?
+    @State private var search=""
+
+    init(initialTripID:UUID? = nil) {
+        self.initialTripID=initialTripID
+        _selectedTripID=State(initialValue:initialTripID)
+    }
+    private var recordings:[Trip] {
+        store.state.trips.filter { trip in
+            store.state.selectedVehicleID == nil || trip.vehicleID == store.state.selectedVehicleID
+        }.sorted{$0.startedAt>$1.startedAt}
+    }
+    private var trip:Trip? { recordings.first(where:{$0.id == selectedTripID}) ?? recordings.first }
+    private var groups:[PhoneSignalGroup] {
+        guard let trip else { return [] }
+        return DriveLineJourneyPolicy.groupedSignalDescriptors(recording:trip.sharedRecording,query:search).map {
+            PhoneSignalGroup(group:$0.0,signals:$0.1)
+        }
+    }
+    var body:some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment:.leading,spacing:14) {
+                    if let trip {
+                        recordingPicker(trip)
+                        TextField("Search name, ID, alias, source or unit",text:$search)
+                            .textFieldStyle(.roundedBorder).accessibilityIdentifier("signals.search")
+                        if groups.isEmpty {
+                            EmptyStateCard(icon:"waveform.slash",title:"No scalar signals recorded",
+                                message:trip.route.isEmpty ? "This recording contains no supported scalar observations. Unknown recorded identifiers would appear here unchanged.":"This GPS recording contains a route but no stored GPS speed or accuracy values. Nothing is inferred from the route.")
+                        } else {
+                            ForEach(groups) { group in
+                                VStack(alignment:.leading,spacing:8) {
+                                    Text(group.group.title).font(.headline).accessibilityAddTraits(.isHeader)
+                                    ForEach(group.signals) { descriptor in
+                                        PhoneSignalOverviewRow(trip:trip,descriptor:descriptor) { selectedSignal=descriptor }
+                                    }
+                                }
+                            }
+                        }
+                        if trip.isSample { InfoNote(text:"Sanitized sample recording. It is labelled sample and contributes zero to real totals.",icon:"testtube.2") }
+                    } else {
+                        EmptyStateCard(icon:"waveform.path.ecg",title:"No recorded Signals",message:"Record or import a journey. Missing observations remain unavailable and no sample rate is inferred.")
+                    }
+                }.padding(16)
+            }.background(Palette.appBackground)
+                .navigationTitle("Signals")
+                .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { dismiss() } } }
+        }.sheet(item:$selectedSignal) { descriptor in
+            if let trip { PhoneSignalDetailView(trip:trip,descriptor:descriptor) }
+        }.onAppear { if selectedTripID == nil { selectedTripID=recordings.first?.id } }
+            .accessibilityIdentifier("signals.overview")
+    }
+    private func recordingPicker(_ trip:Trip)->some View {
+        Menu {
+            ForEach(recordings) { item in Button(item.name+" · "+item.startedAt.formatted(date:.abbreviated,time:.shortened)) { selectedTripID=item.id } }
+        } label: {
+            HStack { VStack(alignment:.leading,spacing:3) { Text(trip.name).font(.headline);Text(trip.startedAt.formatted(date:.abbreviated,time:.shortened)).captionStyle() };Spacer();Image(systemName:"chevron.up.chevron.down") }.card()
+        }.foregroundStyle(Palette.primaryText).accessibilityIdentifier("signals.recording")
+    }
+}
+
+private struct PhoneSignalOverviewRow:View {
+    let trip:Trip
+    let descriptor:DriveLineSignalDescriptor
+    let action:()->Void
+    private var series:DriveLineSignalSeries { DriveLineJourneyPolicy.signalSeries(descriptor.key,unit:descriptor.unit ?? "",recording:trip.sharedRecording) }
+    private var stats:DriveLineSignalStatistics { DriveLineJourneyPolicy.signalStatistics(series,at:trip.startedAt.addingTimeInterval(trip.duration)) }
+    private var latestPoint:DriveLineSignalPoint? { series.segments.flatMap{$0}.last }
+    var body:some View {
+        Button(action:action) {
+            VStack(alignment:.leading,spacing:9) {
+                HStack(alignment:.top) {
+                    VStack(alignment:.leading,spacing:2) {
+                        Text(descriptor.displayName).font(.system(size:15,weight:.semibold))
+                        Text(descriptor.key).font(.caption2.monospaced()).foregroundStyle(Palette.tertiaryText)
+                    }
+                    Spacer()
+                    StatusPill(state:semanticState,text:stats.freshness.title)
+                    Image(systemName:"chevron.right").foregroundStyle(Palette.tertiaryText)
+                }
+                HStack(alignment:.center,spacing:12) {
+                    VStack(alignment:.leading,spacing:5) {
+                        HStack(alignment:.firstTextBaseline,spacing:4) {
+                            Text(latestPoint?.value.text(2) ?? "—").font(.title3.monospacedDigit())
+                            Text(descriptor.unit ?? "unit unavailable").captionStyle()
+                        }
+                        SourceBadge(source:stats.sourceIDs.isEmpty ? "Source unavailable":stats.sourceIDs.joined(separator:", "),verified:!stats.sourceIDs.isEmpty)
+                        Text(series.coverage.map{"\(Int(($0.fraction*100).rounded()))% coverage · \(stats.observationCount) observations"} ?? "Coverage unavailable")
+                            .captionStyle()
+                    }.frame(maxWidth:.infinity,alignment:.leading)
+                    SignalSparkline(series:series).frame(width:118,height:48)
+                }
+            }.card()
+        }.buttonStyle(.plain).accessibilityIdentifier("signals.row.\(descriptor.key)")
+    }
+    private var semanticState:DriveLineSemanticState {
+        stats.freshness == .fresh ? .healthy:(stats.freshness == .stale ? .stale:.unavailable)
+    }
+}
+
+private struct SignalSparkline:View {
+    let series:DriveLineSignalSeries
+    var body:some View {
+        Chart {
+            ForEach(Array(series.segments.enumerated()),id:\.offset) { segment,points in
+                ForEach(points) { point in
+                    LineMark(x:.value("Recorded time",point.timestamp),y:.value("Recorded value",point.value),series:.value("Gap-aware segment",segment))
+                        .foregroundStyle(Palette.cobalt).lineStyle(StrokeStyle(lineWidth:1.4))
+                    PointMark(x:.value("Recorded time",point.timestamp),y:.value("Recorded value",point.value))
+                        .foregroundStyle(Palette.cobalt).symbolSize(6)
+                }
+            }
+        }.chartXAxis(.hidden).chartYAxis(.hidden).chartLegend(.hidden)
+            .accessibilityLabel("Gap-aware recorded sparkline")
+    }
+}
+
+private struct PhoneSignalDetailView:View {
+    let trip:Trip
+    let descriptor:DriveLineSignalDescriptor
+    @Environment(\.dismiss) private var dismiss
+    @State private var cursorSeconds:Double
+    @State private var visibleStart:Double
+    @State private var visibleEnd:Double
+    @State private var fitRequest=0
+
+    init(trip:Trip,descriptor:DriveLineSignalDescriptor) {
+        self.trip=trip;self.descriptor=descriptor
+        _cursorSeconds=State(initialValue:max(0,trip.duration))
+        _visibleStart=State(initialValue:0)
+        _visibleEnd=State(initialValue:max(0.001,trip.duration))
+    }
+    private var recording:DriveLineRecording { trip.sharedRecording }
+    private var series:DriveLineSignalSeries { DriveLineJourneyPolicy.signalSeries(descriptor.key,unit:descriptor.unit ?? "",recording:recording) }
+    private var selectedDate:Date { trip.startedAt.addingTimeInterval(cursorSeconds) }
+    private var visibleInterval:DateInterval { DateInterval(start:trip.startedAt.addingTimeInterval(visibleStart),end:trip.startedAt.addingTimeInterval(max(visibleStart,visibleEnd))) }
+    private var stats:DriveLineSignalStatistics { DriveLineJourneyPolicy.signalStatistics(series,at:selectedDate,visibleRange:visibleInterval) }
+    private var cursor:DriveLineCursorSelection { DriveLineJourneyPolicy.cursor(at:selectedDate,recording:recording,signalKeys:[descriptor.key]) }
+    private var gaps:[(Date,Date)] {
+        zip(series.segments,series.segments.dropFirst()).compactMap { previous,next in
+            guard let a=previous.last?.timestamp,let b=next.first?.timestamp else { return nil }
+            return (a,b)
+        }
+    }
+    var body:some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment:.leading,spacing:14) {
+                    VStack(alignment:.leading,spacing:4) {
+                        Text(descriptor.displayName).font(.title2)
+                        Text(descriptor.key).font(.caption.monospaced()).foregroundStyle(Palette.secondaryText).textSelection(.enabled)
+                        Text("\(trip.name) · \(trip.startedAt.formatted(date:.abbreviated,time:.shortened))").captionStyle()
+                    }
+                    provenance
+                    trace
+                    visibleRangeControls
+                    SectionCard(title:"Visible-range observations",icon:"sum") {
+                        HStack { detailMetric("Current",stats.current?.value);detailMetric("Minimum",stats.minimum) }
+                        HStack { detailMetric("Maximum",stats.maximum);detailMetric("Recorded avg",stats.recordedObservationAverage) }
+                        HStack { detailText("Count",String(stats.observationCount));detailText("Coverage",series.coverage.map{"\(Int(($0.fraction*100).rounded()))%"} ?? "—") }
+                        DataRow(label:"Latest observation",value:stats.latestObservation?.formatted(date:.omitted,time:.standard) ?? "Unavailable")
+                        DataRow(label:"Freshness at cursor",value:stats.freshness.title)
+                        InfoNote(text:"Average is the arithmetic mean of finite recorded observations in the visible range. It is not time-weighted.")
+                    }
+                    if !trip.route.isEmpty {
+                        SectionCard(title:"Synchronized route position",icon:"map") {
+                            NativeRouteMap(route:trip.route,selectedPoint:selectedRoutePoint,fitRequest:fitRequest).frame(height:220).clipShape(RoundedRectangle(cornerRadius:14))
+                            HStack { Text(cursor.gpsPoint == nil ? "No GPS observation is close enough to this recorded cursor.":"Marker uses the nearest qualifying recorded GPS observation.").captionStyle();Spacer();Button("Fit Route") { fitRequest += 1 } }
+                        }
+                    } else {
+                        EmptyStateCard(icon:"location.slash",title:"Route unavailable",message:"This OBD-only recording has no GPS evidence. A route position is not inferred.")
+                    }
+                    SectionCard(title:"Recorded gaps",icon:"waveform.slash") {
+                        if gaps.isEmpty { Text(series.segments.isEmpty ? "No observations were recorded.":"No signal gap longer than the evidence threshold was recorded in this trace.").captionStyle() }
+                        ForEach(Array(gaps.enumerated()),id:\.offset) { _,gap in
+                            DataRow(label:"Unavailable interval",value:"\(gap.0.formatted(date:.omitted,time:.standard)) – \(gap.1.formatted(date:.omitted,time:.standard)) · \(Int(gap.1.timeIntervalSince(gap.0)))s")
+                        }
+                    }
+                    if descriptor.key == "dpfRegenTrigger" { InfoNote(text:DriveLineMetricPolicy.dpfRegenTriggerExplanation,icon:"exclamationmark.triangle") }
+                    if trip.isSample { InfoNote(text:"Sanitized sample recording. It remains excluded from real totals.",icon:"testtube.2") }
+                }.padding(16)
+            }.background(Palette.appBackground).navigationTitle("Signal Detail")
+                .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { dismiss() } } }
+        }.accessibilityIdentifier("signals.detail.\(descriptor.key)")
+    }
+    private var provenance:some View {
+        SectionCard(title:"Source and provenance",icon:"checkmark.shield") {
+            DataRow(label:"Source",value:stats.sourceIDs.isEmpty ? "Unavailable":stats.sourceIDs.joined(separator:", "))
+            DataRow(label:"Status",value:series.provenance == .derived ? "Derived":"Measured")
+            DataRow(label:"Unit",value:descriptor.unit ?? "Unavailable — no unit invented")
+            if let algorithm=series.algorithmIdentifier {
+                DataRow(label:"Derivation",value:"\(algorithm) · version \(series.algorithmVersion ?? "unavailable")")
+            }
+            DataRow(label:"Recorded range",value:(series.segments.flatMap{$0}.first?.timestamp.formatted(date:.omitted,time:.standard) ?? "—")+" – "+(series.segments.flatMap{$0}.last?.timestamp.formatted(date:.omitted,time:.standard) ?? "—"))
+        }
+    }
+    private var trace:some View {
+        SectionCard(title:"Full recorded trace",icon:"chart.xyaxis.line") {
+            if series.segments.flatMap({$0}).isEmpty { Text("Unavailable — this identifier has no finite recorded observations.").captionStyle().frame(maxWidth:.infinity,minHeight:120) }
+            else {
+                Chart {
+                    ForEach(Array(series.segments.enumerated()),id:\.offset) { segment,points in
+                        ForEach(points) { point in
+                            LineMark(x:.value("Elapsed seconds",point.timestamp.timeIntervalSince(trip.startedAt)),y:.value(descriptor.unit ?? "Recorded value",point.value),series:.value("Recorded segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt)
+                            PointMark(x:.value("Elapsed seconds",point.timestamp.timeIntervalSince(trip.startedAt)),y:.value(descriptor.unit ?? "Recorded value",point.value)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt).symbolSize(8)
+                        }
+                    }
+                    RuleMark(x:.value("Shared cursor",cursorSeconds)).foregroundStyle(Palette.primaryText).lineStyle(StrokeStyle(lineWidth:1,dash:[3]))
+                }.chartXScale(domain:visibleStart...max(visibleStart+0.001,visibleEnd)).frame(height:220).chartLegend(.hidden)
+                    .chartOverlay { proxy in GeometryReader { geometry in
+                        Rectangle().fill(.clear).contentShape(Rectangle()).gesture(DragGesture(minimumDistance:0).onChanged { value in
+                            guard let frame=proxy.plotFrame else { return }
+                            let x=value.location.x-geometry[frame].origin.x
+                            if let seconds:Double=proxy.value(atX:x) { cursorSeconds=min(max(0,seconds),trip.duration) }
+                        })
+                    } }
+            }
+        }
+    }
+    private var visibleRangeControls:some View {
+        SectionCard(title:"Visible range and cursor",icon:"arrow.left.and.right") {
+            DataRow(label:"Cursor",value:selectedDate.formatted(date:.omitted,time:.standard)+" · \(Int(cursorSeconds))s elapsed")
+            Slider(value:$cursorSeconds,in:0...max(0.001,trip.duration)).accessibilityLabel("Signal cursor")
+            Text("Visible start · \(Int(visibleStart))s").captionStyle()
+            Slider(value:Binding(get:{visibleStart},set:{visibleStart=min($0,max(0,visibleEnd-0.001));cursorSeconds=min(max(cursorSeconds,visibleStart),visibleEnd)}),in:0...max(0.001,trip.duration)).accessibilityIdentifier("signals.visible-start")
+            Text("Visible end · \(Int(visibleEnd))s").captionStyle()
+            Slider(value:Binding(get:{visibleEnd},set:{visibleEnd=max($0,min(trip.duration,visibleStart+0.001));cursorSeconds=min(max(cursorSeconds,visibleStart),visibleEnd)}),in:0...max(0.001,trip.duration)).accessibilityIdentifier("signals.visible-end")
+            HStack { Button("Zoom in") { zoom(0.6) };Button("Zoom out") { zoom(1.5) };Button("Back") { pan(-0.3) };Button("Forward") { pan(0.3) };Spacer();Button("Reset") { visibleStart=0;visibleEnd=max(0.001,trip.duration) } }
+        }
+    }
+    private var selectedRoutePoint:RoutePoint? {
+        guard let point=cursor.gpsPoint else { return nil }
+        return RoutePoint(latitude:point.latitude,longitude:point.longitude,timestamp:point.timestamp,accuracy:point.horizontalAccuracyM ?? 0,speed:point.speedMps)
+    }
+    private func detailMetric(_ title:String,_ value:Double?)->some View { Metric(title:title,value:value?.text(2) ?? "—",unit:descriptor.unit ?? "") }
+    private func detailText(_ title:String,_ value:String)->some View { Metric(title:title,value:value) }
+    private func zoom(_ factor:Double) {
+        let duration=max(0.001,trip.duration),span=max(0.001,visibleEnd-visibleStart),half=min(duration/2,span*factor/2),centre=min(max(cursorSeconds,half),duration-half)
+        visibleStart=max(0,centre-half);visibleEnd=min(duration,centre+half)
+    }
+    private func pan(_ fraction:Double) {
+        let duration=max(0.001,trip.duration),span=visibleEnd-visibleStart,shift=span*fraction
+        visibleStart=min(max(0,visibleStart+shift),max(0,duration-span));visibleEnd=min(duration,visibleStart+span);cursorSeconds=min(max(cursorSeconds,visibleStart),visibleEnd)
     }
 }
 

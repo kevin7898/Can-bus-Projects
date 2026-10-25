@@ -151,4 +151,41 @@ final class DriveLineContractTests:XCTestCase {
         XCTAssertEqual(missingStore.vehicleFills.first?.receipt?.sha256,digest)
         XCTAssertFalse(missingStore.vehicleFills.contains { $0.receipt.map(missingStore.hasReceipt) == true },"Missing files remain explicitly unavailable")
     }
+
+    func testPhase6TripStoryAndSignalsDetailUseIdenticalSharedEvidence() throws {
+        let start=Date(timeIntervalSince1970:1_700_000_000),vehicleID=UUID()
+        let trip=Trip(vehicleID:vehicleID,name:"Parity",startedAt:start,duration:30,distanceKM:0.3,source:.scanner,isSample:true,
+            route:[0.0,10.0,20.0,30.0].map { RoutePoint(latitude:49+$0*0.00001,longitude:-124,timestamp:start.addingTimeInterval($0),accuracy:4,speed:10) },
+            samples:[
+                OBDSample(timestamp:start,signals:["rpm":1_000],command:"010C",reply:"SYNTHETIC"),
+                OBDSample(timestamp:start.addingTimeInterval(10),signals:["rpm":2_000],command:"010C",reply:"SYNTHETIC"),
+                OBDSample(timestamp:start.addingTimeInterval(30),signals:["rpm":4_000],command:"010C",reply:"SYNTHETIC")
+            ])
+        let recording=trip.sharedRecording,cursorDate=start.addingTimeInterval(10)
+        let story=DriveLineJourneyPolicy.cursor(at:cursorDate,recording:recording,signalKeys:["rpm"])
+        let descriptor=DriveLineJourneyPolicy.signalDescriptor("rpm",recording:recording)
+        let detailSeries=DriveLineJourneyPolicy.signalSeries(descriptor.key,unit:descriptor.unit ?? "",recording:recording)
+        let detail=DriveLineJourneyPolicy.signalStatistics(detailSeries,at:cursorDate)
+        XCTAssertEqual(story.observations["rpm"]?.value,detail.current?.value)
+        XCTAssertEqual(story.observations["rpm"]?.timestamp,detail.current?.timestamp)
+        XCTAssertEqual(story.observations["rpm"]?.sourceID,detail.current?.sourceID)
+        XCTAssertEqual(descriptor.unit,"rpm")
+        XCTAssertEqual(detailSeries.coverage?.fraction,DriveLineMetricPolicy.coverageSummaries(recording).first(where:{$0.key == "rpm"})?.fraction)
+        XCTAssertTrue(recording.isSample)
+    }
+
+    func testPhase6PhoneAdapterKeepsGPSOnlyOBDOnlyAndMissingSignalsHonest() {
+        let start=Date(timeIntervalSince1970:1_700_000_000),vehicleID=UUID()
+        let gps=Trip(vehicleID:vehicleID,name:"GPS",startedAt:start,duration:20,distanceKM:0.2,source:.phoneGPS,isSample:false,
+            route:[0.0,10.0,20.0].map { RoutePoint(latitude:49+$0*0.00001,longitude:-124,timestamp:start.addingTimeInterval($0),accuracy:4,speed:10) })
+        let obd=Trip(vehicleID:vehicleID,name:"OBD",startedAt:start,duration:20,distanceKM:0,source:.scanner,isSample:false,
+            samples:[OBDSample(timestamp:start,signals:["rpm":1_500],command:"010C",reply:"SYNTHETIC"),
+                     OBDSample(timestamp:start.addingTimeInterval(10),signals:["rpm":1_600],command:"010C",reply:"SYNTHETIC")])
+        XCTAssertTrue(DriveLineJourneyPolicy.signalDescriptors(recording:gps.sharedRecording).contains(where:{$0.key == "gps.speedKph"}))
+        XCTAssertTrue(DriveLineJourneyPolicy.distanceAlignmentAvailability(gps.sharedRecording).isAvailable)
+        XCTAssertFalse(DriveLineJourneyPolicy.distanceAlignmentAvailability(obd.sharedRecording).isAvailable)
+        let missing=DriveLineJourneyPolicy.signalSeries("coolantC",unit:"°C",recording:obd.sharedRecording)
+        XCTAssertTrue(missing.segments.isEmpty)
+        XCTAssertEqual(DriveLineJourneyPolicy.signalStatistics(missing,at:obd.startedAt).freshness,.unavailable)
+    }
 }

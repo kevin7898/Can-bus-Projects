@@ -11,6 +11,7 @@ struct ConnectView: View {
     @State private var serverSetup = false
     @State private var queue = false
     @State private var vehicleData = false
+    @State private var signals = false
     var body: some View {
         VStack(spacing:12) { PageControl(labels:["Connections","Transfers","Settings"],selection:$page)
             TabView(selection:$page) { devices.tag(0); transfers.tag(1); settings.tag(2) }.tabViewStyle(.page(indexDisplayMode:.never))
@@ -19,6 +20,7 @@ struct ConnectView: View {
         .sheet(isPresented:$serverSetup) { ServerConnectionView() }
         .sheet(isPresented:$queue) { TransferQueueView() }
         .sheet(isPresented:$vehicleData) { SheetShell(title:"Vehicle data and fuel") { VehicleView(page:$store.vehiclePage).frame(minHeight:620) } }
+        .sheet(isPresented:$signals) { SignalsOverviewView() }
         .fileImporter(isPresented:$importing,allowedContentTypes:[.json]) { importRecording($0,store:store) }
         .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-recordings") { result in if case .failure(let error) = result { store.error = error.localizedDescription } }
     }
@@ -56,6 +58,7 @@ struct ConnectView: View {
                 VStack(alignment:.leading,spacing:10) { Text("Appearance").font(.system(size:16,weight:.semibold));AppearancePreferencePicker();Text("System follows this iPhone. Light and Dark remain fixed until changed here.").captionStyle() }.card()
                 Button { store.selectedTab = .garage } label:{ settingRow("Manage vehicles",detail:"Select, add, and review vehicle profiles",icon:"car.2") }.buttonStyle(.plain).accessibilityIdentifier("more.garage")
                 Button { vehicleData=true } label:{ settingRow("Vehicle data and fuel",detail:"Fuel logbook, recorded signals, and DPF history",icon:"gauge.with.dots.needle.50percent") }.buttonStyle(.plain).accessibilityIdentifier("more.vehicle-data")
+                Button { signals=true } label:{ settingRow("Signals",detail:"Grouped recorded traces, gaps, coverage, freshness, and provenance",icon:"waveform.path.ecg") }.buttonStyle(.plain).accessibilityIdentifier("more.signals")
                 Button { serverSetup=true } label:{ settingRow("Mac server pairing",detail:store.serverStatus,icon:"desktopcomputer") }.buttonStyle(.plain).accessibilityIdentifier("more.server")
                 Button { queue=true } label:{ settingRow("Transfer queue",detail:"\(store.state.transfers.count) queued or completed items",icon:"arrow.up.arrow.down") }.buttonStyle(.plain).accessibilityIdentifier("more.transfer-queue")
                 InfoNote(text:"Connections and Transfers remain available above. Originals stay on this iPhone until a Mac processing receipt is confirmed.")

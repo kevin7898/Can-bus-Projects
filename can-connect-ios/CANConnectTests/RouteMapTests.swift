@@ -36,4 +36,24 @@ final class RouteMapTests: XCTestCase {
         XCTAssertTrue(map.annotations.isEmpty)
         XCTAssertTrue(map.overlays.isEmpty)
     }
+
+    @MainActor
+    func testHistoricalCursorMovementPreservesViewportUntilExplicitFit() {
+        let map=MKMapView(frame:CGRect(x:0,y:0,width:360,height:180))
+        let coordinator=NativeRouteMap.Coordinator();map.delegate=coordinator
+        let start=Date(timeIntervalSince1970:1_700_000_000)
+        let route=[
+            RoutePoint(latitude:49,longitude:-124,timestamp:start,accuracy:5,speed:5),
+            RoutePoint(latitude:49.01,longitude:-124.01,timestamp:start.addingTimeInterval(10),accuracy:5,speed:5)
+        ]
+        coordinator.update(map,route:route,isLive:false,isSample:true,selectedPoint:route[0],fitRequest:0)
+        let manual=MKCoordinateRegion(center:CLLocationCoordinate2D(latitude:48.5,longitude:-123.5),span:MKCoordinateSpan(latitudeDelta:0.02,longitudeDelta:0.02))
+        map.setRegion(manual,animated:false)
+        coordinator.update(map,route:route,isLive:false,isSample:true,selectedPoint:route[1],fitRequest:0)
+        XCTAssertEqual(map.region.center.latitude,manual.center.latitude,accuracy:0.001)
+        XCTAssertEqual(map.region.center.longitude,manual.center.longitude,accuracy:0.001)
+        coordinator.update(map,route:route,isLive:false,isSample:true,selectedPoint:route[1],fitRequest:1)
+        XCTAssertTrue(map.visibleMapRect.contains(MKMapPoint(CLLocationCoordinate2D(latitude:route[0].latitude,longitude:route[0].longitude))))
+        XCTAssertTrue(map.visibleMapRect.contains(MKMapPoint(CLLocationCoordinate2D(latitude:route[1].latitude,longitude:route[1].longitude))))
+    }
 }
