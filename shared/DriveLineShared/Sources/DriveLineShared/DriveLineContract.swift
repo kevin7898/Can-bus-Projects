@@ -151,15 +151,59 @@ public struct DriveLineSignalSample: Codable, Equatable, Sendable {
 public struct DriveLineTripEvent: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var timestamp: Date
+    public var endTimestamp: Date?
     public var kind: String
     public var note: String?
+    public var sourceID: String?
+    public var severity: DriveLineEventSeverity?
+    public var confidence: Double?
+    public var algorithmIdentifier: String?
+    public var algorithmVersion: String?
+    public var evidenceReferences: [String]
 
-    public init(id: UUID = UUID(), timestamp: Date, kind: String, note: String? = nil) {
+    public init(id: UUID = UUID(), timestamp: Date, endTimestamp: Date? = nil,
+                kind: String, note: String? = nil, sourceID: String? = nil,
+                severity: DriveLineEventSeverity? = nil, confidence: Double? = nil,
+                algorithmIdentifier: String? = nil, algorithmVersion: String? = nil,
+                evidenceReferences: [String] = []) {
         self.id = id
         self.timestamp = timestamp
+        self.endTimestamp = endTimestamp
         self.kind = kind
         self.note = note
+        self.sourceID = sourceID
+        self.severity = severity
+        self.confidence = confidence
+        self.algorithmIdentifier = algorithmIdentifier
+        self.algorithmVersion = algorithmVersion
+        self.evidenceReferences = evidenceReferences
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, timestamp, endTimestamp, kind, note, sourceID, severity, confidence
+        case algorithmIdentifier, algorithmVersion, evidenceReferences
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        timestamp = try values.decode(Date.self, forKey: .timestamp)
+        endTimestamp = try values.decodeIfPresent(Date.self, forKey: .endTimestamp)
+        kind = try values.decode(String.self, forKey: .kind)
+        note = try values.decodeIfPresent(String.self, forKey: .note)
+        sourceID = try values.decodeIfPresent(String.self, forKey: .sourceID)
+        severity = try values.decodeIfPresent(DriveLineEventSeverity.self, forKey: .severity)
+        confidence = try values.decodeIfPresent(Double.self, forKey: .confidence)
+        algorithmIdentifier = try values.decodeIfPresent(String.self, forKey: .algorithmIdentifier)
+        algorithmVersion = try values.decodeIfPresent(String.self, forKey: .algorithmVersion)
+        evidenceReferences = try values.decodeIfPresent([String].self, forKey: .evidenceReferences) ?? []
+    }
+}
+
+public enum DriveLineEventSeverity: String, Codable, CaseIterable, Sendable {
+    case information
+    case attention
+    case fault
 }
 
 public struct DriveLineReceiptMetadata: Codable, Equatable, Sendable {
@@ -387,7 +431,12 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
                       sample.values.allSatisfy { !$0.key.isEmpty && $0.value.isFinite }
                   }),
                   recording.recordedDistanceKm.map({ $0.isFinite && $0 >= 0 }) ?? true,
-                  recording.tripFuelLitres.map({ $0.isFinite && $0 >= 0 }) ?? true else {
+                  recording.tripFuelLitres.map({ $0.isFinite && $0 >= 0 }) ?? true,
+                  recording.events.allSatisfy({ event in
+                      event.timestamp.timeIntervalSince1970.isFinite && !event.kind.isEmpty &&
+                      (event.endTimestamp.map { $0 >= event.timestamp && $0.timeIntervalSince1970.isFinite } ?? true) &&
+                      (event.confidence.map { $0.isFinite && (0...1).contains($0) } ?? true)
+                  }) else {
                 throw DriveLineContractError.invalid("Invalid recording values in DriveLine archive.")
             }
         }

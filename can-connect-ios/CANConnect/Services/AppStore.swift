@@ -193,6 +193,20 @@ final class AppStore: ObservableObject {
     }
     var sortedTrips: [Trip] { state.trips.filter { $0.vehicleID == state.selectedVehicleID }.sorted { $0.startedAt > $1.startedAt } }
     var latest: Trip? { sortedTrips.first }
+    func journeyAnnotation(for recordingID:UUID) -> DriveLineJourneyAnnotation {
+        state.journeyAnnotations[recordingID.uuidString] ?? DriveLineJourneyAnnotation(recordingID:recordingID)
+    }
+    func saveJourneyAnnotation(_ annotation:DriveLineJourneyAnnotation) {
+        guard canWrite else { error = "Saved data is unavailable."; return }
+        var value=annotation
+        value.note=value.note?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.startPlace=value.startPlace?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.finishPlace=value.finishPlace?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.updatedAt=Date()
+        var next=state;next.journeyAnnotations[value.recordingID.uuidString]=value
+        do { try disk.save(next);state=next;notify("Journey details saved locally") }
+        catch { self.error="Could not save journey details. \(error.localizedDescription)" }
+    }
     var weekTrips: [Trip] { let interval = Calendar.current.dateInterval(of:.weekOfYear, for:now); return sortedTrips.filter { !$0.isSample && (interval?.contains($0.startedAt) ?? false) } }
     var weekKM: Double { weekTrips.reduce(0) { $0 + $1.distanceKM } }
     var weekEconomy: Double? {
@@ -367,10 +381,15 @@ final class AppStore: ObservableObject {
     func removeTrip(_ id: UUID) {
         guard canWrite else { error = "Saved data is unavailable."; return }
         guard !state.transfers.contains(where:{$0.tripID == id && $0.status != .complete}) else { error = "Complete this recording's queued transfer before deleting it."; return }
-        var next = state; next.trips.removeAll { $0.id == id }
+        var next = state; next.trips.removeAll { $0.id == id };next.journeyAnnotations.removeValue(forKey:id.uuidString)
         do { try disk.save(next); state = next } catch { self.error = error.localizedDescription }
     }
-    func removeSamples() { state.trips.removeAll( where: \.isSample); state.fills.removeAll(where: \.isSample); save(); notify("Sample history removed") }
+    func removeSamples() {
+        let ids=state.trips.filter(\.isSample).map(\.id)
+        state.trips.removeAll(where:\.isSample);state.fills.removeAll(where:\.isSample)
+        for id in ids { state.journeyAnnotations.removeValue(forKey:id.uuidString) }
+        save();notify("Sample history removed")
+    }
     func chooseVehicle(_ id: UUID) throws {
         guard canWrite else { throw AppFailure("Saved data is unavailable.") }
         guard !recording && !pendingGPS else { throw AppFailure("Finish the current recording before switching vehicles.") }

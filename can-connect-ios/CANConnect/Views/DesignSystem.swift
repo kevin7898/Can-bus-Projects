@@ -68,7 +68,16 @@ struct Metric: View {
 }
 struct DataRow: View {
     let label: String; let value: String
-    var body: some View { HStack { Text(label).foregroundStyle(Palette.muted); Spacer(); Text(value).fontWeight(.medium) }.font(.system(size:13)).padding(.vertical,13).overlay(alignment:.bottom) { Rectangle().fill(Palette.border).frame(height:0.5) } }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    var body: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment:.leading,spacing:5) { Text(label).foregroundStyle(Palette.muted);Text(value).fontWeight(.medium).fixedSize(horizontal:false,vertical:true) }
+            } else {
+                HStack { Text(label).foregroundStyle(Palette.muted);Spacer();Text(value).fontWeight(.medium).multilineTextAlignment(.trailing) }
+            }
+        }.font(.system(size:13)).padding(.vertical,13).overlay(alignment:.bottom) { Rectangle().fill(Palette.border).frame(height:0.5) }
+    }
 }
 struct InfoNote: View {
     let text: String; var icon = "info.circle"

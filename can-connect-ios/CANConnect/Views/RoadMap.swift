@@ -38,14 +38,15 @@ struct NativeRouteMap: UIViewRepresentable {
     var route: [RoutePoint]
     var isLive = false
     var isSample = false
+    var selectedPoint:RoutePoint? = nil
 
     func makeUIView(context: Context) -> MKMapView {
-        let view = MKMapView(); view.overrideUserInterfaceStyle = .dark; view.delegate = context.coordinator
+        let view = MKMapView(); view.delegate = context.coordinator
         view.showsCompass = true; view.pointOfInterestFilter = .excludingAll
         return view
     }
     func updateUIView(_ view: MKMapView, context: Context) {
-        context.coordinator.update(view, route:route, isLive:isLive, isSample:isSample)
+        context.coordinator.update(view,route:route,isLive:isLive,isSample:isSample,selectedPoint:selectedPoint)
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -53,11 +54,12 @@ struct NativeRouteMap: UIViewRepresentable {
         private var points: [RoutePoint]?
         private var live = false
         private var sample = false
+        private var selection:RoutePoint?
         private let location = MKPointAnnotation()
 
-        func update(_ view: MKMapView, route: [RoutePoint], isLive: Bool, isSample: Bool) {
-            guard points != route || live != isLive || sample != isSample else { return }
-            points = route; live = isLive; sample = isSample
+        func update(_ view:MKMapView,route:[RoutePoint],isLive:Bool,isSample:Bool,selectedPoint:RoutePoint? = nil) {
+            guard points != route || live != isLive || sample != isSample || selection != selectedPoint else { return }
+            points=route;live=isLive;sample=isSample;selection=selectedPoint
             view.accessibilityIdentifier = isLive ? "live.route" : "recorded.route"
             view.accessibilityLabel = isLive ? "Recording route and latest GPS location" : "Recorded route"
             view.accessibilityValue = "\(route.count) GPS points"
@@ -66,10 +68,10 @@ struct NativeRouteMap: UIViewRepresentable {
                 let positions = segment.map { CLLocationCoordinate2D(latitude:$0.latitude, longitude:$0.longitude) }
                 view.addOverlay(MKPolyline(coordinates:positions,count:positions.count))
             }
-            if isLive, let last = route.last {
-                location.coordinate = CLLocationCoordinate2D(latitude:last.latitude, longitude:last.longitude)
-                location.title = isSample ? "Sample location" : "Latest recorded location"
-                location.subtitle = last.timestamp.formatted(date:.omitted,time:.standard)
+            if let selected=selectedPoint ?? (isLive ? route.last:nil) {
+                location.coordinate=CLLocationCoordinate2D(latitude:selected.latitude,longitude:selected.longitude)
+                location.title=isLive ? (isSample ? "Sample location":"Latest recorded location"):"Selected observation"
+                location.subtitle=selected.timestamp.formatted(date:.omitted,time:.standard)
                 if !view.annotations.contains(where:{ $0 === location }) { view.addAnnotation(location) }
             } else { view.removeAnnotation(location) }
 

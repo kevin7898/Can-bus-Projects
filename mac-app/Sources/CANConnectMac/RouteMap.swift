@@ -9,7 +9,7 @@ struct RouteMap:NSViewRepresentable {
     var onSelect:((Trip)->Void)? = nil
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context:Context) -> MKMapView {
-        let map = MKMapView(); map.delegate = context.coordinator; map.appearance = NSAppearance(named:.darkAqua)
+        let map = MKMapView(); map.delegate = context.coordinator
         map.showsCompass = true; map.showsZoomControls = true; map.pointOfInterestFilter = .excludingAll
         map.addGestureRecognizer(NSClickGestureRecognizer(target:context.coordinator,action:#selector(Coordinator.clicked(_:))))
         map.setRegion(region,animated:false); return map

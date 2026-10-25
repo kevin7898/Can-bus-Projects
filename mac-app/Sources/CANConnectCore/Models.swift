@@ -189,8 +189,10 @@ public struct Trip: Codable, Identifiable {
             sample.signals.isEmpty ? nil : DriveLineSignalSample(timestamp:sample.timestamp,values:sample.signals,sourceID:"obd",
                 command:sample.command,reply:sample.reply,requestHeader:sample.requestHeader,responseHeader:sample.responseHeader)
         }
+        var sourceIDs=Array(Set((gps.isEmpty ? [] : ["gps"])+(readings.isEmpty ? [] : ["obd"]))).sorted()
+        sourceIDs.append(isDemo || source.localizedCaseInsensitiveContains("synthetic") ? "synthetic":"imported")
         return DriveLineRecording(recordingID:id,vehicleID:vehicleID,name:name,startedAt:start,endedAt:end,
-                                  sourceIDs:Array(Set((gps.isEmpty ? [] : ["gps"])+(readings.isEmpty ? [] : ["obd"]))).sorted(),
+                                  sourceIDs:Array(Set(sourceIDs)).sorted(),
                                   gpsPoints:gps,signalSamples:readings,recordedDistanceKm:recordedDistanceKm,
                                   tripFuelLitres:tripFuelLitres,isSample:isDemo)
     }
@@ -269,7 +271,7 @@ public struct VehiclePreferences: Codable {
     public init() {}
 }
 public struct LibraryState: Codable {
-    public var schemaVersion = 2
+    public var schemaVersion = 3
     public var vehicles: [Vehicle] = []
     public var trips: [Trip] = []
     public var receipts: [ImportReceipt] = []
@@ -279,8 +281,11 @@ public struct LibraryState: Codable {
     public var serverPort: UInt16 = 8765
     public var allowLAN = false
     public var autoStartServer = false
+    /// Local sidecar annotations keyed by stable recordingID. They are not
+    /// included in archives or preserved import originals.
+    public var journeyAnnotations:[String:DriveLineJourneyAnnotation] = [:]
     public init() {}
-    private enum CodingKeys:String,CodingKey { case schemaVersion,vehicles,trips,receipts,fuelEntries,selectedVehicleID,preferences,serverPort,allowLAN,autoStartServer }
+    private enum CodingKeys:String,CodingKey { case schemaVersion,vehicles,trips,receipts,fuelEntries,selectedVehicleID,preferences,serverPort,allowLAN,autoStartServer,journeyAnnotations }
     public init(from decoder:Decoder) throws {
         let values=try decoder.container(keyedBy:CodingKeys.self)
         schemaVersion=try values.decodeIfPresent(Int.self,forKey:.schemaVersion) ?? 1
@@ -293,10 +298,14 @@ public struct LibraryState: Codable {
         serverPort=try values.decodeIfPresent(UInt16.self,forKey:.serverPort) ?? 8765
         allowLAN=try values.decodeIfPresent(Bool.self,forKey:.allowLAN) ?? false
         autoStartServer=try values.decodeIfPresent(Bool.self,forKey:.autoStartServer) ?? false
+        journeyAnnotations=try values.decodeIfPresent([String:DriveLineJourneyAnnotation].self,forKey:.journeyAnnotations) ?? [:]
+        if schemaVersion < 3 { schemaVersion = 3 }
     }
     public mutating func removeDemoData() {
-        let demoVehicleIDs = Set(trips.filter(\.isDemo).map(\.vehicleID))
+        let demoTrips = trips.filter(\.isDemo)
+        let demoVehicleIDs = Set(demoTrips.map(\.vehicleID))
         trips.removeAll { $0.isDemo }
+        for id in demoTrips.map(\.id) { journeyAnnotations.removeValue(forKey:id.uuidString) }
         fuelEntries.removeAll { $0.isDemo }
         let retainedIDs = Set(trips.map(\.vehicleID)).union(receipts.map(\.vehicleID)).union(fuelEntries.map(\.vehicleID))
         let removedIDs = demoVehicleIDs.subtracting(retainedIDs)

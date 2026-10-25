@@ -52,14 +52,25 @@ final class DriveLineContractTests:XCTestCase {
         XCTAssertEqual(restoredArchive.fuelEntries.first?.receipt?.sha256,String(repeating:"a",count:64))
         XCTAssertTrue(trip.source.contains("Synthetic GPS"));XCTAssertTrue(trip.source.contains("Synthetic OBD"))
     }
-    func testVersionOneLibraryLoadsInMemoryAsVersionTwoWithoutRewriting() throws {
+    func testVersionOneLibraryLoadsInMemoryAsVersionThreeWithoutRewriting() throws {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         let original=Data(#"{"schemaVersion":1,"vehicles":[],"trips":[],"receipts":[],"preferences":{},"serverPort":8765,"allowLAN":false,"autoStartServer":false}"#.utf8)
         try original.write(to:root.appendingPathComponent("library.json"))
         let repository=try LibraryRepository(root:root)
-        XCTAssertEqual(try repository.load().schemaVersion,2)
+        XCTAssertEqual(try repository.load().schemaVersion,3)
         XCTAssertEqual(try Data(contentsOf:root.appendingPathComponent("library.json")),original,"Loading must not rewrite the user's version-1 library")
+    }
+    func testJourneyAnnotationRoundTripDoesNotChangeArchivePayload() throws {
+        let vehicle=Vehicle(name:"Synthetic")
+        let trip=Trip(vehicleID:vehicle.id,name:"Evidence",source:"Imported fixture",samples:[],recordedStartedAt:Date(timeIntervalSince1970:1_700_000_000),recordedEndedAt:Date(timeIntervalSince1970:1_700_000_010),recordedDistanceKm:1)
+        let archive=try TripExport.json(trip)
+        var state=LibraryState();state.vehicles=[vehicle];state.trips=[trip]
+        state.journeyAnnotations[trip.id.uuidString]=DriveLineJourneyAnnotation(recordingID:trip.id,purpose:.service,reviewed:true,note:"Fixture")
+        let restored=try LibraryRepository.decoder().decode(LibraryState.self,from:LibraryRepository.encoder().encode(state))
+        XCTAssertEqual(restored.schemaVersion,3)
+        XCTAssertEqual(restored.journeyAnnotations[trip.id.uuidString]?.purpose,.service)
+        XCTAssertEqual(try TripExport.json(try XCTUnwrap(restored.trips.first)),archive)
     }
 }

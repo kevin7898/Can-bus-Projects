@@ -86,7 +86,7 @@ struct OverviewView:View {
     var recentTrips:some View {
         Panel(title:"Recent drives") {
             if store.filteredTrips.isEmpty { EmptyPanel(title:"Your next drive starts here",message:"Import a recording for the selected vehicle. GPS-only data is welcome; unavailable signals stay blank.") }
-            ForEach(store.filteredTrips.prefix(4)) { trip in TripRow(trip:trip) { store.selectedTripID = trip.id;store.page = .drives };Divider().overlay(Theme.line) }
+            ForEach(store.filteredTrips.prefix(4)) { trip in TripRow(trip:trip,annotation:store.journeyAnnotation(for:trip.id)) { store.selectedTripID = trip.id;store.page = .drives };Divider().overlay(Theme.line) }
             HStack { Spacer();Button("View all drives") { store.page = .drives } }.padding(10)
         }
     }
@@ -122,28 +122,48 @@ struct SignalsView:View {
     @EnvironmentObject var store:AppStore
     @State private var selectedDate:Date?
     @State private var availableWidth:CGFloat = 0
+    @State private var viewport=MapViewport()
     var body:some View {
         if let trip = store.selectedTrip {
             VStack(alignment:.leading,spacing:14) {
                 HStack { Label("Historical recording · \(trip.source)",systemImage:"clock").foregroundStyle(Theme.muted);Spacer();Picker("Recording",selection:Binding(get:{Optional(trip.id)},set:{store.selectedTripID = $0})) { ForEach(store.vehicleTrips) { item in Text(item.name).tag(Optional(item.id)) } }.frame(maxWidth:340) }.font(.system(size:12))
+                MapPanel(trips:[trip],viewport:$viewport,style:store.preferences.mapStyle,height:240,marker:playbackSample(trip))
                 LazyVGrid(columns:Array(repeating:GridItem(.flexible(minimum:290)),count:availableWidth>1050 ? 3:2),spacing:14) {
                     ForEach(Array(store.preferences.signals.enumerated()),id:\.offset) { index,signal in
                         Panel(title:"Signal card \(index+1)",icon:"slider.horizontal.3") {
                             Picker("Reading",selection:Binding(get:{store.preferences.signals[index]},set:{value in store.changePreferences{$0.signals[index] = value}})) { ForEach(Signal.allCases) { s in Text(s.title).tag(s) } }.accessibilityLabel("Reading for signal card \(index+1)").padding(12)
-                            HStack(alignment:.firstTextBaseline) { Text(number(value(trip,signal),digits:signal == .rpm ? 0:1)).font(.system(size:30,weight:.medium,design:.monospaced));Text(signal.unit).font(.system(size:11)).foregroundStyle(Theme.muted) }.frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,14)
+                            HStack(alignment:.firstTextBaseline) { Text(number(value(trip,signal),digits:signal == .rpm ? 0:1)).font(.system(size:30,weight:.medium,design:.monospaced));Text(signal.unit).font(.system(size:11)).foregroundStyle(Theme.muted);Spacer();Text(selectedDate?.formatted(date:.omitted,time:.standard) ?? "Select a chart time").font(.system(size:9)).foregroundStyle(Theme.tertiaryText) }.frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,14)
                             SignalChart(trip:trip,signal:signal,selectedDate:$selectedDate,height:150)
                         }
                     }
                 }
+                if let raw=rawEvidence(trip) {
+                    DisclosureGroup("Raw evidence at shared cursor") { VStack(alignment:.leading,spacing:6) { Text(raw.command ?? "Command unavailable").font(.system(size:10,weight:.semibold,design:.monospaced));Text(raw.reply ?? "Reply unavailable").font(.system(size:9,design:.monospaced)).textSelection(.enabled);Text("Observed \(raw.timestamp.formatted(date:.omitted,time:.standard)); no interpolation applied.").font(.system(size:9)).foregroundStyle(Theme.secondaryText) }.padding(12) }
+                }
                 Text("Cards are independent and can show duplicate signals. Drag the chart to inspect a timestamp; values are not carried across recording gaps.").font(.system(size:11)).foregroundStyle(Theme.muted)
-            }.background {
+            }.onAppear { viewport=RouteMap.fitted([trip]);selectedDate=selectedDate ?? trip.start }
+                .onChange(of:trip.id) { _,_ in viewport=RouteMap.fitted([trip]);selectedDate=trip.start }
+                .background {
                 GeometryReader { geometry in Color.clear.onAppear { availableWidth = geometry.size.width }.onChange(of:geometry.size.width) { _,width in availableWidth = width } }
             }
         } else { EmptyPanel(title:"No signals recorded yet",message:"Import a diagnostic or telemetry recording. Raw CAN requires a decoder before it can provide vehicle readings.") }
     }
     func value(_ trip:Trip,_ key:Signal) -> Double? {
-        let points = trip.samples.filter{$0.value(key) != nil}
-        guard let date = selectedDate else { return points.last?.value(key) }
-        guard let nearest = points.min(by:{abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date))}),abs(nearest.timestamp.timeIntervalSince(date))<=10 else { return nil };return nearest.value(key)
+        let points=DriveLineJourneyPolicy.signalSeries(key.rawValue,unit:key.unit,recording:trip.sharedRecording).segments.flatMap{$0}
+        guard let date=selectedDate else { return points.last?.value }
+        guard let nearest=points.min(by:{abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date))}),abs(nearest.timestamp.timeIntervalSince(date))<=DriveLineMetricPolicy.maximumSignalGap else { return nil }
+        return nearest.value
+    }
+    func playbackSample(_ trip:Trip)->TelemetrySample? {
+        guard let date=selectedDate else { return nil }
+        let closest=trip.coordinates.min { abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date)) }
+        guard let closest,abs(closest.timestamp.timeIntervalSince(date))<=DriveLineMetricPolicy.maximumGPSGap else { return nil }
+        return closest
+    }
+    func rawEvidence(_ trip:Trip)->TelemetrySample? {
+        guard let date=selectedDate else { return nil }
+        let samples=trip.samples.filter{$0.command != nil || $0.reply != nil}
+        guard let closest=samples.min(by:{abs($0.timestamp.timeIntervalSince(date))<abs($1.timestamp.timeIntervalSince(date))}),abs(closest.timestamp.timeIntervalSince(date))<=DriveLineMetricPolicy.maximumSignalGap else { return nil }
+        return closest
     }
 }

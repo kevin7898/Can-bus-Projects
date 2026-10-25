@@ -69,7 +69,7 @@ struct ScannerIdentity {
 }
 
 extension StoredState {
-    private enum Keys: String, CodingKey { case schemaVersion, regenTrackingStartedAt, trips, fills, preferences, draft, vehicles, selectedVehicleID, onboardingCompleted, scanner, server, transfers }
+    private enum Keys: String, CodingKey { case schemaVersion, regenTrackingStartedAt, trips, fills, preferences, draft, vehicles, selectedVehicleID, onboardingCompleted, scanner, server, transfers, journeyAnnotations }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy:Keys.self)
         schemaVersion = try c.decodeIfPresent(Int.self,forKey:.schemaVersion) ?? 1
@@ -80,6 +80,7 @@ extension StoredState {
         scanner = try c.decodeIfPresent(ScannerSettings.self,forKey:.scanner) ?? ScannerSettings()
         server = try c.decodeIfPresent(ServerSettings.self,forKey:.server) ?? ServerSettings()
         transfers = try c.decodeIfPresent([TransferItem].self,forKey:.transfers) ?? []
+        journeyAnnotations = try c.decodeIfPresent([String:DriveLineJourneyAnnotation].self,forKey:.journeyAnnotations) ?? [:]
         draft = try c.decodeIfPresent(RecordingDraft.self,forKey:.draft)
         vehicles = try c.decodeIfPresent([VehicleProfile].self,forKey:.vehicles) ?? []
         selectedVehicleID = try c.decodeIfPresent(UUID.self,forKey:.selectedVehicleID)
@@ -99,7 +100,7 @@ extension StoredState {
             }
             schemaVersion = 2
         }
-        schemaVersion = 3
+        if schemaVersion < 4 { schemaVersion = 4 }
         if selectedVehicleID == nil || !vehicles.contains(where:{$0.id == selectedVehicleID}) { selectedVehicleID = vehicles.first?.id }
     }
 }

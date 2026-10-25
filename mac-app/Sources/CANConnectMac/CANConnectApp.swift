@@ -18,6 +18,8 @@ import AppKit
         let state = AppStore(root:root);_store = StateObject(wrappedValue:state)
         #if DEBUG
         if args.contains("--phase3-fixture") { state.loadPhase3Fixture() }
+        if args.contains("--phase4-fixture") { state.loadPhase4Fixture() }
+        if let page = argument("--phase4-page").flatMap(Workspace.init(rawValue:)) { state.page = page }
         #endif
         if args.contains("--headless") {
             guard let token = ProcessInfo.processInfo.environment["CAN_CONNECT_TEST_TOKEN"],token.count>=16,let port = UInt16(argument("--port") ?? "18765") else { fputs("Headless validation needs CAN_CONNECT_TEST_TOKEN (16+ characters) and a valid --port.\n",stderr);exit(2) }

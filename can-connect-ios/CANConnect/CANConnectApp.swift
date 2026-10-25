@@ -20,6 +20,38 @@ struct CANConnectApp: App {
             let testStore = AppStore(disk:LocalStore(url:url),gps:usesPhase3Fixture ? Phase3FixtureGPS():nil)
             if !arguments.contains("--show-onboarding") { testStore.state.onboardingCompleted = true; testStore.save() }
             if arguments.contains("--record-tab") { testStore.selectedTab = .record }
+            if arguments.contains("--phase4-fixture") {
+                let vehicle=testStore.state.vehicles.first ?? VehicleProfile.sample
+                let start=Date().addingTimeInterval(-3_600)
+                let route=SampleData.routeCoordinates.enumerated().map { index,coordinate in
+                    RoutePoint(latitude:coordinate[0],longitude:coordinate[1],timestamp:start.addingTimeInterval(Double(index)*20),accuracy:5,speed:18)
+                }
+                let samples=(0..<route.count).map { index in
+                    let indexValue=Double(index)
+                    let signals:[String:Double]=[
+                        "speedKph":72+indexValue,
+                        "rpm":1_600+Double(index*25),
+                        "coolantC":86+indexValue/4,
+                        "fuelRateLph":4.2,
+                        "boostAbsoluteKpa":132+indexValue,
+                        "barometricKpa":101,
+                        "dpfRegenTrigger":indexValue*7,
+                    ]
+                    return OBDSample(
+                        timestamp:route[index].timestamp,
+                        signals:signals,
+                        command:"FIXTURE",
+                        reply:"Sanitized Phase 4 observation \(index)"
+                    )
+                }
+                let trip=Trip(vehicleID:vehicle.id,name:"Sanitized sample journey",startedAt:start,duration:Double(max(1,route.count-1))*20,distanceKM:4.8,source:.demo,isSample:true,economy:8.75,fuelLitres:0.42,route:route,samples:samples)
+                let first=FuelEntry(vehicleID:vehicle.id,date:start.addingTimeInterval(-20*86_400),litres:36,costCAD:61.20,odometerKM:216_000,full:true,isSample:true,stationName:"Sample station")
+                let partial=FuelEntry(vehicleID:vehicle.id,date:start.addingTimeInterval(-10*86_400),litres:12,costCAD:21.48,odometerKM:216_260,full:false,isSample:true,stationName:"Sample station")
+                let last=FuelEntry(vehicleID:vehicle.id,date:start.addingTimeInterval(-2*86_400),litres:24,costCAD:42.96,odometerKM:216_600,full:true,isSample:true,stationName:"Sample station")
+                testStore.state.vehicles=[vehicle];testStore.state.selectedVehicleID=vehicle.id;testStore.state.trips=[trip];testStore.state.fills=[first,partial,last]
+                testStore.state.journeyAnnotations[trip.id.uuidString]=DriveLineJourneyAnnotation(recordingID:trip.id,purpose:.service,reviewed:true,startPlace:"Sample start",finishPlace:"Sample finish")
+                testStore.selectedTab = .drives;testStore.save()
+            }
             // Sanitized, debug-only state fixtures used for Phase 3 visual evidence.
             if usesPhase3Fixture {
                 let start=Date().addingTimeInterval(-140)

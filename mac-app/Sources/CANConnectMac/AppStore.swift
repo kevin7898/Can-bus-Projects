@@ -23,6 +23,17 @@ import DriveLineShared
     var selectedVehicle: Vehicle? { state.vehicles.first { $0.id==state.selectedVehicleID } }
     var vehicleTrips: [Trip] { state.trips.filter { $0.vehicleID==state.selectedVehicleID }.sorted { $0.start>$1.start } }
     var selectedTrip: Trip? { vehicleTrips.first { $0.id==selectedTripID } ?? vehicleTrips.first }
+    func journeyAnnotation(for recordingID:UUID)->DriveLineJourneyAnnotation {
+        state.journeyAnnotations[recordingID.uuidString] ?? DriveLineJourneyAnnotation(recordingID:recordingID)
+    }
+    func saveJourneyAnnotation(_ annotation:DriveLineJourneyAnnotation) {
+        var value=annotation
+        value.note=value.note?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.startPlace=value.startPlace?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.finishPlace=value.finishPlace?.trimmingCharacters(in:.whitespacesAndNewlines)
+        value.updatedAt=Date()
+        perform { try commit { $0.journeyAnnotations[value.recordingID.uuidString]=value } }
+    }
     var preferences: VehiclePreferences { state.preferences[state.selectedVehicleID?.uuidString ?? ""] ?? VehiclePreferences() }
     var filteredTrips: [Trip] {
         guard preferences.periodDays > 0 else { return vehicleTrips }
@@ -218,6 +229,22 @@ import DriveLineShared
             let fill=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(-3600),litresPurchased:42,totalCost:68.12,
                                odometerKm:216_274,isFullFill:true,stationName:"Fixture station",isDemo:false)
             try commit { $0.vehicles=[vehicle];$0.selectedVehicleID=vehicle.id;$0.trips=[trip];$0.fuelEntries=[fill] }
+        }
+    }
+    func loadPhase4Fixture() {
+        loadPhase3Fixture()
+        guard let vehicle=state.vehicles.first,let trip=state.trips.first else { return }
+        perform {
+            let end=trip.end
+            let partial=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(-1_800),litresPurchased:12,totalCost:21.48,odometerKm:216_500,isFullFill:false,stationName:"Sanitized sample station",isDemo:true)
+            let full=FuelEntry(vehicleID:vehicle.id,date:end.addingTimeInterval(600),litresPurchased:24,totalCost:42.96,odometerKm:216_874,isFullFill:true,stationName:"Sanitized sample station",isDemo:true)
+            try commit { state in
+                for index in state.trips.indices { state.trips[index].isDemo=true }
+                for index in state.fuelEntries.indices { state.fuelEntries[index].isDemo=true }
+                state.fuelEntries.append(contentsOf:[partial,full])
+                state.journeyAnnotations[trip.id.uuidString]=DriveLineJourneyAnnotation(recordingID:trip.id,purpose:.service,reviewed:true,startPlace:"Sample start",finishPlace:"Sample finish")
+            }
+            selectedTripID=trip.id;page = .drives
         }
     }
     #endif
