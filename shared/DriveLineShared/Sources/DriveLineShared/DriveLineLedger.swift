@@ -181,6 +181,7 @@ public struct DriveLineTripFuelPoint: Equatable, Identifiable, Sendable {
 }
 
 public enum DriveLineJourneyPolicy {
+    /// Identifies deterministic Phase 4 evidence derivations without changing preserved recordings.
     public static let algorithmIdentifier = "driveline.evidence"
     public static let algorithmVersion = "1"
 
