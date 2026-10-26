@@ -2,8 +2,11 @@ import SwiftUI
 
 struct OverviewView: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Binding var page: Int
     @State private var selectedTrip: Trip?
+    @State private var addingFill = false
+    @State private var fuelLogbook = false
 
     private var presentation: PhoneTodayPresentation {
         .make(state:store.state, now:store.now, gpsStatus:store.gps.status,
@@ -17,6 +20,7 @@ struct OverviewView: View {
                 VStack(alignment:.leading,spacing:12) {
                     dateHeader
                     readinessCard
+                    quickActions
                     todayTotals
                     latestDrive
                     latestFill
@@ -24,6 +28,8 @@ struct OverviewView: View {
                     .frame(maxWidth:.infinity,minHeight:geometry.size.height,alignment:.top)
             }.scrollBounceBehavior(.basedOnSize)
         }.sheet(item:$selectedTrip) { TripDetailView(trip:$0) }
+            .sheet(isPresented:$addingFill) { FuelForm() }
+            .sheet(isPresented:$fuelLogbook) { FuelLedgerView() }
             .accessibilityIdentifier("today.content")
     }
 
@@ -46,6 +52,21 @@ struct OverviewView: View {
                 }.accessibilityElement(children:.contain)
                 if presentation.queuedTransfers > 0 { StatusPill(state:.queued,text:"\(presentation.queuedTransfers) queued") }
             }
+        }
+    }
+
+    @ViewBuilder private var quickActions:some View {
+        let actions=Group {
+            AppButton(title:"Add fill-up",icon:"fuelpump.fill") { addingFill=true }
+                .disabled(!canLogFill).accessibilityIdentifier("today.add-fill")
+            AppButton(title:"Start a recording",icon:"record.circle",secondary:true) { store.selectedTab = .record }
+                .accessibilityIdentifier("today.start-recording")
+        }
+        if dynamicTypeSize.isAccessibilitySize { VStack(spacing:10) { actions } }
+        else { HStack(spacing:10) { actions } }
+        if !canLogFill {
+            Text(store.activeVehicle == nil ? "Choose a vehicle before logging fuel.":"Select a real vehicle before logging fuel.")
+                .font(.caption).foregroundStyle(Palette.secondaryText)
         }
     }
 
@@ -106,11 +127,17 @@ struct OverviewView: View {
                     Spacer();Text("\(fill.litres.text(1)) L").font(.headline).monospacedDigit()
                 }
                 Text("Purchased fill quantity; it is never counted as trip fuel consumed.").font(.caption).foregroundStyle(Palette.secondaryText)
+                Button("Open fuel logbook") { fuelLogbook=true }.font(.subheadline.weight(.semibold)).accessibilityIdentifier("today.fuel-logbook")
             }
         } else {
-            SectionCard(title:"Latest fill",icon:"fuelpump") { Text("No real fuel entries for this vehicle.").font(.subheadline).foregroundStyle(Palette.secondaryText) }
+            SectionCard(title:"Latest fill",icon:"fuelpump") {
+                Text("No real fuel entries for this vehicle.").font(.subheadline).foregroundStyle(Palette.secondaryText)
+                Button("Open fuel logbook") { fuelLogbook=true }.font(.subheadline.weight(.semibold)).accessibilityIdentifier("today.fuel-logbook")
+            }
         }
     }
+
+    private var canLogFill:Bool { store.activeVehicle != nil && store.activeVehicle?.isSample != true && !store.libraryReadOnly }
 
     private var readinessTitle:String {
         switch presentation.readiness { case .ready:return "Ready to record";case .needsVehicle:return "Choose a vehicle";case .sampleVehicle:return "Sample vehicle selected" }

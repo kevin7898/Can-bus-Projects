@@ -15,7 +15,7 @@ struct RootView: View {
                     Button("Add a vehicle",systemImage:"plus") { store.vehicleSetupPresented = true }
                     Button("Manage vehicles",systemImage:"car.2") { store.selectedTab = .garage }
                 } label: { HStack(spacing:5) { Image(systemName:store.activeVehicle?.kind.icon ?? "car.side"); Text(store.activeVehicle?.title ?? "Add vehicle").lineLimit(1).minimumScaleFactor(0.7) }.font(.system(size:10)).foregroundStyle(Palette.blue).frame(maxWidth:120,minHeight:30).contentShape(Rectangle()) }.disabled(store.recording || store.pendingGPS).accessibilityLabel("Choose vehicle")
-                Button { store.connectPage=2;store.selectedTab = .more } label: { Image(systemName:"gearshape").frame(width:44,height:44) }.foregroundStyle(Palette.muted).accessibilityLabel("Open More settings")
+                Button { store.selectedTab = .more } label: { Image(systemName:"gearshape").frame(width:44,height:44) }.foregroundStyle(Palette.muted).accessibilityLabel("Open More")
             }
             HStack(alignment:.bottom) {
                 VStack(alignment:.leading, spacing:5) { Eyebrow(text:store.selectedTab.eyebrow); Text(store.selectedTab.title).font(.system(size:28, weight:.regular)) }
@@ -23,7 +23,7 @@ struct RootView: View {
                 if store.recording { Button { store.selectedTab = .record } label: { Label(store.timerText, systemImage:"record.circle.fill").font(.system(size:11)).foregroundStyle(Palette.red) }.accessibilityLabel("Recording. Open Record to finish") }
                 else if store.selectedTab == .drives {
                     Menu { Button("Record with iPhone GPS", systemImage:"location") { store.source = .phoneGPS; store.selectedTab = .record }; Button("Import JSON recording", systemImage:"square.and.arrow.down") { importFile = true }; Button("Add sample recording", systemImage:"play.rectangle") { store.addSample() } } label: { Image(systemName:"plus").frame(width:44,height:44).background(Palette.surface, in:Circle()) }.accessibilityLabel("Add recording")
-                } else { Text(store.selectedTab == .record && store.source == .demo ? "Demo" : "On iPhone").font(.system(size:10)).foregroundStyle(Palette.muted).padding(.horizontal,11).padding(.vertical,7).background(Palette.surface, in:Capsule()) }
+                } else if store.selectedTab != .more { Text(store.selectedTab == .record && store.source == .demo ? "Demo" : "On iPhone").font(.system(size:10)).foregroundStyle(Palette.muted).padding(.horizontal,11).padding(.vertical,7).background(Palette.surface, in:Capsule()) }
             }
             Group { switch store.selectedTab {
             case .today: OverviewView(page:$store.overviewPage)

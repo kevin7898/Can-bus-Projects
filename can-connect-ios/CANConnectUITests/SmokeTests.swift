@@ -27,21 +27,55 @@ final class SmokeTests: XCTestCase {
         app.buttons["Garage"].tap()
         XCTAssertTrue(app.buttons["Add a vehicle"].waitForExistence(timeout:5))
         app.buttons["More"].tap()
-        XCTAssertTrue(app.buttons["Connections"].isSelected)
-        XCTAssertTrue(app.staticTexts["CAN recorder"].exists)
-        app.buttons["Transfers"].tap()
-        XCTAssertTrue(app.buttons["Export all recordings"].waitForExistence(timeout:5))
-        app.buttons["Settings"].tap()
-        XCTAssertTrue(app.segmentedControls["appearance.picker"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["more.scanner"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["more.server"].exists)
+        XCTAssertTrue(app.buttons["more.fuel-logbook"].exists)
+        XCTAssertTrue(app.buttons["more.signals"].exists)
         XCTAssertTrue(app.buttons["more.transfer-queue"].exists)
+        app.buttons["more.transfers"].tap()
+        XCTAssertTrue(app.navigationBars["Transfers & backup"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["Export all recordings"].waitForExistence(timeout:5))
+        app.navigationBars["Transfers & backup"].buttons["Done"].tap()
+        app.buttons["more.appearance"].tap()
+        XCTAssertTrue(app.segmentedControls["appearance.picker"].waitForExistence(timeout:5))
+    }
+
+    @MainActor
+    func testTodayAddFillAndMoreFuelLogbookAreProminent() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase5-fixture"];app.launch()
+        XCTAssertTrue(app.buttons["Today"].waitForExistence(timeout:10));app.buttons["Today"].tap()
+        let addFill=app.buttons["today.add-fill"]
+        XCTAssertTrue(addFill.waitForExistence(timeout:5));XCTAssertTrue(addFill.isHittable)
+        let todayShot=XCTAttachment(screenshot:app.screenshot());todayShot.name="Today — prominent Add fill-up";todayShot.lifetime = .keepAlways;add(todayShot)
+        addFill.tap()
+        XCTAssertTrue(app.navigationBars["Add Fuel"].waitForExistence(timeout:5))
+        app.navigationBars["Add Fuel"].buttons["Done"].tap()
+        app.buttons["More"].tap()
+        let logbook=app.buttons["more.fuel-logbook"]
+        XCTAssertTrue(logbook.waitForExistence(timeout:5));XCTAssertTrue(logbook.isHittable)
+        let moreShot=XCTAttachment(screenshot:app.screenshot());moreShot.name="More — connections, fuel, data, and preferences";moreShot.lifetime = .keepAlways;add(moreShot)
+        logbook.tap()
+        XCTAssertTrue(app.navigationBars["Fuel Ledger"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Purchased fuel"].exists)
+    }
+
+    @MainActor
+    func testMoreAndTodayFuelActionsRenderInDarkAppearance() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase5-fixture","--appearance-dark"];app.launch()
+        XCTAssertTrue(app.buttons["Today"].waitForExistence(timeout:10));app.buttons["Today"].tap()
+        XCTAssertTrue(app.buttons["today.add-fill"].waitForExistence(timeout:5))
+        app.buttons["More"].tap()
+        XCTAssertTrue(app.buttons["more.fuel-logbook"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["more.transfers"].exists)
+        XCTAssertTrue(app.buttons["more.appearance"].exists)
+        let shot=XCTAttachment(screenshot:app.screenshot());shot.name="More redesign — dark";shot.lifetime = .keepAlways;add(shot)
     }
 
     @MainActor
     func testRegenerationComparisonIsReachableAndDoesNotCountSampleTrips() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.staticTexts["Sample vehicle selected"].waitForExistence(timeout:10))
-        app.buttons["More"].tap(); app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap(); app.buttons["DPF"].tap()
+        app.buttons["More"].tap(); app.buttons["more.vehicle-data"].tap(); app.buttons["DPF"].tap()
         let compare = app.buttons["regen.compare"]
         XCTAssertTrue(compare.waitForExistence(timeout:5)); compare.tap()
         XCTAssertTrue(app.staticTexts["Latest complete cycles · 0 / 10"].waitForExistence(timeout:5))
@@ -65,11 +99,11 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Sample drive"].waitForExistence(timeout:5))
         app.buttons["Record"].tap()
         XCTAssertTrue(app.buttons["Start recording"].waitForExistence(timeout:3))
-        app.buttons["More"].tap(); app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap(); app.buttons["Logbook"].tap()
+        app.buttons["More"].tap(); app.buttons["more.vehicle-data"].tap(); app.buttons["Logbook"].tap()
         XCTAssertTrue(app.buttons["Log a fill-up"].waitForExistence(timeout:3))
-        app.buttons["Done"].tap(); app.buttons["Transfers"].tap()
+        app.buttons["Done"].tap(); app.buttons["more.transfers"].tap()
         XCTAssertTrue(app.buttons["Export all recordings"].waitForExistence(timeout:3))
-        app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap()
+        app.buttons["Done"].tap(); app.buttons["more.vehicle-data"].tap()
         XCTAssertTrue(app.buttons["Logbook"].isSelected)
     }
     @MainActor
@@ -197,7 +231,7 @@ final class SmokeTests: XCTestCase {
     @MainActor
     private func exercisePhase6Signals(appearance:String,checkTripStory:Bool = true) {
         let app=XCUIApplication();app.launchArguments=["--ui-testing","--phase6-fixture","--appearance-\(appearance)"];app.launch()
-        XCTAssertTrue(app.buttons["More"].waitForExistence(timeout:10));app.buttons["More"].tap();app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["More"].waitForExistence(timeout:10));app.buttons["More"].tap()
         XCTAssertTrue(app.buttons["more.signals"].waitForExistence(timeout:5));app.buttons["more.signals"].tap()
         XCTAssertTrue(app.navigationBars["Signals"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["Engine"].exists)
@@ -281,7 +315,7 @@ final class SmokeTests: XCTestCase {
         await saveVehicle(in:app)
         await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["Choose vehicle"].waitForExistence(timeout:5))
-        app.buttons["More"].tap(); app.buttons["Settings"].tap(); app.buttons["more.vehicle-data"].tap()
+        app.buttons["More"].tap(); app.buttons["more.vehicle-data"].tap()
         XCTAssertTrue(app.staticTexts["2013 Volkswagen Jetta · recorded values"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["Starting odometer"].exists == false)
         let shot = XCTAttachment(screenshot:app.screenshot()); shot.name = "New vehicle without sample telemetry"; shot.lifetime = .keepAlways; add(shot)
@@ -304,7 +338,7 @@ final class SmokeTests: XCTestCase {
         await enter("Jetta",in:app.textFields["vehicle.model"],app:app)
         await saveVehicle(in:app); await waitForOnboardingToDismiss(app)
         app.buttons["More"].tap()
-        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","CAN recorder")).firstMatch.tap()
+        let scanner=app.buttons["more.scanner"];XCTAssertTrue(scanner.waitForExistence(timeout:5));scanner.tap()
         let picker = app.buttons["scanner.transport"]
         XCTAssertTrue(picker.waitForExistence(timeout:5)); picker.tap()
         app.buttons["OBDLink MX+ · Bluetooth"].tap()
@@ -333,7 +367,7 @@ final class SmokeTests: XCTestCase {
         await saveVehicle(in:app)
         await waitForOnboardingToDismiss(app)
         XCTAssertTrue(app.buttons["More"].waitForExistence(timeout:5)); app.buttons["More"].tap()
-        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","CAN recorder")).firstMatch.tap()
+        let scanner=app.buttons["more.scanner"];XCTAssertTrue(scanner.waitForExistence(timeout:5));scanner.tap()
         let host = app.textFields["connection.host"]; XCTAssertTrue(host.waitForExistence(timeout:3)); host.tap(); host.typeText("127.0.0.1")
         let port = app.textFields["connection.port"]; port.tap()
         port.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:5)+String(fixture.port))
