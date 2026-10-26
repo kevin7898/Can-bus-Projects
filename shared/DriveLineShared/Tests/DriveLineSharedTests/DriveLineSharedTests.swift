@@ -584,12 +584,49 @@ final class DriveLineSharedTests: XCTestCase {
                 visibleRange:DateInterval(start:analysisRecording.startedAt,end:analysisRecording.endedAt))
         }
         XCTAssertEqual(statistics.observationCount,50_000)
+        let duration=analysisRecording.endedAt.timeIntervalSince(analysisRecording.startedAt)
+        let zoomedCounts=measured("chart_zoom_pan_20") {
+            (0..<20).map { window -> Int in
+                let start=analysisRecording.startedAt.addingTimeInterval(duration*Double(window)/40)
+                let end=min(analysisRecording.endedAt,start.addingTimeInterval(duration/4))
+                let cursor=start.addingTimeInterval(end.timeIntervalSince(start)/2)
+                return DriveLineJourneyPolicy.signalStatistics(series,at:cursor,
+                    visibleRange:DateInterval(start:start,end:end)).observationCount
+            }
+        }
+        XCTAssertTrue(zoomedCounts.allSatisfy{$0>0})
+        let scrubbedValues=measured("signal_scrub_12") {
+            (0..<12).compactMap { position in
+                DriveLineJourneyPolicy.cursor(
+                    at:analysisRecording.startedAt.addingTimeInterval(duration*Double(position)/11),
+                    recording:analysisRecording,signalKeys:["rpm"]).observations["rpm"]?.value
+            }
+        }
+        XCTAssertGreaterThan(scrubbedValues.count,8)
 
         let routeRecording=DriveLinePerformanceFixture.recording(at:0,observationCount:50_000)
         let route=measured("route_prepare_50000") {
             DriveLineMetricPolicy.routeSegments(routeRecording.gpsPoints)
         }
         XCTAssertFalse(route.isEmpty)
+        let mapMarkers=measured("map_cursor_20") {
+            let routeDuration=routeRecording.endedAt.timeIntervalSince(routeRecording.startedAt)
+            return (0..<20).compactMap { position in
+                DriveLineJourneyPolicy.cursor(
+                    at:routeRecording.startedAt.addingTimeInterval(routeDuration*Double(position)/19),
+                    recording:routeRecording,signalKeys:[]).gpsPoint
+            }
+        }
+        XCTAssertGreaterThan(mapMarkers.count,15)
+
+        let vehicleMetrics=measured("vehicle_switch_4") {
+            DriveLinePerformanceFixture.vehicles.enumerated().map { index,vehicle in
+                let recording=DriveLinePerformanceFixture.recording(at:index,observationCount:2_000)
+                XCTAssertEqual(recording.vehicleID,vehicle.id)
+                return DriveLineMetricPolicy.metrics(for:recording)
+            }
+        }
+        XCTAssertEqual(vehicleMetrics.count,4)
 
         measured("repeated_journey_selection_100") {
             for index in 0..<100 {

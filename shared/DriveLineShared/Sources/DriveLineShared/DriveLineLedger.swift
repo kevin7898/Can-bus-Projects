@@ -632,13 +632,39 @@ public enum DriveLineJourneyPolicy {
 
     public static func cursor(at timestamp: Date, recording: DriveLineRecording,
                               signalKeys: [String]) -> DriveLineCursorSelection {
-        let gps = nearest(recording.gpsPoints, to: timestamp, maximumAge: DriveLineMetricPolicy.maximumGPSGap) { $0.timestamp }
+        var gps:DriveLineGPSPoint?
+        for point in recording.gpsPoints where point.timestamp <= timestamp &&
+            (gps.map { $0.timestamp < point.timestamp } ?? true) { gps=point }
+        if let point=gps,timestamp.timeIntervalSince(point.timestamp)>DriveLineMetricPolicy.maximumGPSGap { gps=nil }
+
+        let requested=Set(signalKeys)
+        let needsBoost=requested.contains("boostKpa")
+        var observedKeys=requested.subtracting(["gps.speedKph","gps.horizontalAccuracyM","boostKpa"])
+        if needsBoost { observedKeys.formUnion(["boostAbsoluteKpa","mapKpa","barometricKpa"]) }
+        var latest:[String:DriveLineObservation]=[:]
+        for sample in recording.signalSamples where sample.timestamp <= timestamp {
+            for key in observedKeys {
+                guard let raw=sample.values[key],raw.isFinite,
+                      latest[key].map({$0.timestamp < sample.timestamp}) ?? true else { continue }
+                let value=key == "dpfRegenTrigger" ? DriveLineMetricPolicy.normalizedDPFRegenTrigger(raw):raw
+                guard let value else { continue }
+                latest[key]=DriveLineObservation(key:key,value:value,timestamp:sample.timestamp,
+                    sourceID:sample.sourceID,recordingID:recording.recordingID)
+            }
+        }
         var observations: [String: DriveLineObservation] = [:]
         for key in signalKeys {
-            let candidates=signalSeries(key,unit:knownSignals[key]?.unit ?? "",recording:recording).segments.flatMap{$0}
-            if let point=nearest(candidates,to:timestamp,maximumAge:DriveLineMetricPolicy.maximumSignalGap,timestamp:{ $0.timestamp }) {
-                observations[key]=DriveLineObservation(key:key,value:point.value,timestamp:point.timestamp,
-                                                       sourceID:point.sourceID,recordingID:recording.recordingID)
+            if key == "gps.speedKph",let gps,let speed=gps.speedMps,speed.isFinite {
+                observations[key]=DriveLineObservation(key:key,value:speed*3.6,timestamp:gps.timestamp,
+                    sourceID:gps.sourceID,recordingID:recording.recordingID)
+            } else if key == "gps.horizontalAccuracyM",let gps,let accuracy=gps.horizontalAccuracyM,accuracy.isFinite {
+                observations[key]=DriveLineObservation(key:key,value:accuracy,timestamp:gps.timestamp,
+                    sourceID:gps.sourceID,recordingID:recording.recordingID)
+            } else if key == "boostKpa" {
+                observations[key]=DriveLineMetricPolicy.boostGaugeKpa(observations:latest,at:timestamp)
+            } else if let observation=latest[key],
+                      timestamp.timeIntervalSince(observation.timestamp)<=DriveLineMetricPolicy.maximumSignalGap {
+                observations[key]=observation
             }
         }
         return DriveLineCursorSelection(timestamp: timestamp, gpsPoint: gps, observations: observations)
