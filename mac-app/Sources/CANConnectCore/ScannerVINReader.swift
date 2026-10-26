@@ -83,7 +83,7 @@ final class ScannerVINReader: @unchecked Sendable {
 
 // Connection state and timeout can both complete a request. Consume the continuation
 // under a lock so cancellation/failure/timeout can never resume it twice.
-private final class ScannerCompletion<Value>: @unchecked Sendable {
+private final class ScannerCompletion<Value:Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation:CheckedContinuation<Value,Error>?
     init(_ continuation:CheckedContinuation<Value,Error>) { self.continuation = continuation }

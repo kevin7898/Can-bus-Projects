@@ -38,7 +38,7 @@ struct FreshnessLabel:View {
     var staleAfter:TimeInterval=60
     var body:some View {
         let age=observedAt.map { max(0,now.timeIntervalSince($0)) }
-        let state:DriveLineSemanticState=age==nil ? .unavailable:(age!>staleAfter ? .stale:.healthy)
+        let state:DriveLineSemanticState=age==nil ? .unavailable:(age!>staleAfter ? .stale:.ready)
         Label(freshness(age),systemImage:state.icon).font(.system(size:10)).foregroundStyle(state.macColor)
             .accessibilityLabel("Freshness: \(freshness(age))")
     }
@@ -71,7 +71,7 @@ struct MetricTile:View {
     let title:String
     let value:String?
     var unit=""
-    var state:DriveLineSemanticState = .healthy
+    var state:DriveLineSemanticState = .ready
     var source:String?=nil
     var showsFreshness=true
     var body:some View {
@@ -170,7 +170,7 @@ struct MacSemanticStateGallery:View {
     var body:some View { VStack(alignment:.leading,spacing:14) {
         AppearancePreferencePicker().frame(width:320)
         HStack { ForEach(DriveLineSemanticState.allCases) { StatusPill(state:$0) } }
-        HStack { MetricTile(title:"Coolant",value:"89",unit:"°C",state:.healthy,source:"OBD");MetricTile(title:"Boost",value:nil,unit:"kPa",state:.unavailable,source:"OBD") }
+        HStack { MetricTile(title:"Coolant",value:"89",unit:"°C",state:.ready,source:"OBD");MetricTile(title:"Boost",value:nil,unit:"kPa",state:.unavailable,source:"OBD") }
         RecoveryBanner(title:"Upload queued",message:"The original is safe locally and will retry automatically.")
     }.padding(24).background(Theme.appBackground).foregroundStyle(Theme.primaryText).frame(width:760,height:360) }
 }

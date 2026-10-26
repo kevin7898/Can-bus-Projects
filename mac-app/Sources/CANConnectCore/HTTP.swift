@@ -1,6 +1,6 @@
 import Foundation
 
-public struct HTTPRequest {
+public struct HTTPRequest: Sendable {
     public let method: String
     public let target: String
     public let headers: [String:String]
@@ -40,7 +40,7 @@ public struct HTTPRequest {
         return difference == 0
     }
 }
-public struct HTTPResponse {
+public struct HTTPResponse: Sendable {
     public let status: Int
     public let body: Data
     public init(_ status:Int, data:Data) { self.status = status; self.body = data }

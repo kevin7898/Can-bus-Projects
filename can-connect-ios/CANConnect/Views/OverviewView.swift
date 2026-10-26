@@ -42,7 +42,7 @@ struct OverviewView: View {
                 HStack(spacing:8) {
                     StatusPill(state:gpsState,text:"GPS")
                     StatusPill(state:scannerState,text:scannerLabel)
-                    StatusPill(state:.healthy,text:"Local")
+                    StatusPill(state:.ready,text:"Local")
                 }.accessibilityElement(children:.contain)
                 if presentation.queuedTransfers > 0 { StatusPill(state:.queued,text:"\(presentation.queuedTransfers) queued") }
             }
@@ -65,7 +65,7 @@ struct OverviewView: View {
                     MetricTile(title:"Duration",value:duration(presentation.todayDuration),source:"Recorded",showsFreshness:false)
                     MetricTile(title:"Drives",value:String(presentation.todayDriveCount),source:"Saved locally",showsFreshness:false)
                     MetricTile(title:"Trip fuel",value:presentation.todayFuelLitres?.text(2),unit:"L",
-                               state:presentation.todayFuelLitres == nil ? .unavailable:.healthy,source:"Measured",showsFreshness:false)
+                               state:presentation.todayFuelLitres == nil ? .unavailable:.ready,source:"Measured",showsFreshness:false)
                 }
                 if presentation.todayFuelDriveCount < presentation.todayDriveCount {
                     Text("Trip fuel is shown only for \(presentation.todayFuelDriveCount) of \(presentation.todayDriveCount) drives with measured fuel coverage.")
@@ -123,8 +123,8 @@ struct OverviewView: View {
         }
     }
     private var readinessIcon:String { presentation.readiness == .ready ? "checkmark.circle.fill":"exclamationmark.circle" }
-    private var gpsState:DriveLineSemanticState { store.gps.lastFix == nil ? .stale:.healthy }
-    private var scannerState:DriveLineSemanticState { presentation.scannerConnected ? .healthy:(presentation.scannerConnecting ? .stale:.unavailable) }
+    private var gpsState:DriveLineSemanticState { store.gps.lastFix == nil ? .stale:.ready }
+    private var scannerState:DriveLineSemanticState { presentation.scannerConnected ? .ready:(presentation.scannerConnecting ? .stale:.unavailable) }
     private var scannerLabel:String { presentation.scannerConnected ? "Scanner":(presentation.scannerConnecting ? "Connecting":"No scanner") }
     private func duration(_ seconds:TimeInterval)->String {
         let minutes=max(0,Int(seconds)/60);return minutes>=60 ? "\(minutes/60) h \(minutes%60) m":"\(minutes) min"

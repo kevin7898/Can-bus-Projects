@@ -65,7 +65,7 @@ struct FuelDestinationView:View {
                                     Image(systemName:"fuelpump.fill").foregroundStyle(Theme.fuelAttention)
                                     VStack(alignment:.leading,spacing:4) { Text(entry.stationName ?? "Fuel fill").font(.system(size:12,weight:.semibold));Text(entry.date.formatted(date:.abbreviated,time:.shortened)).font(.system(size:10)).foregroundStyle(Theme.secondaryText) }
                                     Spacer()
-                                    StatusPill(state:entry.isDemo ? .unavailable:(entry.isFullFill ? .healthy:.stale),text:entry.isDemo ? "Sample":(entry.isFullFill ? "Full fill":"Partial fill"))
+                                    StatusPill(state:entry.isDemo ? .unavailable:(entry.isFullFill ? .ready:.stale),text:entry.isDemo ? "Sample":(entry.isFullFill ? "Full fill":"Partial fill"))
                                     Text("\(number(entry.litresPurchased)) L purchased").monospacedDigit()
                                     Text(entry.totalCost.formatted(.currency(code:entry.currencyCode))).monospacedDigit()
                                 }

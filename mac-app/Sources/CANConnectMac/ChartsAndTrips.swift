@@ -10,6 +10,7 @@ struct SignalChart:View {
     var body:some View {
         let series=DriveLineJourneyPolicy.signalSeries(signal.rawValue,unit:signal.unit,recording:trip.sharedRecording)
         let values=series.segments.flatMap{$0}
+        let renderedSegments=DriveLineRenderingPolicy.signalSegments(series.segments)
         VStack(alignment:.leading,spacing:6) {
             HStack {
                 Text(signal.title)
@@ -20,7 +21,7 @@ struct SignalChart:View {
             if values.isEmpty { Text("No recorded \(signal.title.lowercased()) signal").font(.system(size:12)).foregroundStyle(Theme.muted).frame(maxWidth:.infinity,maxHeight:.infinity) }
             else {
                 Chart {
-                    ForEach(Array(series.segments.enumerated()),id:\.offset) { segment,points in
+                    ForEach(Array(renderedSegments.enumerated()),id:\.offset) { segment,points in
                         ForEach(points) { point in
                             LineMark(x:.value("Time",point.timestamp),y:.value(signal.unit,point.value),series:.value("Recorded segment",segment))
                                 .foregroundStyle(series.provenance == .derived ? Theme.fuelAttention:Theme.cobalt)
@@ -69,7 +70,7 @@ struct TripRow:View {
                 }
                 HStack(spacing:8) {
                     let summary=DriveLineJourneyPolicy.summary(for:trip.sharedRecording)
-                    StatusPill(state:summary.quality == .complete ? .healthy:(summary.quality == .unavailable ? .unavailable:.stale),text:summary.quality.title)
+                    StatusPill(state:summary.quality == .complete ? .ready:(summary.quality == .unavailable ? .unavailable:.stale),text:summary.quality.title)
                     if let purpose=annotation.purpose { Label(purpose.title,systemImage:"tag") }
                     Spacer()
                     Label(annotation.reviewed ? "Reviewed":"Unreviewed",systemImage:annotation.reviewed ? "checkmark.circle.fill":"circle")

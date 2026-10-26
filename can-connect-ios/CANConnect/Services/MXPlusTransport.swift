@@ -41,17 +41,16 @@ final class MXPlusAccessories: ObservableObject {
     @Published private(set) var items: [Item] = []
     @Published private(set) var showingPicker = false
     @Published private(set) var pickerMessage: String?
-    private var observations: [NSObjectProtocol] = []
+    private var observations: [MainThreadNotificationObservation] = []
     init() {
         EAAccessoryManager.shared().registerForLocalNotifications()
         for name in [Notification.Name.EAAccessoryDidConnect, .EAAccessoryDidDisconnect] {
-            observations.append(NotificationCenter.default.addObserver(forName:name,object:nil,queue:.main) { [weak self] _ in
+            observations.append(MainThreadNotificationObservation(NotificationCenter.default.addObserver(forName:name,object:nil,queue:.main) { [weak self] _ in
                 Task { @MainActor in self?.refresh() }
-            })
+            }))
         }
         refresh()
     }
-    deinit { observations.forEach(NotificationCenter.default.removeObserver) }
     func refresh() {
         items = MXPlusAccessory.connected.map { Item(id:$0.connectionID,name:$0.name,serial:$0.serialNumber) }
     }

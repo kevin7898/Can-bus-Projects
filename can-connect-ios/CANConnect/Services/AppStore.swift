@@ -232,7 +232,7 @@ final class AppStore: ObservableObject {
     }
     private func checkpoint(at date: Date, force: Bool = false) {
         guard recording, force || date.timeIntervalSince(lastCheckpoint) >= 5 else { return }
-        save(); lastCheckpoint = date
+        DriveLinePerformance.measure("Recording checkpoint") { save() }; lastCheckpoint = date
         updateLiveActivity()
     }
     private func updateLiveActivity() {
@@ -296,6 +296,7 @@ final class AppStore: ObservableObject {
     }
     func cancelGPS() { pendingGPS = false; gps.stop() }
     func finishRecording(endedAt requestedEnd: Date? = nil) {
+        DriveLinePerformance.event("Recording finalization")
         guard var draft = state.draft else { return }
         if draft.source == .scanner { automaticRecordingSuppressed = true }
         let endedAt = pendingRecordingEnd ?? requestedEnd ?? Date()
@@ -357,11 +358,14 @@ final class AppStore: ObservableObject {
         _=try saveFill(litres:litres,cost:cost,currencyCode:"CAD",odometer:odometer,full:full,date:date,stationName:nil,notes:nil)
     }
     func archive(_ trips: [Trip]) throws -> TripArchive {
-        let ids = Set(trips.compactMap(\.vehicleID))
-        let fills=state.fills.filter { $0.vehicleID.map(ids.contains) ?? false }
-        return TripArchive(vehicles:state.vehicles.filter {ids.contains($0.id)},trips:trips,fills:fills,receiptFiles:disk.receiptFiles(fills))
+        DriveLinePerformance.measure("Archive export preparation") {
+            let ids = Set(trips.compactMap(\.vehicleID))
+            let fills=state.fills.filter { $0.vehicleID.map(ids.contains) ?? false }
+            return TripArchive(vehicles:state.vehicles.filter {ids.contains($0.id)},trips:trips,fills:fills,receiptFiles:disk.receiptFiles(fills))
+        }
     }
     func importTrips(_ data: Data) throws {
+        DriveLinePerformance.event("Archive import requested")
         guard canWrite else { throw AppFailure("Saved data is unavailable.") }
         guard !recording, !pendingGPS else { throw AppFailure("Finish recording before importing vehicle history.") }
         guard activeVehicle != nil else { throw AppFailure("Choose a vehicle before importing recordings.") }
@@ -572,6 +576,7 @@ final class AppStore: ObservableObject {
     }
     func sendQueued() async {
         guard !transferring, canWrite else { return }
+        DriveLinePerformance.event("Transfer upload started")
         transferring = true; defer { transferring = false }
         for original in state.transfers where original.status != .complete {
             var item = original
@@ -602,6 +607,7 @@ final class AppStore: ObservableObject {
                 serverStatus = "Transfer needs attention"
             }
         }
+        DriveLinePerformance.event("Transfer upload finished")
     }
     func notify(_ message: String) {
         toastTask?.cancel(); toast = message

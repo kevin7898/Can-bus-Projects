@@ -135,7 +135,7 @@ private struct JourneyRow:View {
                 HStack(spacing:10) {
                     ForEach(sourceTitles,id:\.self) { SourceBadge(source:$0,verified:true) }
                     Spacer()
-                    if let transfer { StatusPill(state:transfer.status == .complete ? .healthy:.queued,text:transfer.status.rawValue.capitalized) }
+                    if let transfer { StatusPill(state:transfer.status == .complete ? .ready:.queued,text:transfer.status.rawValue.capitalized) }
                     Label(annotation.reviewed ? "Reviewed":"Unreviewed",systemImage:annotation.reviewed ? "checkmark.circle.fill":"circle")
                         .font(.caption2).foregroundStyle(annotation.reviewed ? Palette.healthy:Palette.tertiaryText)
                 }
@@ -150,7 +150,7 @@ private struct JourneyRow:View {
         trip.sharedRecording.sourceIDs.map { id in switch id { case "gps":"GPS";case "obd":"OBD";case "synthetic":"Synthetic";default:"Imported" } }
     }
     private var qualityBadge:some View {
-        let state:DriveLineSemanticState=summary.quality == .complete ? .healthy:(summary.quality == .unavailable ? .unavailable:.stale)
+        let state:DriveLineSemanticState=summary.quality == .complete ? .ready:(summary.quality == .unavailable ? .unavailable:.stale)
         return StatusPill(state:state,text:summary.quality.title)
     }
 }
@@ -191,10 +191,10 @@ struct TripStoryView:View {
                 if dynamicTypeSize.isAccessibilitySize {
                     VStack(alignment:.leading,spacing:8) {
                         ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) }
-                        StatusPill(state:summary.quality == .complete ? .healthy:.stale,text:summary.quality.title)
+                        StatusPill(state:summary.quality == .complete ? .ready:.stale,text:summary.quality.title)
                     }
                 } else {
-                    HStack { ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) };Spacer();StatusPill(state:summary.quality == .complete ? .healthy:.stale,text:summary.quality.title) }
+                    HStack { ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) };Spacer();StatusPill(state:summary.quality == .complete ? .ready:.stale,text:summary.quality.title) }
                 }
             }
             if !trip.route.isEmpty { NativeRouteMap(route:trip.route,selectedPoint:selectedRoutePoint).frame(height:230).clipShape(RoundedRectangle(cornerRadius:14)) }
@@ -240,7 +240,7 @@ struct TripStoryView:View {
                     }.buttonStyle(.plain)
                 }
                 if let transfer=store.state.transfers.first(where:{$0.tripID==trip.id}) {
-                    HStack { Image(systemName:"arrow.up.circle");Text("Transfer \(transfer.status.rawValue): \(transfer.message)");Spacer();StatusPill(state:transfer.status == .complete ? .healthy:.queued) }.font(.caption)
+                    HStack { Image(systemName:"arrow.up.circle");Text("Transfer \(transfer.status.rawValue): \(transfer.message)");Spacer();StatusPill(state:transfer.status == .complete ? .ready:.queued) }.font(.caption)
                 }
             }
             if let samples=trip.samples,!samples.isEmpty {
@@ -289,6 +289,7 @@ private struct PhoneSignalChart:View {
     let choice:HistoricalSignalChoice
     @Binding var playbackSeconds:Double
     private var series:DriveLineSignalSeries { DriveLineJourneyPolicy.signalSeries(choice.key,unit:choice.unit,recording:trip.sharedRecording) }
+    private var renderedSegments:[[DriveLineSignalPoint]] { DriveLineRenderingPolicy.signalSegments(series.segments) }
     var body:some View {
         VStack(alignment:.leading,spacing:6) {
             HStack {
@@ -299,7 +300,7 @@ private struct PhoneSignalChart:View {
             if series.segments.flatMap({$0}).isEmpty { Text("No recorded \(choice.title.lowercased()) observations").captionStyle().frame(maxWidth:.infinity,minHeight:80) }
             else {
                 Chart {
-                    ForEach(Array(series.segments.enumerated()),id:\.offset) { segment,points in
+                    ForEach(Array(renderedSegments.enumerated()),id:\.offset) { segment,points in
                         ForEach(points) { point in LineMark(x:.value("Time",point.timestamp),y:.value(choice.unit,point.value),series:.value("Observed segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt) }
                     }
                     ForEach(DriveLineJourneyPolicy.timeline(for:trip.sharedRecording).filter{$0.severity == .attention}) { event in RuleMark(x:.value("Evidence event",event.timestamp)).foregroundStyle(Palette.recordingFault.opacity(0.55)).lineStyle(StrokeStyle(lineWidth:1,dash:[2,3])) }
@@ -439,15 +440,16 @@ private struct PhoneSignalOverviewRow:View {
         }.frame(maxWidth:.infinity,alignment:.leading)
     }
     private var semanticState:DriveLineSemanticState {
-        stats.freshness == .fresh ? .healthy:(stats.freshness == .stale ? .stale:.unavailable)
+        stats.freshness == .fresh ? .ready:(stats.freshness == .stale ? .stale:.unavailable)
     }
 }
 
 private struct SignalSparkline:View {
     let series:DriveLineSignalSeries
     var body:some View {
+        let renderedSegments=DriveLineRenderingPolicy.signalSegments(series.segments,limit:240)
         Chart {
-            ForEach(Array(series.segments.enumerated()),id:\.offset) { segment,points in
+            ForEach(Array(renderedSegments.enumerated()),id:\.offset) { segment,points in
                 ForEach(points) { point in
                     LineMark(x:.value("Recorded time",point.timestamp),y:.value("Recorded value",point.value),series:.value("Gap-aware segment",segment))
                         .foregroundStyle(Palette.cobalt).lineStyle(StrokeStyle(lineWidth:1.4))
@@ -540,11 +542,12 @@ private struct PhoneSignalDetailView:View {
         }
     }
     private var trace:some View {
-        SectionCard(title:"Full recorded trace",icon:"chart.xyaxis.line") {
+        let renderedSegments=DriveLineRenderingPolicy.signalSegments(series.segments)
+        return SectionCard(title:"Full recorded trace",icon:"chart.xyaxis.line") {
             if series.segments.flatMap({$0}).isEmpty { Text("Unavailable — this identifier has no finite recorded observations.").captionStyle().frame(maxWidth:.infinity,minHeight:120) }
             else {
                 Chart {
-                    ForEach(Array(series.segments.enumerated()),id:\.offset) { segment,points in
+                    ForEach(Array(renderedSegments.enumerated()),id:\.offset) { segment,points in
                         ForEach(points) { point in
                             LineMark(x:.value("Elapsed seconds",point.timestamp.timeIntervalSince(trip.startedAt)),y:.value(descriptor.unit ?? "Recorded value",point.value),series:.value("Recorded segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt)
                             PointMark(x:.value("Elapsed seconds",point.timestamp.timeIntervalSince(trip.startedAt)),y:.value(descriptor.unit ?? "Recorded value",point.value)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt).symbolSize(8)

@@ -12,6 +12,7 @@ import AppKit
     @StateObject private var store:AppStore
     @AppStorage(DriveLineAppearance.storageKey) private var appearanceRaw=DriveLineAppearance.system.rawValue
     init() {
+        DriveLinePerformance.event("Application launch")
         let args = CommandLine.arguments
         func argument(_ key:String) -> String? { guard let i = args.firstIndex(of:key),args.indices.contains(i+1) else { return nil };return args[i+1] }
         let root = argument("--library").map { URL(fileURLWithPath:$0,isDirectory:true) }

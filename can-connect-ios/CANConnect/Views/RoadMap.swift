@@ -60,6 +60,7 @@ struct NativeRouteMap: UIViewRepresentable {
         private let location = MKPointAnnotation()
 
         func update(_ view:MKMapView,route:[RoutePoint],isLive:Bool,isSample:Bool,selectedPoint:RoutePoint? = nil,fitRequest:Int = 0) {
+            DriveLinePerformance.event("Map annotation update")
             let routeChanged=points != route || live != isLive || sample != isSample
             let selectionChanged=selection != selectedPoint
             let fitChanged=lastFitRequest != fitRequest

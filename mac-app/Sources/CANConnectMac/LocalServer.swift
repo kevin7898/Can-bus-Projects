@@ -2,13 +2,14 @@ import Foundation
 import Network
 import Security
 
-final class LocalServer {
+// Network callbacks and mutable connection state are confined to `queue`.
+final class LocalServer: @unchecked Sendable {
     private var listener: NWListener?
     private let queue = DispatchQueue(label:"can.connect.http")
     private var connections: [UUID:NWConnection] = [:]
     var onState: ((String) -> Void)?
     deinit { listener?.cancel();connections.values.forEach { $0.cancel() } }
-    func start(port:UInt16, allowLAN:Bool, token:String, handler:@escaping (HTTPRequest) async -> HTTPResponse) throws {
+    func start(port:UInt16, allowLAN:Bool, token:String, handler:@escaping @Sendable (HTTPRequest) async -> HTTPResponse) throws {
         stop()
         guard let nwPort = NWEndpoint.Port(rawValue:port) else { throw CANError.invalid("Choose a port from 1 to 65535.") }
         let params = NWParameters.tcp
@@ -38,7 +39,7 @@ final class LocalServer {
         listener?.cancel(); listener = nil
         queue.async { [weak self] in self?.connections.values.forEach { $0.cancel() }; self?.connections.removeAll() }
     }
-    private func receive(_ connection:NWConnection,id:UUID,buffer:Data,token:String,handler:@escaping (HTTPRequest) async -> HTTPResponse) {
+    private func receive(_ connection:NWConnection,id:UUID,buffer:Data,token:String,handler:@escaping @Sendable (HTTPRequest) async -> HTTPResponse) {
         connection.receive(minimumIncompleteLength:1,maximumLength:65536) { [weak self] data,_,complete,error in
             guard let self = self else { connection.cancel(); return }
             var next = buffer; if let data = data { next.append(data) }
@@ -56,7 +57,7 @@ final class LocalServer {
     private func send(_ response:HTTPResponse,_ connection:NWConnection,_ id:UUID) {
         queue.async { [weak self] in
             connection.send(content:response.wire,completion:.contentProcessed { [weak self] _ in
-                connection.cancel(); self?.queue.async { self?.connections.removeValue(forKey:id) }
+                connection.cancel(); self?.connections.removeValue(forKey:id)
             })
         }
     }

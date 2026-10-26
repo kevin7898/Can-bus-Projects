@@ -13,7 +13,7 @@ struct DriveLedgerTodayView:View {
                     Text(presentation.date.formatted(.dateTime.weekday(.wide).day().month(.wide))).font(.title2.weight(.semibold))
                     Text(presentation.vehicle?.name ?? "No vehicle selected").foregroundStyle(Theme.secondaryText)
                 }
-                Spacer();StatusPill(state:store.readOnly ? .unavailable:.healthy,text:store.readOnly ? "Library read only":"Library ready")
+                Spacer();StatusPill(state:store.readOnly ? .unavailable:.ready,text:store.readOnly ? "Library read only":"Library ready")
                 StatusPill(state:serverState,text:"Server: \(store.serverStatus)")
                 if presentation.queuedImports>0 { StatusPill(state:.queued,text:"\(presentation.queuedImports) queued") }
             }
@@ -28,13 +28,13 @@ struct DriveLedgerTodayView:View {
     private var summary:some View {
         LazyVGrid(columns:Array(repeating:GridItem(.flexible(minimum:150)),count:4),spacing:10) {
             MetricTile(title:"Distance today",value:presentation.todayDistanceKm.map{number($0,digits:1)},unit:"km",
-                       state:presentation.todayDistanceKm == nil ? .unavailable:.healthy,source:"Recorded",showsFreshness:false)
+                       state:presentation.todayDistanceKm == nil ? .unavailable:.ready,source:"Recorded",showsFreshness:false)
             MetricTile(title:"Duration today",value:presentation.todayTrips.isEmpty ? nil:duration(presentation.todayDuration),
-                       state:presentation.todayTrips.isEmpty ? .unavailable:.healthy,source:"Recorded",showsFreshness:false)
+                       state:presentation.todayTrips.isEmpty ? .unavailable:.ready,source:"Recorded",showsFreshness:false)
             MetricTile(title:"Drives today",value:presentation.todayTrips.isEmpty ? nil:String(presentation.todayTrips.count),
-                       state:presentation.todayTrips.isEmpty ? .unavailable:.healthy,source:"Local library",showsFreshness:false)
+                       state:presentation.todayTrips.isEmpty ? .unavailable:.ready,source:"Local library",showsFreshness:false)
             MetricTile(title:"Trip fuel today",value:presentation.todayFuelLitres.map{number($0,digits:2)},unit:"L",
-                       state:presentation.todayFuelLitres == nil ? .unavailable:.healthy,source:"Measured",showsFreshness:false)
+                       state:presentation.todayFuelLitres == nil ? .unavailable:.ready,source:"Measured",showsFreshness:false)
         }
     }
 
@@ -81,6 +81,6 @@ struct DriveLedgerTodayView:View {
             }
         }
     }
-    private var serverState:DriveLineSemanticState { store.serverStatus=="Listening" ? .healthy:(store.serverStatus=="Stopped" ? .unavailable:.stale) }
+    private var serverState:DriveLineSemanticState { store.serverStatus=="Listening" ? .ready:(store.serverStatus=="Stopped" ? .unavailable:.stale) }
     private func keyValue(_ label:String,_ value:String)->some View { HStack { Text(label).foregroundStyle(Theme.secondaryText);Spacer();Text(value).monospacedDigit() }.font(.system(size:11)) }
 }

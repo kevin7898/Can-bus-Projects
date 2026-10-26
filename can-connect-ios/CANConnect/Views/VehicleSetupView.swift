@@ -407,7 +407,7 @@ struct GarageDestinationView: View {
                 Image(systemName:vehicle.kind.icon).font(.title2).foregroundStyle(Palette.blue)
                 VStack(alignment:.leading,spacing:4) { Text(vehicle.title).font(.system(size:16,weight:.semibold));Text(vehicle.detail.isEmpty ? vehicle.identificationSource:vehicle.detail).captionStyle() }
                 Spacer()
-                if store.state.selectedVehicleID==vehicle.id { StatusPill(state:.healthy,text:"Current") }
+                if store.state.selectedVehicleID==vehicle.id { StatusPill(state:.ready,text:"Current") }
                 else if vehicle.isArchived { StatusPill(state:.unavailable,text:"Archived") }
             }
             HStack { SourceBadge(source:vehicle.configuredSources.contains(.phoneGPS) ? "GPS configured":"GPS unavailable");SourceBadge(source:vehicle.configuredSources.contains(.obdScanner) ? "Scanner configured":"Scanner unavailable") }

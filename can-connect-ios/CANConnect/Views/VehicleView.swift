@@ -211,8 +211,8 @@ struct FuelLedgerView:View {
                 SectionCard(title:entry.stationName ?? "Fuel fill",icon:"fuelpump.fill") {
                     Group {
                         if dynamicTypeSize.isAccessibilitySize {
-                            VStack(alignment:.leading,spacing:8) { Text(entry.date.formatted(date:.abbreviated,time:.shortened));StatusPill(state:entry.isSample ? .unavailable:(entry.full ? .healthy:.stale),text:entry.isSample ? "Sample":(entry.full ? "Full fill":"Partial fill")) }
-                        } else { HStack { Text(entry.date.formatted(date:.abbreviated,time:.shortened));Spacer();StatusPill(state:entry.isSample ? .unavailable:(entry.full ? .healthy:.stale),text:entry.isSample ? "Sample":(entry.full ? "Full fill":"Partial fill")) } }
+                            VStack(alignment:.leading,spacing:8) { Text(entry.date.formatted(date:.abbreviated,time:.shortened));StatusPill(state:entry.isSample ? .unavailable:(entry.full ? .ready:.stale),text:entry.isSample ? "Sample":(entry.full ? "Full fill":"Partial fill")) }
+                        } else { HStack { Text(entry.date.formatted(date:.abbreviated,time:.shortened));Spacer();StatusPill(state:entry.isSample ? .unavailable:(entry.full ? .ready:.stale),text:entry.isSample ? "Sample":(entry.full ? "Full fill":"Partial fill")) } }
                     }.font(.caption)
                     DataRow(label:"Purchased",value:"\(entry.litres.text(2)) L")
                     DataRow(label:"Cost",value:entry.costCAD.formatted(.currency(code:entry.currencyCode)))

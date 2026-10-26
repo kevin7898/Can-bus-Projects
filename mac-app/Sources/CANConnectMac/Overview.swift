@@ -208,7 +208,7 @@ struct SignalsView:View {
             HStack(spacing:10) {
                 if evidenceRender {
                     Label(trip.name,systemImage:"record.circle").padding(.horizontal,10).padding(.vertical,6).background(Theme.fieldSurface,in:RoundedRectangle(cornerRadius:6))
-                    StatusPill(state:comparing ? .queued:.healthy,text:comparing ? "Comparison active":"Single recording")
+                    StatusPill(state:comparing ? .queued:.ready,text:comparing ? "Comparison active":"Single recording")
                     if let comparison { Label(comparison.name,systemImage:"rectangle.on.rectangle").foregroundStyle(Theme.fuelAttention) }
                 } else {
                     Picker("Recording",selection:Binding(get:{Optional(trip.id)},set:{store.selectedTripID=$0})) {
@@ -415,7 +415,7 @@ private struct MacSignalLane:View {
                         }
                     }
                     Spacer()
-                    StatusPill(state:stats.freshness == .fresh ? .healthy:(stats.freshness == .stale ? .stale:.unavailable),text:stats.freshness.title)
+                    StatusPill(state:stats.freshness == .fresh ? .ready:(stats.freshness == .stale ? .stale:.unavailable),text:stats.freshness.title)
                 }.font(.system(size:10))
                 SignalStatsStrip(name:trip.name,unit:descriptor.unit,coverage:series.coverage?.fraction,stats:stats)
                 laneChart
@@ -425,9 +425,9 @@ private struct MacSignalLane:View {
     }
 
     private var laneChart:some View {
-        let primary=DriveLineJourneyPolicy.alignedSegments(series,recording:trip.sharedRecording,alignment:alignment)
+        let primary=DriveLineRenderingPolicy.alignedSegments(DriveLineJourneyPolicy.alignedSegments(series,recording:trip.sharedRecording,alignment:alignment))
         let comparisonSeries=comparison.map { DriveLineJourneyPolicy.signalSeries(key,unit:descriptor.unit ?? "",recording:$0.sharedRecording) }
-        let secondary=comparison.flatMap { recording in comparisonSeries.map { DriveLineJourneyPolicy.alignedSegments($0,recording:recording.sharedRecording,alignment:alignment) } } ?? []
+        let secondary=comparison.flatMap { recording in comparisonSeries.map { DriveLineRenderingPolicy.alignedSegments(DriveLineJourneyPolicy.alignedSegments($0,recording:recording.sharedRecording,alignment:alignment)) } } ?? []
         return Chart {
             ForEach(Array(primary.enumerated()),id:\.offset) { segment,points in
                 ForEach(points) { value in

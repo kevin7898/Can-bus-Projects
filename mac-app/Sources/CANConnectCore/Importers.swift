@@ -3,7 +3,7 @@ import Foundation
 import DriveLineShared
 #endif
 
-public struct ImportResult {
+public struct ImportResult: Sendable {
     public var trips: [Trip]
     public var fuelEntries:[FuelEntry]
     public var receiptFiles:[String:Data]

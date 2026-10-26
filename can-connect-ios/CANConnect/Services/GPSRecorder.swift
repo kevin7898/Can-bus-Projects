@@ -2,6 +2,15 @@ import CoreLocation
 import Combine
 import UIKit
 
+/// NotificationCenter's opaque Objective-C token is thread-safe to remove but
+/// is not annotated Sendable. Owning it in this small wrapper keeps actor-owned
+/// services from reaching into a non-Sendable token during nonisolated deinit.
+final class MainThreadNotificationObservation: @unchecked Sendable {
+    private let token:NSObjectProtocol
+    init(_ token:NSObjectProtocol) { self.token=token }
+    deinit { NotificationCenter.default.removeObserver(token) }
+}
+
 enum GPSPermissionState:Equatable { case notDetermined,denied,restricted,available }
 
 @MainActor
@@ -30,8 +39,8 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
     var onReady: (() -> Void)?
     var onFailure: ((String) -> Void)?
     private let manager: CLLocationManager
-    private let isForeground: () -> Bool
-    private var foregroundObserver: NSObjectProtocol?
+    private let isForeground: @MainActor () -> Bool
+    private var foregroundObserver: MainThreadNotificationObservation?
     private var upgradeAfterPermission = false
     private var wantsRecording = false
     var permissionState:GPSPermissionState {
@@ -46,20 +55,20 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
     // Core Location delivers delegate calls on the run loop where its manager was created.
     // This manager is created on the main actor; the conformance checks that at runtime.
     init(manager: CLLocationManager = CLLocationManager(),
-         isForeground: @escaping () -> Bool = { UIApplication.shared.applicationState == .active }) {
-        self.manager = manager; self.isForeground = isForeground
+         isForeground: (@MainActor () -> Bool)? = nil) {
+        self.manager = manager
+        self.isForeground = isForeground ?? { UIApplication.shared.applicationState == .active }
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.distanceFilter = 5
         manager.activityType = .automotiveNavigation
         manager.pausesLocationUpdatesAutomatically = false
-        foregroundObserver = NotificationCenter.default.addObserver(forName:UIApplication.didBecomeActiveNotification,object:nil,queue:.main) { [weak self] _ in
+        foregroundObserver = MainThreadNotificationObservation(NotificationCenter.default.addObserver(forName:UIApplication.didBecomeActiveNotification,object:nil,queue:.main) { [weak self] _ in
             Task { @MainActor in self?.resumeIfRequested() }
-        }
+        })
         updateIdleStatus()
     }
-    deinit { if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) } }
     func requestAutomaticAuthorization() {
         guard isForeground() else { return }
         switch manager.authorizationStatus {

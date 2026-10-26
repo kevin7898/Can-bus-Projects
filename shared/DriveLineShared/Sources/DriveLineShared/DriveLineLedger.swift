@@ -404,26 +404,30 @@ public enum DriveLineJourneyPolicy {
 
     public static func signalStatistics(_ series: DriveLineSignalSeries, at cursor: Date,
                                         visibleRange: DateInterval? = nil) -> DriveLineSignalStatistics {
-        let allPoints=series.segments.flatMap{$0}.filter{$0.value.isFinite}.sorted{$0.timestamp < $1.timestamp}
-        let points = allPoints.filter { point in
-            point.value.isFinite && (visibleRange.map { point.timestamp >= $0.start && point.timestamp <= $0.end } ?? true)
-        }.sorted { $0.timestamp < $1.timestamp }
-        var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineMetricPolicy.maximumSignalGap)
-        result.latestObservation=allPoints.last?.timestamp
-        result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
-        return result
+        DriveLinePerformance.measure("Signal statistics") {
+            let allPoints=series.segments.flatMap{$0}.filter{$0.value.isFinite}.sorted{$0.timestamp < $1.timestamp}
+            let points = allPoints.filter { point in
+                point.value.isFinite && (visibleRange.map { point.timestamp >= $0.start && point.timestamp <= $0.end } ?? true)
+            }.sorted { $0.timestamp < $1.timestamp }
+            var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineMetricPolicy.maximumSignalGap)
+            result.latestObservation=allPoints.last?.timestamp
+            result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
+            return result
+        }
     }
 
     public static func signalStatistics(_ series: DriveLineSignalSeries, recording: DriveLineRecording,
                                         alignment: DriveLineSignalAlignment, visibleRange: ClosedRange<Double>,
                                         at cursor: Date) -> DriveLineSignalStatistics {
-        let allPoints=series.segments.flatMap{$0}.filter{$0.value.isFinite}.sorted{$0.timestamp < $1.timestamp}
-        let points = alignedSegments(series,recording:recording,alignment:alignment).flatMap { $0 }
-            .filter { visibleRange.contains($0.position) }.map(\.point)
-        var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineMetricPolicy.maximumSignalGap)
-        result.latestObservation=allPoints.last?.timestamp
-        result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
-        return result
+        DriveLinePerformance.measure("Signal statistics aligned") {
+            let allPoints=series.segments.flatMap{$0}.filter{$0.value.isFinite}.sorted{$0.timestamp < $1.timestamp}
+            let points = alignedSegments(series,recording:recording,alignment:alignment).flatMap { $0 }
+                .filter { visibleRange.contains($0.position) }.map(\.point)
+            var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineMetricPolicy.maximumSignalGap)
+            result.latestObservation=allPoints.last?.timestamp
+            result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
+            return result
+        }
     }
 
     public static func distanceAlignmentAvailability(_ recording: DriveLineRecording) -> DriveLineAlignmentAvailability {

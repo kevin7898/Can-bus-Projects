@@ -123,7 +123,7 @@ public struct Vehicle: Codable, Identifiable, Equatable {
     }
 }
 
-public struct TelemetrySample: Codable, Identifiable, Equatable {
+public struct TelemetrySample: Codable, Identifiable, Equatable, Sendable {
     public var timestamp: Date
     public var latitude: Double?
     public var longitude: Double?
@@ -145,7 +145,7 @@ public struct TelemetrySample: Codable, Identifiable, Equatable {
     public func value(_ signal: Signal) -> Double? { signals[signal.rawValue] }
 }
 
-public struct Trip: Codable, Identifiable {
+public struct Trip: Codable, Identifiable, Sendable {
     public var id: UUID
     public var vehicleID: UUID
     public var receiptID: UUID
@@ -246,7 +246,7 @@ public struct SignalTracePoint:Identifiable {
     public var id:Date { sample.timestamp }
 }
 
-public struct FuelEntry:Codable,Identifiable,Equatable {
+public struct FuelEntry:Codable,Identifiable,Equatable,Sendable {
     public var id:UUID
     public var vehicleID:UUID
     public var date:Date

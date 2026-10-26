@@ -17,22 +17,26 @@ public final class LibraryRepository {
         try FileManager.default.createDirectory(at:receiptFiles,withIntermediateDirectories:true)
     }
     public func load() throws -> LibraryState {
-        guard FileManager.default.fileExists(atPath: manifest.path) else { return LibraryState() }
-        let result = try Self.decoder().decode(LibraryState.self, from: Data(contentsOf: manifest))
-        guard (1...3).contains(result.schemaVersion) else { throw CANError.invalid("This library uses an unsupported schema. Keep the original file and update the app.") }
-        var migrated=result;migrated.schemaVersion=3
-        return migrated
+        try DriveLinePerformance.measure("Library decode") {
+            guard FileManager.default.fileExists(atPath: manifest.path) else { return LibraryState() }
+            let result = try Self.decoder().decode(LibraryState.self, from: Data(contentsOf: manifest))
+            guard (1...3).contains(result.schemaVersion) else { throw CANError.invalid("This library uses an unsupported schema. Keep the original file and update the app.") }
+            var migrated=result;migrated.schemaVersion=3
+            return migrated
+        }
     }
     public func save(_ state: LibraryState) throws {
-        let data = try Self.encoder().encode(state)
-        _ = try Self.decoder().decode(LibraryState.self,from:data)
-        if FileManager.default.fileExists(atPath:manifest.path),
-           let current=try? Data(contentsOf:manifest),
-           let decoded=try? Self.decoder().decode(LibraryState.self,from:current),
-           (1...3).contains(decoded.schemaVersion) {
-            try current.write(to:stateBackup,options:.atomic)
+        try DriveLinePerformance.measure("Library save") {
+            let data = try Self.encoder().encode(state)
+            _ = try Self.decoder().decode(LibraryState.self,from:data)
+            if FileManager.default.fileExists(atPath:manifest.path),
+               let current=try? Data(contentsOf:manifest),
+               let decoded=try? Self.decoder().decode(LibraryState.self,from:current),
+               (1...3).contains(decoded.schemaVersion) {
+                try current.write(to:stateBackup,options:.atomic)
+            }
+            try data.write(to: manifest, options: .atomic)
         }
-        try data.write(to: manifest, options: .atomic)
     }
     public func validStateBackup() ->LibraryState? {
         guard let bytes=try? Data(contentsOf:stateBackup),
@@ -69,21 +73,23 @@ public final class LibraryRepository {
         }
     }
     public func storeReceiptFiles(_ files:[String:Data],for entries:[FuelEntry]) throws {
-        var metadata:[String:DriveLineReceiptMetadata]=[:]
-        for value in entries.compactMap(\.receipt) {
-            let digest=value.sha256.lowercased()
-            if let existing=metadata[digest],existing.byteCount != value.byteCount { throw CANError.invalid("Duplicate receipt metadata disagrees about the file size.") }
-            metadata[digest]=value
-        }
-        for (digest,data) in files {
-            guard let value=metadata[digest.lowercased()],value.byteCount==data.count,
-                  SHA256.hash(data:data).map({String(format:"%02x",$0)}).joined()==digest.lowercased() else {
-                throw CANError.invalid("Receipt attachment does not match its metadata.")
+        try DriveLinePerformance.measure("Receipt hashing and copy") {
+            var metadata:[String:DriveLineReceiptMetadata]=[:]
+            for value in entries.compactMap(\.receipt) {
+                let digest=value.sha256.lowercased()
+                if let existing=metadata[digest],existing.byteCount != value.byteCount { throw CANError.invalid("Duplicate receipt metadata disagrees about the file size.") }
+                metadata[digest]=value
             }
-            let destination=receiptURL(value)
-            if FileManager.default.fileExists(atPath:destination.path) {
-                guard try Data(contentsOf:destination)==data else { throw CANError.invalid("A different receipt already uses this content hash.") }
-            } else { try data.write(to:destination,options:.atomic) }
+            for (digest,data) in files {
+                guard let value=metadata[digest.lowercased()],value.byteCount==data.count,
+                      SHA256.hash(data:data).map({String(format:"%02x",$0)}).joined()==digest.lowercased() else {
+                    throw CANError.invalid("Receipt attachment does not match its metadata.")
+                }
+                let destination=receiptURL(value)
+                if FileManager.default.fileExists(atPath:destination.path) {
+                    guard try Data(contentsOf:destination)==data else { throw CANError.invalid("A different receipt already uses this content hash.") }
+                } else { try data.write(to:destination,options:.atomic) }
+            }
         }
     }
     public func backup(to destination: URL) throws -> URL {

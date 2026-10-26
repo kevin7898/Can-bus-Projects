@@ -6,6 +6,16 @@ import CryptoKit
 import DriveLineShared
 #endif
 
+private enum BackgroundImportProcessor {
+    static func parse(url:URL,vehicleID:UUID,receiptID:UUID) async throws ->ImportResult {
+        try await Task.detached(priority:.userInitiated) {
+            let prepared = try FilePreparation.prepare(url)
+            defer { if let cleanup = prepared.cleanup { try? FileManager.default.removeItem(at:cleanup) } }
+            return try RecordingImporter.parse(url:prepared.url,vehicleID:vehicleID,receiptID:receiptID)
+        }.value
+    }
+}
+
 @MainActor final class AppStore: ObservableObject {
     @Published private(set) var state = LibraryState()
     @Published var error: String?
@@ -187,16 +197,13 @@ import DriveLineShared
     func retry(_ id:UUID) { perform { try commit { state in if let i = state.receipts.firstIndex(where:{$0.id==id}) { state.receipts[i].status = .queued; state.receipts[i].message = "Queued for retry" } } }; Task { await processPending() } }
     func processPending() async {
         guard !processing,!ingestionPaused,!readOnly,let repo = repository else { return }
+        DriveLinePerformance.event("Mac processing started")
         processing = true; defer { processing = false }
         while !ingestionPaused, let receipt = state.receipts.first(where:{$0.status == .queued}) {
             do {
                 try commit { state in if let i = state.receipts.firstIndex(where:{$0.id==receipt.id}) { state.receipts[i].status = .processing; state.receipts[i].message = "Processing preserved original" } }
                 let url = repo.originalURL(receipt)
-                let result = try await Task.detached(priority:.userInitiated) {
-                    let prepared = try FilePreparation.prepare(url)
-                    defer { if let cleanup = prepared.cleanup { try? FileManager.default.removeItem(at:cleanup) } }
-                    return try RecordingImporter.parse(url:prepared.url,vehicleID:receipt.vehicleID,receiptID:receipt.id)
-                }.value
+                let result = try await BackgroundImportProcessor.parse(url:url,vehicleID:receipt.vehicleID,receiptID:receipt.id)
                 try repo.storeReceiptFiles(result.receiptFiles,for:result.fuelEntries)
                 try commit { state in
                     let stableIDs = Set(result.trips.map(\.id))
@@ -214,10 +221,12 @@ import DriveLineShared
                 catch { self.error = "Import status could not be saved. Original preserved: \(error.localizedDescription)"; break }
             }
         }
+        DriveLinePerformance.event("Mac processing finished")
     }
     func togglePause() { ingestionPaused.toggle(); if !ingestionPaused { Task { await processPending() } } }
     func startServer() {
         do {
+            DriveLinePerformance.event("Server start")
             let token = try apiToken ?? PairingKeychain.token(); apiToken = token
             serverStatus = "Starting"
             try server.start(port:state.serverPort,allowLAN:state.allowLAN,token:token) { [weak self] request in
@@ -233,8 +242,8 @@ import DriveLineShared
             guard let self = self else { return HTTPResponse(503,json:["error":"App unavailable"]) }; return await self.handle(request)
         }
     }
-    func stopServer() { server.stop(); serverStatus = "Stopped"; perform { try commit { $0.autoStartServer = false } } }
-    func stopServerForQuit() { server.stop();serverStatus="Stopped after quit" }
+    func stopServer() { DriveLinePerformance.event("Server shutdown"); server.stop(); serverStatus = "Stopped"; perform { try commit { $0.autoStartServer = false } } }
+    func stopServerForQuit() { DriveLinePerformance.event("Server shutdown");server.stop();serverStatus="Stopped after quit" }
     func configureServer(port:UInt16,lan:Bool) { perform { try commit { $0.serverPort = port; $0.allowLAN = lan } }; if serverStatus=="Listening" { startServer() } }
     func copyToken() { perform { let token = try apiToken ?? PairingKeychain.token(); apiToken = token; NSPasteboard.general.clearContents(); NSPasteboard.general.setString(token,forType:.string); notice = "Pairing token copied." } }
     func openLibrary() { NSWorkspace.shared.open(libraryURL) }

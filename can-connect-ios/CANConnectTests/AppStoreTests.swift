@@ -70,7 +70,7 @@ final class AppStoreTests: XCTestCase {
         let boost=try XCTUnwrap(value.metrics.first{$0.key=="boostGaugeKpa"})
         let trigger=try XCTUnwrap(value.metrics.first{$0.key=="dpfRegenTrigger"})
         XCTAssertEqual(rpm.value,1800);XCTAssertEqual(rpm.state,.stale)
-        XCTAssertEqual(coolant.value,89);XCTAssertEqual(coolant.state,.healthy)
+        XCTAssertEqual(coolant.value,89);XCTAssertEqual(coolant.state,.ready)
         XCTAssertNil(boost.value);XCTAssertEqual(boost.state,.unavailable)
         XCTAssertEqual(trigger.value,43,"Trigger remains a normalized indicator rather than physical fullness")
     }
@@ -85,7 +85,7 @@ final class AppStoreTests: XCTestCase {
             scannerConnected:true,scannerConnecting:false,scannerStatus:"Connected",gpsStatus:"Waiting",
             gpsSpeedKMH:nil,gpsLastFix:nil,now:now)
         XCTAssertEqual(gpsLoss.phase,.degraded)
-        XCTAssertEqual(gpsLoss.scannerState,.healthy)
+        XCTAssertEqual(gpsLoss.scannerState,.ready)
         XCTAssertEqual(gpsLoss.recoveryTitle,"GPS unavailable")
         XCTAssertEqual(gpsLoss.queuedStatusTitle,"Upload queued · 1")
 
@@ -93,7 +93,7 @@ final class AppStoreTests: XCTestCase {
             scannerConnected:false,scannerConnecting:false,scannerStatus:"Disconnected",gpsStatus:"Active",
             gpsSpeedKMH:72,gpsLastFix:now,now:now)
         XCTAssertEqual(scannerLoss.phase,.degraded)
-        XCTAssertEqual(scannerLoss.gpsState,.healthy)
+        XCTAssertEqual(scannerLoss.gpsState,.ready)
         XCTAssertEqual(scannerLoss.recoveryTitle,"Scanner disconnected")
     }
 

@@ -135,7 +135,7 @@ final class MacServerClient {
         request.httpMethod = method; request.httpBody = body
         request.setValue("Bearer \(token)",forHTTPHeaderField:"Authorization")
         request.setValue("application/json",forHTTPHeaderField:"Content-Type")
-        let (data,response) = try await session.data(for:request)
+        let (data,response) = try await DriveLinePerformance.measureAsync("Transfer request") { try await session.data(for:request) }
         guard let http = response as? HTTPURLResponse else { throw AppFailure("No HTTP response from the Mac.") }
         guard (200...202).contains(http.statusCode) else {
             switch http.statusCode {

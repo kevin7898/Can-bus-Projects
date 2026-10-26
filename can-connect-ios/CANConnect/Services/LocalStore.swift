@@ -16,23 +16,27 @@ struct LocalStore {
     var recoveryURL:URL { url.deletingLastPathComponent().appendingPathComponent("Recovery",isDirectory:true) }
     func receiptURL(_ metadata:DriveLineReceiptMetadata)->URL { receiptsURL.appendingPathComponent(metadata.sha256.lowercased()) }
     func load() throws -> StoredState? {
-        guard FileManager.default.fileExists(atPath:url.path) else { return nil }
-        var state = try JSONDecoder().decode(StoredState.self, from:Data(contentsOf:url))
-        guard (1...4).contains(state.schemaVersion) else { throw AppFailure("This saved data needs a newer app. Your file has been preserved.") }
-        state.migrateVehicles()
-        return state
+        try DriveLinePerformance.measure("Library decode") {
+            guard FileManager.default.fileExists(atPath:url.path) else { return nil }
+            var state = try JSONDecoder().decode(StoredState.self, from:Data(contentsOf:url))
+            guard (1...4).contains(state.schemaVersion) else { throw AppFailure("This saved data needs a newer app. Your file has been preserved.") }
+            state.migrateVehicles()
+            return state
+        }
     }
     func save(_ state: StoredState) throws {
-        try FileManager.default.createDirectory(at:url.deletingLastPathComponent(), withIntermediateDirectories:true)
-        let data = try JSONEncoder().encode(state)
-        _ = try JSONDecoder().decode(StoredState.self,from:data)
-        if FileManager.default.fileExists(atPath:url.path),
-           let current=try? Data(contentsOf:url),
-           let decoded=try? JSONDecoder().decode(StoredState.self,from:current),
-           (1...4).contains(decoded.schemaVersion) {
-            try current.write(to:backupURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+        try DriveLinePerformance.measure("Library save") {
+            try FileManager.default.createDirectory(at:url.deletingLastPathComponent(), withIntermediateDirectories:true)
+            let data = try JSONEncoder().encode(state)
+            _ = try JSONDecoder().decode(StoredState.self,from:data)
+            if FileManager.default.fileExists(atPath:url.path),
+               let current=try? Data(contentsOf:url),
+               let decoded=try? JSONDecoder().decode(StoredState.self,from:current),
+               (1...4).contains(decoded.schemaVersion) {
+                try current.write(to:backupURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+            }
+            try data.write(to:url, options:[.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
-        try data.write(to:url, options:[.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
     func validBackup() ->StoredState? {
         guard let data=try? Data(contentsOf:backupURL),
@@ -56,15 +60,17 @@ struct LocalStore {
         return value
     }
     func prepareReceipt(_ input:URL) throws ->ReceiptAttachment {
-        let access=input.startAccessingSecurityScopedResource();defer { if access { input.stopAccessingSecurityScopedResource() } }
-        let data=try Data(contentsOf:input,options:.mappedIfSafe)
-        guard !data.isEmpty,data.count<=20*1024*1024 else { throw AppFailure("Choose a non-empty receipt file no larger than 20 MB.") }
-        let digest=SHA256.hash(data:data).map { String(format:"%02x",$0) }.joined()
-        let ext=input.pathExtension.lowercased()
-        let mediaType:String
-        switch ext { case "pdf":mediaType="application/pdf";case "jpg","jpeg":mediaType="image/jpeg";case "png":mediaType="image/png";case "heic","heif":mediaType="image/heic";default:mediaType="application/octet-stream" }
-        let name=String(input.lastPathComponent.prefix(180))
-        return ReceiptAttachment(metadata:DriveLineReceiptMetadata(fileName:name.isEmpty ? "receipt":name,mediaType:mediaType,byteCount:data.count,sha256:digest,capturedAt:Date()),data:data)
+        try DriveLinePerformance.measure("Receipt hashing and copy") {
+            let access=input.startAccessingSecurityScopedResource();defer { if access { input.stopAccessingSecurityScopedResource() } }
+            let data=try Data(contentsOf:input,options:.mappedIfSafe)
+            guard !data.isEmpty,data.count<=20*1024*1024 else { throw AppFailure("Choose a non-empty receipt file no larger than 20 MB.") }
+            let digest=SHA256.hash(data:data).map { String(format:"%02x",$0) }.joined()
+            let ext=input.pathExtension.lowercased()
+            let mediaType:String
+            switch ext { case "pdf":mediaType="application/pdf";case "jpg","jpeg":mediaType="image/jpeg";case "png":mediaType="image/png";case "heic","heif":mediaType="image/heic";default:mediaType="application/octet-stream" }
+            let name=String(input.lastPathComponent.prefix(180))
+            return ReceiptAttachment(metadata:DriveLineReceiptMetadata(fileName:name.isEmpty ? "receipt":name,mediaType:mediaType,byteCount:data.count,sha256:digest,capturedAt:Date()),data:data)
+        }
     }
     func storeReceipt(_ attachment:ReceiptAttachment) throws {
         guard attachment.metadata.sha256.lowercased()==SHA256.hash(data:attachment.data).map({String(format:"%02x",$0)}).joined(),

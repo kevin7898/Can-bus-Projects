@@ -6,12 +6,14 @@ struct CANConnectApp: App {
     @StateObject private var store: AppStore
     @AppStorage(DriveLineAppearance.storageKey) private var appearanceRaw=DriveLineAppearance.system.rawValue
     init() {
+        DriveLinePerformance.event("Application launch")
         #if DEBUG
         if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
             _store = StateObject(wrappedValue:DriveLineCanvas.makeStore())
             return
         }
         #endif
+        #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
             let arguments=ProcessInfo.processInfo.arguments
             if arguments.contains("--appearance-light") { UserDefaults.standard.set(DriveLineAppearance.light.rawValue,forKey:DriveLineAppearance.storageKey) }
@@ -118,6 +120,9 @@ struct CANConnectApp: App {
             }
             _store = StateObject(wrappedValue:testStore)
         } else { _store = StateObject(wrappedValue:AppStore()) }
+        #else
+        _store = StateObject(wrappedValue:AppStore())
+        #endif
     }
     var body: some Scene { WindowGroup {
         #if DEBUG

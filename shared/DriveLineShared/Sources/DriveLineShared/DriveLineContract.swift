@@ -570,26 +570,30 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
     }
 
     public func encoded() throws -> Data {
-        guard schemaVersion == Self.currentSchemaVersion else {
-            throw DriveLineContractError.invalid("Only DriveLine archive schema version 2 can be encoded.")
+        try DriveLinePerformance.measure("Archive export") {
+            guard schemaVersion == Self.currentSchemaVersion else {
+                throw DriveLineContractError.invalid("Only DriveLine archive schema version 2 can be encoded.")
+            }
+            try validate()
+            return try DriveLineJSON.encoder().encode(self)
         }
-        try validate()
-        return try DriveLineJSON.encoder().encode(self)
     }
 
     public static func decoded(_ data: Data, fallbackVehicleID: UUID? = nil,
                                fallbackRecordingID: UUID? = nil) throws -> DriveLineArchive {
-        guard data.count <= 100 * 1024 * 1024 else {
-            throw DriveLineContractError.invalid("DriveLine archive exceeds 100 MB.")
+        try DriveLinePerformance.measure("Archive import") {
+            guard data.count <= 100 * 1024 * 1024 else {
+                throw DriveLineContractError.invalid("DriveLine archive exceeds 100 MB.")
+            }
+            let object = try JSONSerialization.jsonObject(with: data)
+            if let envelope = object as? [String: Any], (envelope["schemaVersion"] as? NSNumber)?.intValue == 2 {
+                let archive = try DriveLineJSON.decoder().decode(DriveLineArchive.self, from: data)
+                try archive.validate()
+                return archive
+            }
+            return try migrateVersion1(object, fallbackVehicleID: fallbackVehicleID,
+                                       fallbackRecordingID: fallbackRecordingID)
         }
-        let object = try JSONSerialization.jsonObject(with: data)
-        if let envelope = object as? [String: Any], (envelope["schemaVersion"] as? NSNumber)?.intValue == 2 {
-            let archive = try DriveLineJSON.decoder().decode(DriveLineArchive.self, from: data)
-            try archive.validate()
-            return archive
-        }
-        return try migrateVersion1(object, fallbackVehicleID: fallbackVehicleID,
-                                   fallbackRecordingID: fallbackRecordingID)
     }
 
     public func validate() throws {

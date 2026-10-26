@@ -45,36 +45,40 @@ public enum DriveLineMetricPolicy {
     public static let boostBarometerFreshness: TimeInterval = 75
 
     public static func metrics(for recording: DriveLineRecording) -> DriveLineMetrics {
-        let duration = max(0, recording.endedAt.timeIntervalSince(recording.startedAt))
-        let gpsDistance = distanceFromGPS(recording.gpsPoints)
-        let speed = integral("speedKph", samples: recording.signalSamples)
-        let speedDistance = speed.map { $0.value / 3600 }
-        let distance = gpsDistance ?? speedDistance ?? recording.recordedDistanceKm
-        let fuel = integral("fuelRateLph", samples: recording.signalSamples)
-        let measuredFuel = fuel.flatMap { duration > 0 && $0.coverage / duration >= requiredFuelCoverage ? $0.value / 3600 : nil }
-        let tripFuel = measuredFuel ?? recording.tripFuelLitres
-        let economy: Double? = distance.flatMap { km -> Double? in
-            guard km > 0.1, let tripFuel else { return nil }
-            return tripFuel / km * 100
+        DriveLinePerformance.measure("Trip metric calculation") {
+            let duration = max(0, recording.endedAt.timeIntervalSince(recording.startedAt))
+            let gpsDistance = distanceFromGPS(recording.gpsPoints)
+            let speed = integral("speedKph", samples: recording.signalSamples)
+            let speedDistance = speed.map { $0.value / 3600 }
+            let distance = gpsDistance ?? speedDistance ?? recording.recordedDistanceKm
+            let fuel = integral("fuelRateLph", samples: recording.signalSamples)
+            let measuredFuel = fuel.flatMap { duration > 0 && $0.coverage / duration >= requiredFuelCoverage ? $0.value / 3600 : nil }
+            let tripFuel = measuredFuel ?? recording.tripFuelLitres
+            let economy: Double? = distance.flatMap { km -> Double? in
+                guard km > 0.1, let tripFuel else { return nil }
+                return tripFuel / km * 100
+            }
+            return DriveLineMetrics(distanceKm: distance, durationSeconds: duration,
+                tripFuelLitres: tripFuel, economyL100Km: economy,
+                coverage: coverageSummaries(recording),
+                distanceSource:gpsDistance != nil ? "gps" : speedDistance != nil ? "speedKph" : recording.recordedDistanceKm != nil ? "recorded" : nil)
         }
-        return DriveLineMetrics(distanceKm: distance, durationSeconds: duration,
-            tripFuelLitres: tripFuel, economyL100Km: economy,
-            coverage: coverageSummaries(recording),
-            distanceSource:gpsDistance != nil ? "gps" : speedDistance != nil ? "speedKph" : recording.recordedDistanceKm != nil ? "recorded" : nil)
     }
 
     public static func routeSegments(_ points: [DriveLineGPSPoint]) -> [[DriveLineGPSPoint]] {
-        var result: [[DriveLineGPSPoint]] = []
-        for point in points.sorted(by: { $0.timestamp < $1.timestamp }) where accepts(point) {
-            guard let previous = result.last?.last else { result.append([point]); continue }
-            let elapsed = point.timestamp.timeIntervalSince(previous.timestamp)
-            let metres = haversineMetres(previous, point)
-            if elapsed > 0, elapsed <= maximumGPSGap,
-               metres / elapsed * 3.6 <= maximumPlausibleSpeedKph {
-                if metres >= minimumGPSMovementM { result[result.count - 1].append(point) }
-            } else { result.append([point]) }
+        DriveLinePerformance.measure("Route processing") {
+            var result: [[DriveLineGPSPoint]] = []
+            for point in points.sorted(by: { $0.timestamp < $1.timestamp }) where accepts(point) {
+                guard let previous = result.last?.last else { result.append([point]); continue }
+                let elapsed = point.timestamp.timeIntervalSince(previous.timestamp)
+                let metres = haversineMetres(previous, point)
+                if elapsed > 0, elapsed <= maximumGPSGap,
+                   metres / elapsed * 3.6 <= maximumPlausibleSpeedKph {
+                    if metres >= minimumGPSMovementM { result[result.count - 1].append(point) }
+                } else { result.append([point]) }
+            }
+            return result
         }
-        return result
     }
 
     public static func distanceFromGPS(_ points: [DriveLineGPSPoint]) -> Double? {

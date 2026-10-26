@@ -18,12 +18,13 @@ widgetfiles = sorted((ROOT/'CANConnectLiveActivity').glob('*.swift')) + sharedfi
 testfiles = sorted((ROOT/'CANConnectTests').glob('*.swift'))
 uifiles = sorted((ROOT/'CANConnectUITests').glob('*.swift'))
 resources = sorted(f for f in (ROOT/'CANConnect/Resources').iterdir() if f.suffix in {'.json','.txt'})
+resources += [ROOT/'CANConnect/PrivacyInfo.xcprivacy']
 resources += [ROOT.parent/'branding/driveline/DriveLine.icon']
 def relative(file): return Path(os.path.relpath(file,ROOT)).as_posix()
 fileIDs = {}; buildIDs = {}
 for file in dict.fromkeys(appfiles + widgetfiles + testfiles + uifiles + resources + [ROOT/'CANConnect/Info.plist', ROOT/'CANConnectLiveActivity/Info.plist']):
     path = relative(file)
-    typ = 'folder.iconcomposer.icon' if file.suffix == '.icon' else 'sourcecode.swift' if file.suffix == '.swift' else 'text.json' if file.suffix == '.json' else 'text' if file.suffix == '.txt' else 'text.plist.xml'
+    typ = 'folder.iconcomposer.icon' if file.suffix == '.icon' else 'sourcecode.swift' if file.suffix == '.swift' else 'text.json' if file.suffix == '.json' else 'text' if file.suffix == '.txt' else 'text.xml' if file.suffix == '.xcprivacy' else 'text.plist.xml'
     fileIDs[path] = add('file:'+path,'PBXFileReference',f'lastKnownFileType = {typ}; path = {q(path)}; sourceTree = SOURCE_ROOT;')
     if file.suffix != '.plist': buildIDs[path] = add('build:'+path,'PBXBuildFile',f'fileRef = {fileIDs[path]};')
 productIDs = {}

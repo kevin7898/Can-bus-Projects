@@ -16,6 +16,7 @@ struct RouteMap:NSViewRepresentable {
     }
     var region:MKCoordinateRegion { MKCoordinateRegion(center:CLLocationCoordinate2D(latitude:viewport.latitude,longitude:viewport.longitude),span:MKCoordinateSpan(latitudeDelta:viewport.latitudeDelta,longitudeDelta:viewport.longitudeDelta)) }
     func updateNSView(_ map:MKMapView,context:Context) {
+        DriveLinePerformance.event("Map annotation update")
         context.coordinator.parent = self
         map.mapType = style=="satellite" ? .hybrid : .mutedStandard
         let signature = trips.map{$0.id.uuidString}.joined(separator:",")
