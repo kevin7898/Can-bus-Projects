@@ -14,7 +14,10 @@ concurrency:
 jobs:
   test:
     runs-on: macos-26
-    timeout-minutes: 25
+    # The complete serial simulator suite now includes the Phase 9.1 large-data
+    # and cancellation coverage. Preserve the serial run while allowing enough
+    # time for the macOS runner to finish and upload its evidence.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Select available iPhone simulator
