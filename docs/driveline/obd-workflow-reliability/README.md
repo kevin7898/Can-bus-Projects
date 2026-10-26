@@ -59,12 +59,20 @@ test evidence only. Simulator: `C975E238-AE3A-4B13-9FE8-477B69F94928`.
 
 | Check | Result |
 |---|---|
-| Initial timestamp/transport milestone iPhone unit suite | 151 executed, 150 passed, 1 hardware skip |
+| Initial timestamp/transport milestone iPhone unit suite | 151 executed, 150 passed, 1 opt-in Mac integration skip |
 | Shared after distance repair | 42 passed |
 | Mac after distance repair | 34 passed |
 | Shared after availability/checkpoint milestone | 43 passed, 0 failures |
 | Mac after availability/checkpoint milestone | 34 passed, 0 failures |
-| iPhone after availability/checkpoint milestone | 155 executed, 154 passed, 1 hardware skip |
+| iPhone after availability/checkpoint milestone | 155 executed, 154 passed, 1 opt-in Mac integration skip |
+| Final shared suite | 44 passed, 0 failures |
+| Final Mac suite | 34 passed, 0 failures |
+| Final iPhone unit suite | 165 executed, 164 passed, 1 opt-in Mac integration skip, 0 failures |
+| Final iPhone UI suite | 23 executed, 21 passed, 2 physical Live Activity skips, 0 failures |
+| Opt-in iPhone → native Mac queue, separately enabled | 1 passed, 0 skips/failures; all 165 unit cases have therefore passed locally across the two configurations |
+| Native Mac API integration | Passed: v2 recording/fuel/receipt transfers, exact originals, identities, auth, deduplication/conflict, retrieval and isolation |
+| Mac Debug build / Mac and iPhone static analysis | Passed with `SWIFT_STRICT_CONCURRENCY=complete` |
+| Mac and iPhone unsigned Release archives | Both passed with complete strict-concurrency checking |
 
 Commands: `swift test --package-path shared/DriveLineShared`,
 `swift test --package-path mac-app`, and
@@ -75,6 +83,61 @@ needed regeneration, discovery expectations needed the protocol-neutral
 baseline, slow-temperature coverage expectations needed availability semantics,
 and journal recovery needed to recognize automatically started drafts not yet
 present in the main state file. These are not counted as passing runs.
+
+The added large-library fixture initially lacked matching scanner/vehicle
+identity; production correctly rejected those samples. The fixture now opens a
+synthetic identity-scoped transport before replay. The failed fixture runs are
+not counted as passes. No production identity check was relaxed to pass it.
+
+Final command artifacts (outside Git): `/tmp/obd-final-shared.log`,
+`/tmp/obd-final-mac.log`, `/tmp/obd-final-all-ios.log`,
+`/tmp/OBDWorkflowFinalTests.xcresult`, `/tmp/obd-final-api.log`,
+`/tmp/obd-final-analysis.log`, `/tmp/obd-final-mac-analysis.log`,
+`/tmp/obd-final-ios-archive.log`, `/tmp/obd-final-mac-archive.log`.
+
+Additional exact commands:
+
+```sh
+xcodebuild test -project can-connect-ios/CANConnect.xcodeproj -scheme CANConnect -destination 'platform=iOS Simulator,id=C975E238-AE3A-4B13-9FE8-477B69F94928' -parallel-testing-enabled NO -derivedDataPath /tmp/DriveLineOBDReliabilityBuild -resultBundlePath /tmp/OBDWorkflowFinalTests.xcresult CODE_SIGNING_ALLOWED=NO
+xcodebuild -project mac-app/CANConnect.xcodeproj -scheme CANConnect -configuration Debug -derivedDataPath /tmp/DriveLineOBDMacBuild CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=complete build
+python3 mac-app/scripts/api_integration.py /tmp/DriveLineOBDMacBuild/Build/Products/Debug/CANConnect.app/Contents/MacOS/CANConnect
+xcodebuild -project can-connect-ios/CANConnect.xcodeproj -scheme CANConnect -destination 'generic/platform=iOS' -derivedDataPath /tmp/DriveLineOBDReleaseBuild CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=complete analyze
+xcodebuild -project mac-app/CANConnect.xcodeproj -scheme CANConnect -configuration Debug -derivedDataPath /tmp/DriveLineOBDMacBuild CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=complete analyze
+xcodebuild archive -project can-connect-ios/CANConnect.xcodeproj -scheme CANConnect -destination 'generic/platform=iOS' -derivedDataPath /tmp/DriveLineOBDReleaseBuild -archivePath /tmp/DriveLineOBDRelease/iPhone-final.xcarchive CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=complete
+xcodebuild archive -project mac-app/CANConnect.xcodeproj -scheme CANConnect -destination 'generic/platform=macOS' -derivedDataPath /tmp/DriveLineOBDMacReleaseBuild -archivePath /tmp/DriveLineOBDRelease/Mac-final.xcarchive CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=complete
+```
+
+No production concurrency diagnostics were emitted by these analysis/archive
+runs. Existing test-fixture Sendable warnings, missing pkg-config/sqlite3
+package hints and AppIntents metadata-extraction warnings are not represented
+as fixed by this work.
+
+The queue test first failed on the unsigned simulator app with Keychain error
+`-34018`. Rebuilding the same code with simulator ad-hoc signing resolved it;
+the test then passed against the real Mac server using a temporary library and
+synthetic token. No user's pairing token, signing configuration or phone was
+changed. Exact additional commands:
+
+```sh
+xcodebuild build-for-testing -project can-connect-ios/CANConnect.xcodeproj -scheme CANConnect -destination 'platform=iOS Simulator,id=C975E238-AE3A-4B13-9FE8-477B69F94928' -parallel-testing-enabled NO -derivedDataPath /tmp/DriveLineOBDReliabilityBuild CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
+python3 can-connect-ios/scripts/validate_ios_mac_queue.py /tmp/DriveLineOBDMacBuild/Build/Products/Debug/CANConnect.app/Contents/MacOS/CANConnect /tmp/DriveLineOBDReliabilityBuild/Build/Products/CANConnect_iphonesimulator27.2-arm64-x86_64.xctestrun C975E238-AE3A-4B13-9FE8-477B69F94928
+xcrun xcresulttool export attachments --path /tmp/OBDWorkflowFinalTests.xcresult --output-path /tmp/OBDWorkflowFinalAttachments
+```
+
+Queue log: `/tmp/obd-final-native-queue-signed.log`. The two remaining UI skips
+are `testLockScreenPresentationAndOpenRecording` and
+`testRecordingActivityOnDynamicIslandAndReturnToLive`, both explicitly opt-in
+physical presentation checks. No scanner/vehicle acceptance is inferred.
+
+Native rendered evidence: [stale RPM after three redraws](screenshots/stale-rpm-native-redraw.png).
+The screenshot was inspected: heading warning, amber value, stale icon and
+`Stale · 32s ago` footer agree. It is an isolated debug-only sample, not a
+redesign or a real recording. The result bundle also retains the full existing
+navigation, fuel, onboarding, accessibility and synthetic scanner UI evidence.
+The same fixture was also launched with `--ui-testing --obd-freshness-fixture
+--appearance-dark` and captured with `xcrun simctl io`:
+[dark stale RPM](screenshots/stale-rpm-native-dark.png). Its warning, value and
+`Stale · 30s ago` footer were visually checked; no physical device was used.
 
 ## Preservation
 
@@ -167,6 +230,39 @@ latency, outcomes and enhanced occupancy for the actual comparison.
 | F7 acquisition/persistence | Fixed/tested and replay-measured: incremental computation, bounded append queue, asynchronous Finish | Physical phone Instruments, background/disk pressure |
 | F8 discovery/identity | Fixed/tested: neutral discovery baseline, scoped identity and manual/unverified state | Reused MX+ after targeted polling and cancellation |
 | F9 fuel suggestions | Consumer/storage/address path complete/tested; authoritative odometer intentionally unavailable without verified source | Cluster comparison before any decoder is enabled; parked location lookup |
+
+## Published milestones and CI
+
+- `9b90b734547203ddf45ffea64e596d58fc8e97da` — observation/discovery,
+  distance/coverage policies, initial bounded checkpoints and regressions.
+  [iOS CI 40327429102](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40327429102)
+  and [Mac CI 40327429153](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40327429153)
+  both succeeded.
+- `6f3c52dfdf6b93323f7e3f0bdeed23e276facb69` — final software: durable
+  coalescing/finalization, interruption/cadence provenance, out-of-order
+  integration, native freshness regression, fuel safeguards and replay tests.
+  [Mac CI 40332587241](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40332587241)
+  succeeded: 34 tests, build and API integration.
+  [iOS CI 40332589111](https://github.com/kevin7898/Can-bus-Projects/actions/runs/40332589111)
+  succeeded: 165 unit tests (164 passed, one opt-in loopback skip), 23 UI tests
+  (21 passed, two physical Live Activity skips), zero failures; native build and
+  screenshot artifact export passed. The loopback test passed separately locally
+  with simulator signing as described above.
+
+Independent CI replay corroboration (not physical Jetta evidence): full-library
+checkpoint 15.995861 s versus append checkpoint 43.516459 ms; acquisition
+handler p95 0.314333 ms, max 15.978084 ms. The same 500-trip / 1,000,000-observation
+corpus and 3,601-response replay retained all observations. Peak process
+high-water was unchanged at 1,687,961,600 bytes during replay. CI and local host
+timings are separate measurements, not a controlled cross-device comparison.
+
+The subsequent evidence-only commit changes this README and its sanitized
+screenshot, not tested source code. Git's interactive HTTPS credentials were
+unavailable; publication used the authenticated GitHub connector. Every uploaded
+blob and complete tree was checked against the local Git object SHA before a
+non-force, expected-head branch update. Local milestone commits were retained on
+separate local branches; neither integration history nor unrelated worktrees
+were rewritten. Review the [focused branch](https://github.com/kevin7898/Can-bus-Projects/tree/codex/obd-workflow-reliability).
 
 ## Storage and rollback
 
