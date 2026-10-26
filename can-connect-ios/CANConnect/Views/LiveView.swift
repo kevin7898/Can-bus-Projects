@@ -8,7 +8,8 @@ struct LiveView: View {
         .make(state:store.state,selectedSource:store.source,pendingGPS:store.pendingGPS,
               scannerConnected:store.scanner.connected,scannerConnecting:store.scanner.connecting,
               scannerStatus:store.scanner.status,gpsStatus:store.gps.status,gpsSpeedKMH:store.gps.speedKMH,
-              gpsLastFix:store.gps.lastFix,now:store.now)
+              gpsLastFix:store.gps.lastFix,now:store.now,scannerSupportedKeys:store.scanner.supportedSignalKeys,
+              scannerUnsupportedKeys:store.scanner.unsupportedSignalKeys)
     }
 
     var body:some View {
@@ -81,7 +82,8 @@ struct LiveView: View {
                 VStack(spacing:4) {
                     Text(presentation.speed.value.map { $0.text(0) } ?? "—").font(.system(size:68,weight:.semibold,design:.rounded)).monospacedDigit().minimumScaleFactor(0.65)
                     Text("km/h").font(.caption).foregroundStyle(Palette.secondaryText)
-                    FreshnessLabel(observedAt:presentation.speed.observedAt,now:store.now,staleAfter:10)
+                    FreshnessLabel(observedAt:presentation.speed.observedAt,now:store.now,staleAfter:10,
+                        semanticState:presentation.speed.state,statusText:presentation.speed.statusText)
                 }.frame(maxWidth:.infinity).accessibilityElement(children:.combine)
                 HStack { metricSummary("Distance",value:presentation.distanceKM.text(1),unit:"km");Spacer();metricSummary("Elapsed",value:store.timerText,unit:"") }
                 if !presentation.route.isEmpty {
@@ -93,7 +95,8 @@ struct LiveView: View {
             SectionCard(title:"Observed telemetry",icon:"gauge.with.dots.needle.50percent") {
                 LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:10) {
                     ForEach(presentation.metrics) { metric in
-                        MetricTile(title:metric.title,value:formatted(metric),unit:metric.unit,state:metric.state,source:metric.source)
+                        MetricTile(title:metric.title,value:formatted(metric),unit:metric.unit,state:metric.state,source:metric.source,
+                            observedAt:metric.observedAt,statusText:metric.statusText,now:store.now)
                             .accessibilityIdentifier("record.metric.\(metric.key)")
                     }
                 }

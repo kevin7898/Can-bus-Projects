@@ -3,6 +3,49 @@ import CryptoKit
 @testable import DriveLineShared
 
 final class DriveLineSharedTests: XCTestCase {
+    func testPhase91FuelLocationAndOdometerProvenanceRoundTripAdditively() throws {
+        let vehicle=DriveLineVehicle(id:UUID(),name:"Sanitized vehicle")
+        let observed=Date(timeIntervalSince1970:1_700_000_000)
+        let odometer=DriveLineOdometerProvenance(valueKm:123_456,observedAt:observed,
+            sourceIdentifier:"verified.fixture",recordingID:UUID(),sourceType:.scanned)
+        let station=DriveLineStationProvenance(observedAt:observed,sourceIdentifier:"core-location.reverse-geocode",sourceType:.currentLocation)
+        let fill=DriveLineFuelEntry(vehicleID:vehicle.id,date:observed,litresPurchased:40,totalCost:70,
+            odometerKm:123_456,isFullFill:true,stationName:"Synthetic Fuel",stationAddress:"100 Fixture Road",
+            odometerProvenance:odometer,stationProvenance:station)
+        let archive=DriveLineArchive(producer:DriveLineProducer(app:"Tests",version:"1",platform:"test"),
+            sources:[],vehicles:[vehicle],recordings:[],fuelEntries:[fill])
+        let decoded=try DriveLineArchive.decoded(archive.encoded())
+        XCTAssertEqual(decoded.fuelEntries.first?.stationAddress,"100 Fixture Road")
+        XCTAssertEqual(decoded.fuelEntries.first?.odometerProvenance,odometer)
+        XCTAssertEqual(decoded.fuelEntries.first?.stationProvenance,station)
+
+        var object=try XCTUnwrap(JSONSerialization.jsonObject(with:archive.encoded()) as? [String:Any])
+        var fills=try XCTUnwrap(object["fuelEntries"] as? [[String:Any]])
+        fills[0].removeValue(forKey:"stationAddress");fills[0].removeValue(forKey:"odometerProvenance");fills[0].removeValue(forKey:"stationProvenance")
+        object["fuelEntries"]=fills
+        let legacyShape=try JSONSerialization.data(withJSONObject:object,options:[.sortedKeys])
+        let legacyDecoded=try DriveLineArchive.decoded(legacyShape)
+        XCTAssertNil(legacyDecoded.fuelEntries.first?.stationAddress)
+        XCTAssertNil(legacyDecoded.fuelEntries.first?.odometerProvenance)
+    }
+    func testPhase91CursorIndexMatchesSharedPolicyAndNeverBridgesLongGaps() {
+        let start=Date(timeIntervalSince1970:1_700_000_000),vehicle=UUID(),recordingID=UUID()
+        let recording=DriveLineRecording(recordingID:recordingID,vehicleID:vehicle,name:"Sanitized cursor fixture",
+            startedAt:start,endedAt:start.addingTimeInterval(100),sourceIDs:["gps","obd"],
+            gpsPoints:[DriveLineGPSPoint(timestamp:start,latitude:49,longitude:-124,speedMps:10,sourceID:"gps"),
+                DriveLineGPSPoint(timestamp:start.addingTimeInterval(80),latitude:49.01,longitude:-124.01,speedMps:20,sourceID:"gps")],
+            signalSamples:[DriveLineSignalSample(timestamp:start,values:["rpm":1000,"barometricKpa":100],sourceID:"obd"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(2),values:["boostAbsoluteKpa":130],sourceID:"obd"),
+                DriveLineSignalSample(timestamp:start.addingTimeInterval(80),values:["rpm":2000],sourceID:"obd")])
+        let keys=["rpm","boostKpa","gps.speedKph"]
+        let index=DriveLineCursorIndex(recording:recording,signalKeys:keys)
+        for offset in [0.0,2,10,50,80,100] {
+            let date=start.addingTimeInterval(offset)
+            XCTAssertEqual(index.selection(at:date,signalKeys:keys),DriveLineJourneyPolicy.cursor(at:date,recording:recording,signalKeys:keys))
+        }
+        XCTAssertNil(index.selection(at:start.addingTimeInterval(50),signalKeys:keys).gpsPoint)
+        XCTAssertNil(index.selection(at:start.addingTimeInterval(50),signalKeys:keys).observations["rpm"])
+    }
     func testAppearancePersistsAndDefaultsToSystem() throws {
         let suite = "DriveLineAppearanceTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

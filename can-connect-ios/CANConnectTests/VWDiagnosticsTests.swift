@@ -228,7 +228,8 @@ final class VWDiagnosticsTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let transport = VWScannerFixture(); var clock = ContinuousClock.now
-        let scanner = ScannerRecorder(makeSession:{ transport },pollClock:{ clock },measurementPause:{ _ in })
+        var calendar = Date(timeIntervalSince1970:1_700_000_000)
+        let scanner = ScannerRecorder(makeSession:{ transport },pollClock:{ clock },sampleDate:{ calendar },measurementPause:{ _ in })
         let store = AppStore(disk:LocalStore(url:root.appendingPathComponent("state.json")),scanner:scanner,gps:GPSFixture(),scannerAvailable:{ _ in false })
         var vehicle = VehicleProfile(); vehicle.make = "Volkswagen"; vehicle.model = "Jetta"
         vehicle.year = 2014; vehicle.engine = "TDI"; vehicle.transmission = "DSG"
@@ -242,20 +243,20 @@ final class VWDiagnosticsTests: XCTestCase {
         }
         await waitFor { store.state.draft?.samples?.contains { $0.signals["dpfSootG"] != nil } == true }
         let id = try XCTUnwrap(store.state.draft?.id)
-        XCTAssertEqual(scanner.value("dpfAshML",at:Date()),13)
+        XCTAssertEqual(scanner.value("dpfAshML",at:calendar),13)
         transport.raw.badEngineSetup = true; transport.raw.restoreFailures = 2
-        clock = clock.advanced(by:.seconds(61))
-        await waitFor { transport.raw.restoreFailures == 0 && scanner.value("dpfSootG",at:Date()) == nil }
+        clock = clock.advanced(by:.seconds(76)); calendar = calendar.addingTimeInterval(76)
+        await waitFor { transport.raw.restoreFailures == 0 && scanner.value("dpfSootG",at:calendar) == nil }
         XCTAssertTrue(scanner.connected); XCTAssertTrue(store.recording)
         XCTAssertEqual(store.state.draft?.id,id); XCTAssertEqual(store.state.trips.count,savedCount)
         let count = store.state.draft?.samples?.count ?? 0
         clock = clock.advanced(by:.seconds(1))
         await waitFor { (store.state.draft?.samples?.count ?? 0) > count }
-        XCTAssertNotNil(scanner.value("rpm",at:Date()),"Ordinary polling survives enhanced cleanup recovery")
-        transport.raw.badEngineSetup = false; clock = clock.advanced(by:.seconds(61))
+        XCTAssertNotNil(scanner.value("rpm",at:calendar),"Ordinary polling survives enhanced cleanup recovery")
+        transport.raw.badEngineSetup = false; clock = clock.advanced(by:.seconds(61)); calendar = calendar.addingTimeInterval(61)
         await waitFor { (store.state.draft?.samples?.filter { $0.signals["dpfSootG"] != nil }.count ?? 0) >= 2 }
-        XCTAssertEqual(scanner.value("dpfAshML",at:Date()),13)
-        XCTAssertEqual(scanner.value("dpfSootG",at:Date()),8.6)
+        XCTAssertEqual(scanner.value("dpfAshML",at:calendar),13)
+        XCTAssertEqual(scanner.value("dpfSootG",at:calendar),8.6)
         XCTAssertEqual(store.state.draft?.id,id); XCTAssertEqual(transport.opens,1)
         store.finishRecording()
         let saved = try XCTUnwrap(store.state.trips.first)

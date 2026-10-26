@@ -277,6 +277,68 @@ public struct DriveLineCursorSelection: Equatable, Sendable {
     }
 }
 
+/// Immutable timestamp index for cursor interaction. It keeps recorded values
+/// unchanged and uses last-observation binary lookup; it never interpolates or
+/// forward-fills across the shared evidence gaps.
+public struct DriveLineCursorIndex: Sendable {
+    public var recordingID:UUID
+    private var gps:[DriveLineGPSPoint]
+    private var observations:[String:[DriveLineObservation]]
+
+    public init(recording:DriveLineRecording,signalKeys:[String]) {
+        recordingID=recording.recordingID
+        gps=recording.gpsPoints.sorted{$0.timestamp<$1.timestamp}
+        let requested=Set(signalKeys)
+        var indexed=requested.subtracting(["gps.speedKph","gps.horizontalAccuracyM","boostKpa"])
+        if requested.contains("boostKpa") { indexed.formUnion(["boostAbsoluteKpa","mapKpa","barometricKpa"]) }
+        var values:[String:[DriveLineObservation]]=[:]
+        for sample in recording.signalSamples.sorted(by:{$0.timestamp<$1.timestamp}) {
+            for key in indexed {
+                guard let raw=sample.values[key],raw.isFinite else { continue }
+                let value=key == "dpfRegenTrigger" ? DriveLineMetricPolicy.normalizedDPFRegenTrigger(raw):raw
+                guard let value else { continue }
+                values[key,default:[]].append(DriveLineObservation(key:key,value:value,timestamp:sample.timestamp,
+                    sourceID:sample.sourceID,recordingID:recording.recordingID))
+            }
+        }
+        observations=values
+    }
+
+    public func selection(at timestamp:Date,signalKeys:[String])->DriveLineCursorSelection {
+        var point=last(atOrBefore:timestamp,in:gps,keyPath:\.timestamp)
+        if let value=point,timestamp.timeIntervalSince(value.timestamp)>DriveLineMetricPolicy.maximumGPSGap { point=nil }
+        var latest:[String:DriveLineObservation]=[:]
+        let requested=Set(signalKeys)
+        var needed=requested.subtracting(["gps.speedKph","gps.horizontalAccuracyM","boostKpa"])
+        if requested.contains("boostKpa") { needed.formUnion(["boostAbsoluteKpa","mapKpa","barometricKpa"]) }
+        for key in needed {
+            if let value=last(atOrBefore:timestamp,in:observations[key] ?? [],keyPath:\.timestamp) { latest[key]=value }
+        }
+        var selected:[String:DriveLineObservation]=[:]
+        for key in signalKeys {
+            if key == "gps.speedKph",let point,let speed=point.speedMps,speed.isFinite {
+                selected[key]=DriveLineObservation(key:key,value:speed*3.6,timestamp:point.timestamp,sourceID:point.sourceID,recordingID:recordingID)
+            } else if key == "gps.horizontalAccuracyM",let point,let accuracy=point.horizontalAccuracyM,accuracy.isFinite {
+                selected[key]=DriveLineObservation(key:key,value:accuracy,timestamp:point.timestamp,sourceID:point.sourceID,recordingID:recordingID)
+            } else if key == "boostKpa" {
+                selected[key]=DriveLineMetricPolicy.boostGaugeKpa(observations:latest,at:timestamp)
+            } else if let value=latest[key],timestamp.timeIntervalSince(value.timestamp)<=DriveLineMetricPolicy.maximumSignalGap {
+                selected[key]=value
+            }
+        }
+        return DriveLineCursorSelection(timestamp:timestamp,gpsPoint:point,observations:selected)
+    }
+
+    private func last<T>(atOrBefore timestamp:Date,in values:[T],keyPath:KeyPath<T,Date>)->T? {
+        var low=0,high=values.count
+        while low<high {
+            let mid=(low+high)/2
+            if values[mid][keyPath:keyPath] <= timestamp { low=mid+1 } else { high=mid }
+        }
+        return low == 0 ? nil:values[low-1]
+    }
+}
+
 public struct DriveLineFuelLedgerItem: Equatable, Identifiable, Sendable {
     public var id: UUID { entry.id }
     public var entry: DriveLineFuelEntry

@@ -53,6 +53,7 @@ struct PhoneSignalPresentation: Equatable, Identifiable {
     var observedAt: Date?
     var state: DriveLineSemanticState
     var source: String
+    var statusText:String? = nil
 }
 
 struct PhoneRecordingPresentation: Equatable {
@@ -81,6 +82,7 @@ struct PhoneRecordingPresentation: Equatable {
     static func make(state: StoredState, selectedSource: TripSource, pendingGPS: Bool,
                      scannerConnected: Bool, scannerConnecting: Bool, scannerStatus: String,
                      gpsStatus: String, gpsSpeedKMH: Double?, gpsLastFix: Date?, now: Date,
+                     scannerSupportedKeys:Set<String> = [],scannerUnsupportedKeys:Set<String> = [],
                      isStopping: Bool = false, recovered: Bool = false) -> Self {
         let draft=state.draft
         let elapsed=draft.map { max(0,now.timeIntervalSince($0.startedAt)) } ?? 0
@@ -100,11 +102,12 @@ struct PhoneRecordingPresentation: Equatable {
 
         let speedObservation:PhoneSignalPresentation
         if let obd=observations["speedKph"],draft?.source == .scanner {
-            speedObservation=signal(key:"speedKph",title:"Speed",unit:"km/h",observation:obd,now:now)
+            speedObservation=signal(key:"speedKph",title:"Speed",unit:"km/h",observation:obd,now:now,
+                scannerConnected:scannerConnected,supportedKeys:scannerSupportedKeys,unsupportedKeys:scannerUnsupportedKeys)
         } else if gpsFresh,let speed=gpsSpeedKMH {
             speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:speed,unit:"km/h",observedAt:gpsLastFix,state:.ready,source:"iPhone GPS")
         } else {
-            speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:nil,unit:"km/h",observedAt:gpsLastFix,state:gpsLastFix == nil ? .unavailable:.stale,source:"iPhone GPS")
+            speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:nil,unit:"km/h",observedAt:gpsLastFix,state:gpsLastFix == nil ? .unavailable:.stale,source:"iPhone GPS",statusText:gpsLastFix == nil ? "Not observed":nil)
         }
 
         var display=observations
@@ -114,7 +117,8 @@ struct PhoneRecordingPresentation: Equatable {
             ("dsgFluidC","DSG temp","°C"),("dpfSootG","DPF soot","g"),("dpfRegenTrigger","Regen trigger","%")
         ]
         let metrics=definitions.map { key,title,unit -> PhoneSignalPresentation in
-            var item=signal(key:key,title:title,unit:unit,observation:display[key],now:now)
+            var item=signal(key:key,title:title,unit:unit,observation:display[key],now:now,
+                scannerConnected:scannerConnected,supportedKeys:scannerSupportedKeys,unsupportedKeys:scannerUnsupportedKeys)
             if key == "dpfRegenTrigger",let value=item.value { item.value=DriveLineMetricPolicy.normalizedDPFRegenTrigger(value) }
             return item
         }
@@ -145,8 +149,14 @@ struct PhoneRecordingPresentation: Equatable {
         return result
     }
 
-    private static func signal(key:String,title:String,unit:String,observation:DriveLineObservation?,now:Date)->PhoneSignalPresentation {
-        guard let observation else { return PhoneSignalPresentation(key:key,title:title,value:nil,unit:unit,observedAt:nil,state:.unavailable,source:"OBD") }
+    private static func signal(key:String,title:String,unit:String,observation:DriveLineObservation?,now:Date,
+                               scannerConnected:Bool,supportedKeys:Set<String>,unsupportedKeys:Set<String>)->PhoneSignalPresentation {
+        guard let observation else {
+            if !scannerConnected { return PhoneSignalPresentation(key:key,title:title,value:nil,unit:unit,observedAt:nil,state:.offline,source:"OBD",statusText:"Scanner disconnected") }
+            if unsupportedKeys.contains(key) { return PhoneSignalPresentation(key:key,title:title,value:nil,unit:unit,observedAt:nil,state:.unavailable,source:"OBD",statusText:"Unsupported") }
+            let status=supportedKeys.contains(key) ? "Not observed":"Support unknown"
+            return PhoneSignalPresentation(key:key,title:title,value:nil,unit:unit,observedAt:nil,state:.unavailable,source:"OBD",statusText:status)
+        }
         let freshness=key == "boostGaugeKpa" ? 10:max(OBDDecoder.freshness(for:key),VWMeasurementDecoder.freshness(for:key))
         let age=now.timeIntervalSince(observation.timestamp)
         return PhoneSignalPresentation(key:key,title:title,value:observation.value,unit:unit,observedAt:observation.timestamp,

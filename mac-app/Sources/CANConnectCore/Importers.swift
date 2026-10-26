@@ -85,7 +85,8 @@ public enum RecordingImporter {
             let fills=archive.fuelEntries.map { fill in
                 FuelEntry(id:fill.id,vehicleID:fill.vehicleID,date:fill.date,litresPurchased:fill.litresPurchased,totalCost:fill.totalCost,
                           currencyCode:fill.currencyCode,odometerKm:fill.odometerKm,isFullFill:fill.isFullFill,stationName:fill.stationName,
-                          notes:fill.notes,receipt:fill.receipt,isDemo:fill.isSample)
+                          stationAddress:fill.stationAddress,odometerProvenance:fill.odometerProvenance,
+                          stationProvenance:fill.stationProvenance,notes:fill.notes,receipt:fill.receipt,isDemo:fill.isSample)
             }
             guard !trips.isEmpty || !fills.isEmpty else { throw CANError.invalid("DriveLine archive contains no recordings or fuel entries.") }
             return ImportResult(trips:trips,fuelEntries:fills,receiptFiles:archive.receiptFiles,message:"Imported \(trips.count) DriveLine version-2 recording\(trips.count == 1 ? "" : "s") and \(fills.count) fuel entr\(fills.count == 1 ? "y" : "ies") with stable identities.")

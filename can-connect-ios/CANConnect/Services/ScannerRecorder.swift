@@ -7,6 +7,9 @@ final class ScannerRecorder: ObservableObject {
     @Published private(set) var connecting = false
     @Published private(set) var status = "Not connected"
     @Published private(set) var readings: [String: (value: Double, date: Date)] = [:]
+    @Published private(set) var supportedSignalKeys:Set<String> = []
+    @Published private(set) var unsupportedSignalKeys:Set<String> = []
+    @Published private(set) var diagnostics=OBDPollDiagnostics()
     private(set) var vehicleID: UUID?
     private(set) var failureRequiresAttention = false
     var onConnected: (() -> Void)?
@@ -113,40 +116,61 @@ final class ScannerRecorder: ObservableObject {
                 }
                 let pids = OBDDecoder.definitions.filter { supported.contains($0.pid) }
                 guard !pids.isEmpty else { throw AppFailure("The vehicle reported no supported dashboard PIDs.") }
+                var supportedKeys=Set(pids.flatMap { OBDDecoder.signalKeys(pid:$0.pid) })
+                if enhancedControllers.contains(.engine) { supportedKeys.formUnion(VWMeasurementDecoder.engineKeys) }
+                if enhancedControllers.contains(.dsg) { supportedKeys.insert("dsgFluidC") }
+                if supportedKeys.contains("barometricKpa") &&
+                    (supportedKeys.contains("boostAbsoluteKpa") || supportedKeys.contains("mapKpa")) {
+                    supportedKeys.insert("boostGaugeKpa")
+                }
+                self.supportedSignalKeys=supportedKeys
+                var knownKeys=OBDDecoder.keys;knownKeys.insert("boostGaugeKpa")
+                self.unsupportedSignalKeys=knownKeys.subtracting(supportedKeys)
                 self.vehicleID = vehicle.id; self.connected = true; self.connecting = false
                 self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals"
                 self.onConnected?()
-                var nextRead: [Int:ContinuousClock.Instant] = [:]
                 // A generic ECU exposing only slow PIDs must not time out before
                 // its next scheduled response. RPM-capable ECUs retain 20 seconds.
                 let responseTimeout = max(20,(pids.map { OBDDecoder.pollInterval(pid:$0.pid) }.min() ?? 3)+15)
                 var lastReceived = self.pollClock()
                 var missing = Set<Int>()
+                var scheduler=OBDPollScheduler(pids:pids.map(\.pid),now:self.pollClock())
                 let vw = VWMeasuringBlocks(exchange:{ try await self.exchange($0,transport:transport) },
                     pause:self.measurementPause,clock:self.pollClock,sampleDate:self.sampleDate,
                     report:{ self.journal?.append(command:"VW",reply:$0) })
                 var nextEnhanced: [VWController:ContinuousClock.Instant] = [:]
                 while !Task.isCancelled {
-                    for definition in pids where nextRead[definition.pid].map({ self.pollClock() >= $0 }) ?? true {
-                        let reply = try await self.exchange(String(format:"01%02X",definition.pid),transport:transport)
-                        try Task.checkCancellation()
-                        let sample = OBDDecoder.decode(reply,pid:definition.pid,at:self.sampleDate(),ecu:ecu)
-                        let keys = OBDDecoder.signalKeys(pid:definition.pid)
-                        for key in keys where sample?.signals[key] == nil { self.readings.removeValue(forKey:key) }
-                        if sample == nil { missing.insert(definition.pid) } else { missing.remove(definition.pid) }
-                        if let sample {
-                            for (key,value) in sample.signals { self.readings[key] = (value,sample.timestamp) }
-                            lastReceived = self.pollClock(); self.onSample?(sample)
-                        }
-                        nextRead[definition.pid] = self.pollClock().advanced(by:.seconds(OBDDecoder.pollInterval(pid:definition.pid)))
-                        try await Task.sleep(nanoseconds:25_000_000)
-                    }
-                    let due = enhancedControllers.filter { nextEnhanced[$0].map { self.pollClock() >= $0 } ?? true }
-                    if !due.isEmpty {
-                        let keys = due.reduce(into:Set<String>()) { $0.formUnion($1 == .engine ? VWMeasurementDecoder.engineKeys : ["dsgFluidC"]) }
+                    let now=self.pollClock()
+                    if let request=scheduler.next(at:now) {
+                        let started=self.pollClock()
                         do {
-                            let samples = try await vw.read(controllers:due)
-                            for key in keys { self.readings.removeValue(forKey:key) }
+                            let reply=try await self.exchange(String(format:"01%02X",request.pid),transport:transport)
+                            try Task.checkCancellation()
+                            let finished=self.pollClock()
+                            let sample=OBDDecoder.decode(reply,pid:request.pid,at:self.sampleDate(),ecu:ecu)
+                            let outcome=OBDPollScheduler.classify(reply:reply,pid:request.pid,decoded:sample,ecu:ecu)
+                            scheduler.record(request,outcome:outcome,responseLatency:OBDPollScheduler.seconds(started.duration(to:finished)),at:finished)
+                            if let sample {
+                                missing.remove(request.pid)
+                                for (key,value) in sample.signals { self.readings[key]=(value,sample.timestamp) }
+                                lastReceived=finished;self.onSample?(sample)
+                            } else { missing.insert(request.pid) }
+                        } catch is CancellationError { throw CancellationError() }
+                        catch {
+                            let finished=self.pollClock()
+                            scheduler.record(request,outcome:.timeout,responseLatency:OBDPollScheduler.seconds(started.duration(to:finished)),at:finished)
+                            missing.insert(request.pid);self.diagnostics=scheduler.diagnostics(at:finished)
+                            if missing.count >= pids.count { throw error }
+                        }
+                        self.diagnostics=scheduler.diagnostics(at:self.pollClock())
+                    }
+                    let enhancedNow=self.pollClock()
+                    let due=enhancedControllers.filter { nextEnhanced[$0].map { enhancedNow >= $0 } ?? true }
+                    if let controller=due.sorted(by:{$0.rawValue<$1.rawValue}).first,
+                       scheduler.enhancedWindowOpportunity(at:enhancedNow) {
+                        let windowStarted=self.pollClock()
+                        do {
+                            let samples = try await vw.read(controllers:Set([controller]))
                             for sample in samples {
                                 try Task.checkCancellation()
                                 for (key,value) in sample.signals { self.readings[key] = (value,sample.timestamp) }
@@ -154,7 +178,6 @@ final class ScannerRecorder: ObservableObject {
                             }
                         } catch is CancellationError { throw CancellationError() }
                         catch {
-                            for key in keys { self.readings.removeValue(forKey:key) }
                             self.journal?.append(command:"VW",reply:"Enhanced measurements unavailable: \(error.localizedDescription)")
                             // A cleanup error does not permanently disable enhanced
                             // polling. Re-establish and verify ordinary OBD first.
@@ -163,12 +186,18 @@ final class ScannerRecorder: ObservableObject {
                                 guard reply.trimmingCharacters(in:.whitespacesAndNewlines).uppercased() == "OK" else { throw error }
                             }
                             let recovery = try await self.exchange("010C",transport:transport)
-                            guard OBDDecoder.decode(recovery,pid:0x0C,ecu:ecu) != nil else { throw error }
+                            guard let sample=OBDDecoder.decode(recovery,pid:0x0C,at:self.sampleDate(),ecu:ecu) else { throw error }
+                            for (key,value) in sample.signals { self.readings[key]=(value,sample.timestamp) }
+                            lastReceived=self.pollClock();self.onSample?(sample)
                         }
-                        for controller in due { nextEnhanced[controller] = self.pollClock().advanced(by:.seconds(controller.pollInterval)) }
+                        let windowEnded=self.pollClock()
+                        scheduler.recordEnhancedWindow(seconds:OBDPollScheduler.seconds(windowStarted.duration(to:windowEnded)))
+                        scheduler.prioritizeCore(at:windowEnded)
+                        self.diagnostics=scheduler.diagnostics(at:windowEnded)
+                        nextEnhanced[controller]=windowEnded.advanced(by:.seconds(controller.pollInterval))
                     }
-                    guard missing.count < pids.count, lastReceived.duration(to:self.pollClock()) < .seconds(responseTimeout) else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
-                    try await Task.sleep(nanoseconds:50_000_000)
+                    guard missing.count < pids.count,lastReceived.duration(to:self.pollClock()) < .seconds(responseTimeout) else { throw AppFailure("The vehicle stopped supplying readings. Check ignition and reconnect.") }
+                    try await Task.sleep(nanoseconds:20_000_000)
                 }
             } catch is CancellationError {} catch {
                 guard !Task.isCancelled else { return }

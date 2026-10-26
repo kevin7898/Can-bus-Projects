@@ -120,7 +120,9 @@ public enum TripExport {
         let fills=fuelEntries.filter { $0.vehicleID == trip.vehicleID }.map {
             DriveLineFuelEntry(id:$0.id,vehicleID:$0.vehicleID,date:$0.date,litresPurchased:$0.litresPurchased,
                                totalCost:$0.totalCost,currencyCode:$0.currencyCode,odometerKm:$0.odometerKm,
-                               isFullFill:$0.isFullFill,stationName:$0.stationName,notes:$0.notes,receipt:$0.receipt,isSample:$0.isDemo)
+                               isFullFill:$0.isFullFill,stationName:$0.stationName,stationAddress:$0.stationAddress,
+                               odometerProvenance:$0.odometerProvenance,stationProvenance:$0.stationProvenance,
+                               notes:$0.notes,receipt:$0.receipt,isSample:$0.isDemo)
         }
         return try DriveLineArchive(producer:DriveLineProducer(app:"DriveLine Mac",version:"2",platform:"macOS"),
                                     sources:sources,

@@ -42,7 +42,7 @@ enum Signal: String, Codable, CaseIterable, Identifiable {
     var unit: String { switch self { case .rpm: return "rpm"; case .coolant, .outside: return "°C"; case .boost: return "bar"; case .fuel, .economy: return "L/100 km"; case .voltage: return "V"; default: return OBDDecoder.labels[readingKey ?? ""]?.unit ?? "" } }
     var sample: String { switch self { case .rpm: return "1840"; case .coolant: return "89"; case .boost: return "0.42"; case .fuel: return "4.8"; case .economy: return "5.4"; case .outside: return "12"; case .voltage: return "13.9"; default: return "—" } }
 }
-struct RoutePoint: Codable, Equatable {
+struct RoutePoint: Codable, Equatable, Sendable {
     var latitude: Double
     var longitude: Double
     var timestamp: Date
@@ -105,20 +105,27 @@ struct FuelEntry: Codable, Identifiable, Equatable {
     var isSample: Bool = false
     var currencyCode: String = "CAD"
     var stationName: String? = nil
+    var stationAddress: String? = nil
+    var odometerProvenance: DriveLineOdometerProvenance? = nil
+    var stationProvenance: DriveLineStationProvenance? = nil
     var notes: String? = nil
     var receipt: DriveLineReceiptMetadata? = nil
     var litresPurchased: Double { litres }
 
     private enum CodingKeys: String, CodingKey {
         case id, vehicleID, date, litres, costCAD, odometerKM, full, isSample
-        case currencyCode, stationName, notes, receipt
+        case currencyCode, stationName, stationAddress, odometerProvenance, stationProvenance, notes, receipt
     }
     init(id:UUID = UUID(),vehicleID:UUID? = nil,date:Date,litres:Double,costCAD:Double,odometerKM:Double,full:Bool,
          isSample:Bool = false,currencyCode:String = "CAD",stationName:String? = nil,notes:String? = nil,
-         receipt:DriveLineReceiptMetadata? = nil) {
+         receipt:DriveLineReceiptMetadata? = nil,stationAddress:String? = nil,
+         odometerProvenance:DriveLineOdometerProvenance? = nil,
+         stationProvenance:DriveLineStationProvenance? = nil) {
         self.id=id;self.vehicleID=vehicleID;self.date=date;self.litres=litres;self.costCAD=costCAD
         self.odometerKM=odometerKM;self.full=full;self.isSample=isSample;self.currencyCode=currencyCode
-        self.stationName=stationName;self.notes=notes;self.receipt=receipt
+        self.stationName=stationName;self.stationAddress=stationAddress
+        self.odometerProvenance=odometerProvenance;self.stationProvenance=stationProvenance
+        self.notes=notes;self.receipt=receipt
     }
     init(from decoder:Decoder) throws {
         let values=try decoder.container(keyedBy:CodingKeys.self)
@@ -132,6 +139,9 @@ struct FuelEntry: Codable, Identifiable, Equatable {
         isSample=try values.decodeIfPresent(Bool.self,forKey:.isSample) ?? false
         currencyCode=try values.decodeIfPresent(String.self,forKey:.currencyCode) ?? "CAD"
         stationName=try values.decodeIfPresent(String.self,forKey:.stationName)
+        stationAddress=try values.decodeIfPresent(String.self,forKey:.stationAddress)
+        odometerProvenance=try values.decodeIfPresent(DriveLineOdometerProvenance.self,forKey:.odometerProvenance)
+        stationProvenance=try values.decodeIfPresent(DriveLineStationProvenance.self,forKey:.stationProvenance)
         notes=try values.decodeIfPresent(String.self,forKey:.notes)
         receipt=try values.decodeIfPresent(DriveLineReceiptMetadata.self,forKey:.receipt)
     }
@@ -189,6 +199,10 @@ struct StoredState: Codable {
     var scanner = ScannerSettings()
     var server = ServerSettings()
     var transfers: [TransferItem] = []
+    /// Trusted decoded odometer evidence is kept vehicle-scoped. No production
+    /// decoder currently emits this value; the pipeline remains empty until a
+    /// reviewed decoder definition is added.
+    var scannedOdometerObservations: [FuelOdometerObservation]? = nil
     /// User-authored metadata lives beside recordings so preserved archive bytes
     /// and frozen transfer payloads never change when a drive is classified.
     var journeyAnnotations: [String: DriveLineJourneyAnnotation] = [:]
@@ -253,7 +267,8 @@ struct TripArchive: Codable {
         let fills=shared.fuelEntries.map { fill in
             FuelEntry(id:fill.id,vehicleID:fill.vehicleID == missingVehicle ? nil : fill.vehicleID,date:fill.date,litres:fill.litresPurchased,costCAD:fill.totalCost,
                       odometerKM:fill.odometerKm,full:fill.isFullFill,isSample:fill.isSample,currencyCode:fill.currencyCode,
-                      stationName:fill.stationName,notes:fill.notes,receipt:fill.receipt)
+                      stationName:fill.stationName,notes:fill.notes,receipt:fill.receipt,stationAddress:fill.stationAddress,
+                      odometerProvenance:fill.odometerProvenance,stationProvenance:fill.stationProvenance)
         }
         let archive=TripArchive(vehicles:profiles,trips:trips,fills:fills,receiptFiles:shared.receiptFiles)
         try validate(archive)
@@ -315,7 +330,8 @@ struct TripArchive: Codable {
             let vehicleID=fill.vehicleID ?? missingVehicle
             return DriveLineFuelEntry(id:fill.id,vehicleID:vehicleID,date:fill.date,litresPurchased:fill.litres,totalCost:fill.costCAD,
                                       currencyCode:fill.currencyCode,odometerKm:fill.odometerKM,isFullFill:fill.full,stationName:fill.stationName,
-                                      notes:fill.notes,receipt:fill.receipt,isSample:fill.isSample)
+                                      stationAddress:fill.stationAddress,odometerProvenance:fill.odometerProvenance,
+                                      stationProvenance:fill.stationProvenance,notes:fill.notes,receipt:fill.receipt,isSample:fill.isSample)
         }
         let sourceIDs=Set(recordings.flatMap(\.sourceIDs))
         let sources=sourceIDs.sorted().map { id -> DriveLineSourceDescriptor in

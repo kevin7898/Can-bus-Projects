@@ -90,11 +90,10 @@ struct FuelForm: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var litres = ""
     @State private var cost = ""
-    @State private var odometer = ""
+    @State private var draft:FuelFormDraft
     @State private var date = Date()
     @State private var full = true
     @State private var currencyCode="CAD"
-    @State private var station=""
     @State private var notes=""
     @State private var receipt:ReceiptAttachment?
     @State private var existingReceipt:DriveLineReceiptMetadata?
@@ -102,16 +101,17 @@ struct FuelForm: View {
     @State private var choosingReceipt=false
     @State private var allowCorrection=false
     @State private var error: String?
+    @State private var locating=false
+    @State private var locationMessage:String?
     private let entryID:UUID?
     init(entry:FuelEntry? = nil) {
         entryID=entry?.id
         _litres=State(initialValue:entry.map { String($0.litres) } ?? "")
         _cost=State(initialValue:entry.map { String($0.costCAD) } ?? "")
-        _odometer=State(initialValue:entry.map { String($0.odometerKM) } ?? "")
+        _draft=State(initialValue:FuelFormDraft(entry:entry))
         _date=State(initialValue:entry?.date ?? Date())
         _full=State(initialValue:entry?.full ?? true)
         _currencyCode=State(initialValue:entry?.currencyCode ?? "CAD")
-        _station=State(initialValue:entry?.stationName ?? "")
         _notes=State(initialValue:entry?.notes ?? "")
         _existingReceipt=State(initialValue:entry?.receipt)
     }
@@ -123,7 +123,14 @@ struct FuelForm: View {
             if dynamicTypeSize.isAccessibilitySize { VStack(alignment:.leading,spacing:18) { field("Total cost",text:$cost);currencyField } }
             else { HStack(alignment:.bottom) { field("Total cost",text:$cost);currencyField.frame(width:90) } }
         }
-        field("Odometer · km",text:$odometer)
+        field("Odometer · km",text:Binding(get:{draft.odometerText},set:{draft.userChangedOdometer($0)}),identifier:"fuel.odometer")
+        if let provenance=draft.odometerProvenance {
+            Label(odometerProvenanceText(provenance),systemImage:provenance.sourceType == .scanned ? "sensor.tag.radiowaves.forward":"clock.arrow.circlepath")
+                .font(.caption).foregroundStyle(Palette.secondaryText).accessibilityIdentifier("fuel.odometer.provenance")
+        } else if entryID == nil {
+            Label("No verified scanned odometer or earlier fuel entry is available",systemImage:"minus.circle")
+                .font(.caption).foregroundStyle(Palette.secondaryText).accessibilityIdentifier("fuel.odometer.unavailable")
+        }
         VStack(alignment:.leading,spacing:8) {
             if dynamicTypeSize.isAccessibilitySize {
                 Text("Date").captionStyle()
@@ -134,7 +141,25 @@ struct FuelForm: View {
             }
         }
         Toggle(full ? "Full fill":"Partial fill",isOn:$full).font(.system(size:14)).accessibilityIdentifier("fuel.full")
-        VStack(alignment:.leading,spacing:8) { Text("Station").captionStyle();TextField("Optional station or location",text:$station).accessibilityIdentifier("fuel.station").padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)) }
+        VStack(alignment:.leading,spacing:8) {
+            Text("Station").captionStyle()
+            TextField("Optional fuel-station name",text:Binding(get:{draft.stationName},set:{draft.userChangedStationName($0)}))
+                .accessibilityIdentifier("fuel.station").padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10))
+            TextField("Street address",text:Binding(get:{draft.stationAddress},set:{draft.userChangedStationAddress($0)}),axis:.vertical)
+                .lineLimit(1...3).accessibilityIdentifier("fuel.station-address").padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10))
+            HStack {
+                Button(locating ? "Locating…":(draft.stationAddress.isEmpty ? "Use Current Location":"Refresh Location")) { Task { await refreshLocation() } }
+                    .disabled(locating).accessibilityIdentifier("fuel.station.refresh")
+                Spacer()
+                Button("Clear") { draft.clearStation();locationMessage=nil }.disabled(draft.stationName.isEmpty && draft.stationAddress.isEmpty)
+                    .accessibilityIdentifier("fuel.station.clear")
+            }.font(.caption)
+            if let provenance=draft.stationProvenance {
+                Label(provenance.sourceType == .currentLocation ? "Current location":"Manually entered",systemImage:"location.fill")
+                    .font(.caption).foregroundStyle(Palette.secondaryText).accessibilityIdentifier("fuel.station.provenance")
+            }
+            if let locationMessage { Text(locationMessage).font(.caption).foregroundStyle(Palette.secondaryText).accessibilityIdentifier("fuel.station.status") }
+        }
         VStack(alignment:.leading,spacing:8) { Text("Notes").captionStyle();TextField("Optional notes",text:$notes,axis:.vertical).lineLimit(2...5).accessibilityIdentifier("fuel.notes").padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)) }
         VStack(alignment:.leading,spacing:8) {
             HStack { Label(receipt?.metadata.fileName ?? existingReceipt?.fileName ?? "No receipt attached",systemImage:"doc.text").lineLimit(1);Spacer();Button("Choose…") { choosingReceipt=true }.accessibilityIdentifier("fuel.receipt.choose") }
@@ -145,16 +170,44 @@ struct FuelForm: View {
         InfoNote(text:"Partial fills count toward the next full-tank economy calculation.")
         if let error { Text(error).font(.system(size:12)).foregroundStyle(Palette.red) }
         AppButton(title:"Save fill-up",icon:"checkmark") {
-            guard let l = number(litres), let c = number(cost), let o = number(odometer) else { error = "Enter litres, total cost and odometer."; return }
-            do { _=try store.saveFill(id:entryID,litres:l,cost:c,currencyCode:currencyCode,odometer:o,full:full,date:date,stationName:station,notes:notes,receipt:receipt,removeReceipt:removeReceipt,allowOdometerCorrection:allowCorrection);dismiss() } catch { self.error = error.localizedDescription }
+            guard let l = number(litres), let c = number(cost), let o = number(draft.odometerText) else { error = "Enter litres, total cost and odometer."; return }
+            do { _=try store.saveFill(id:entryID,litres:l,cost:c,currencyCode:currencyCode,odometer:o,full:full,date:date,
+                stationName:draft.stationName,notes:notes,receipt:receipt,removeReceipt:removeReceipt,
+                allowOdometerCorrection:allowCorrection,stationAddress:draft.stationAddress,
+                odometerProvenance:draft.odometerProvenance,stationProvenance:draft.stationProvenance);dismiss() } catch { self.error = error.localizedDescription }
             }
+        }.task {
+            guard entryID == nil else { return }
+            draft.applyOdometer(store.fuelOdometerPrefill())
+            await refreshLocation(automatic:true)
         }
         .fileImporter(isPresented:$choosingReceipt,allowedContentTypes:[.image,.pdf,.data]) { result in
             do { receipt=try store.prepareReceipt(result.get());removeReceipt=false;error=nil } catch { self.error=error.localizedDescription }
         }
     }
     private var currencyField:some View { VStack(alignment:.leading,spacing:8) { Text("Currency").captionStyle();TextField("CAD",text:$currencyCode).textInputAutocapitalization(.characters).autocorrectionDisabled().accessibilityIdentifier("fuel.currency").padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)).frame(maxWidth:.infinity,alignment:.leading) } }
-    private func field(_ title: String, text: Binding<String>) -> some View { VStack(alignment:.leading,spacing:8) { Text(title).captionStyle(); TextField("0",text:text).keyboardType(.decimalPad).font(.system(size:21)).padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)) } }
+    private func field(_ title: String, text: Binding<String>,identifier:String?=nil) -> some View { VStack(alignment:.leading,spacing:8) { Text(title).captionStyle(); TextField("0",text:text).keyboardType(.decimalPad).font(.system(size:21)).padding(13).background(Palette.surface,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier(identifier ?? "fuel.numeric") } }
+    private func odometerProvenanceText(_ provenance:DriveLineOdometerProvenance)->String {
+        if provenance.sourceType == .fuelEntry { return "From last fuel entry" }
+        if provenance.sourceType == .manual { return "Manually entered" }
+        let formatter=RelativeDateTimeFormatter();formatter.unitsStyle = .abbreviated
+        return "Scanned \(formatter.localizedString(for:provenance.observedAt,relativeTo:Date()))"
+    }
+    @MainActor private func refreshLocation(automatic:Bool=false) async {
+        guard !locating else { return }
+        if !draft.stationIsPristine && (!draft.stationName.isEmpty || !draft.stationAddress.isEmpty) {
+            if !automatic { locationMessage="Clear the edited station fields before using the current location." }
+            return
+        }
+        draft.prepareForLocationRefresh();locating=true;locationMessage=nil
+        defer { locating=false }
+        switch await FuelStationPrefillPolicy.resolve(using:store.fuelLocation) {
+        case .success(let suggestion):
+            draft.applyStation(suggestion)
+            locationMessage=draft.stationProvenance == nil ? "The result arrived after you edited the station, so your text was kept.":nil
+        case .failure(let failure):locationMessage=failure.message
+        }
+    }
 }
 struct FuelHistory: View {
     @EnvironmentObject private var store: AppStore
@@ -186,7 +239,8 @@ struct FuelLedgerView:View {
             guard let vehicleID=entry.vehicleID else { return nil }
             return DriveLineFuelEntry(id:entry.id,vehicleID:vehicleID,date:entry.date,litresPurchased:entry.litres,totalCost:entry.costCAD,
                 currencyCode:entry.currencyCode,odometerKm:entry.odometerKM,isFullFill:entry.full,stationName:entry.stationName,
-                notes:entry.notes,receipt:entry.receipt,isSample:entry.isSample)
+                stationAddress:entry.stationAddress,odometerProvenance:entry.odometerProvenance,
+                stationProvenance:entry.stationProvenance,notes:entry.notes,receipt:entry.receipt,isSample:entry.isSample)
         }
     }
     private var ledger:[DriveLineFuelLedgerItem] {
@@ -218,6 +272,7 @@ struct FuelLedgerView:View {
                     DataRow(label:"Cost",value:entry.costCAD.formatted(.currency(code:entry.currencyCode)))
                     DataRow(label:"Cost per litre",value:(item?.costPerLitre).map { $0.formatted(.currency(code:entry.currencyCode))+"/L" } ?? "Unavailable")
                     DataRow(label:"Odometer",value:"\(entry.odometerKM.text(0)) km")
+                    if let address=entry.stationAddress { DataRow(label:"Address",value:address) }
                     DataRow(label:"Tank-to-tank economy",value:(item?.tankEconomyL100Km).map { "\($0.text(2)) L/100 km" } ?? "Insufficient full-fill boundaries")
                     if let receipt=entry.receipt { DataRow(label:"Receipt",value:"\(receipt.fileName) · \(ByteCountFormatter.string(fromByteCount:Int64(receipt.byteCount),countStyle:.file))") }
                     if !entry.isSample { Button("Edit fuel entry") { editing=entry }.accessibilityIdentifier("fuel.edit.\(entry.id.uuidString)") }

@@ -175,28 +175,24 @@ struct TripStoryView:View {
     @State private var signalsOverview=false
     @State private var playbackSeconds=0.0
     @State private var signalKeys=["speedKph","rpm","boostKpa"]
+    @State private var snapshot:TripStorySnapshot?
+    @State private var snapshotError:String?
+    @State private var snapshotRetry=0
     private var annotation:DriveLineJourneyAnnotation { store.journeyAnnotation(for:trip.id) }
     var body:some View {
-        let summary=DriveLineJourneyPolicy.summary(for:trip.sharedRecording)
         let selectedDate=trip.startedAt.addingTimeInterval(playbackSeconds)
-        let cursor=DriveLineJourneyPolicy.cursor(at:selectedDate,recording:trip.sharedRecording,
-            signalKeys:["speedKph","rpm","coolantC","fuelRateLph","dpfRegenTrigger"])
-        let events=DriveLineJourneyPolicy.timeline(for:trip.sharedRecording)
-        let selectedRoutePoint=routePoint(cursor.gpsPoint)
         SheetShell(title:"Trip Story") {
             VStack(alignment:.leading,spacing:7) {
                 Text(trip.name).font(.title3)
                 Text(trip.startedAt.formatted(date:.complete,time:.shortened)).captionStyle()
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(alignment:.leading,spacing:8) {
-                        ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) }
-                        StatusPill(state:summary.quality == .complete ? .ready:.stale,text:summary.quality.title)
-                    }
-                } else {
-                    HStack { ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) };Spacer();StatusPill(state:summary.quality == .complete ? .ready:.stale,text:summary.quality.title) }
-                }
+                if let snapshot { storyStatus(snapshot.summary) }
             }
-            if !trip.route.isEmpty { NativeRouteMap(route:trip.route,selectedPoint:selectedRoutePoint).frame(height:230).clipShape(RoundedRectangle(cornerRadius:14)) }
+            if let snapshot {
+            let summary=snapshot.summary
+            let cursor=snapshot.cursorIndex.selection(at:selectedDate,
+                signalKeys:["speedKph","rpm","coolantC","fuelRateLph","dpfRegenTrigger"])
+            let selectedRoutePoint=routePoint(cursor.gpsPoint)
+            if !snapshot.route.isEmpty { NativeRouteMap(route:snapshot.route,selectedPoint:selectedRoutePoint).frame(height:230).clipShape(RoundedRectangle(cornerRadius:14)) }
             else { EmptyStateCard(icon:"map",title:"Route unavailable",message:"This recording has no saved GPS coordinates. No route is inferred from scanner data.") }
             VStack(spacing:8) {
                 Slider(value:$playbackSeconds,in:0...max(0.001,trip.duration)).accessibilityLabel("Shared trip playback position")
@@ -213,7 +209,7 @@ struct TripStoryView:View {
                 HStack { coverage("GPS",summary.gpsCoverage);coverage("OBD",summary.obdCoverage) }
                 ForEach(["speedKph","rpm","coolantC","fuelRateLph","dpfRegenTrigger"],id:\.self) { key in
                     let observation=cursor.observations[key]
-                    DataRow(label:signalTitle(key),value:observation.map { valueText(key,$0.value)+" · "+$0.timestamp.formatted(date:.omitted,time:.standard) } ?? "Unavailable at cursor")
+                    DataRow(label:signalTitle(key),value:observation.map { valueText(key,$0.value)+" · "+$0.sourceID.uppercased()+" · "+$0.timestamp.formatted(date:.omitted,time:.standard) } ?? "Unavailable at cursor")
                 }
                 if cursor.gpsPoint == nil { InfoNote(text:"No GPS observation is close enough to the shared cursor. The map does not forward-fill a position.",icon:"location.slash") }
             }
@@ -221,7 +217,8 @@ struct TripStoryView:View {
                 ForEach(signalKeys.indices,id:\.self) { index in
                     let choice=HistoricalSignalChoice.choice(signalKeys[index])
                     Picker("Signal \(index+1)",selection:$signalKeys[index]) { ForEach(HistoricalSignalChoice.all) { option in Text(option.title).tag(option.key) } }
-                    PhoneSignalChart(trip:trip,choice:choice,events:events,playbackSeconds:$playbackSeconds)
+                    PhoneSignalChart(trip:trip,choice:choice,events:snapshot.timeline,
+                                     prepared:snapshot.signals[choice.key],playbackSeconds:$playbackSeconds)
                 }
                 InfoNote(text:"Signal choices are independent, including duplicates. Lines use real observation times, break at gaps, and never smooth or forward-fill missing values.")
                 Button { signalsOverview=true } label: {
@@ -229,7 +226,8 @@ struct TripStoryView:View {
                 }.accessibilityIdentifier("trip-story.signals")
             }
             SectionCard(title:"Evidence timeline",icon:"list.bullet.rectangle") {
-                ForEach(events) { event in
+                LazyVStack(alignment:.leading,spacing:8) {
+                ForEach(snapshot.timeline) { event in
                     Button { playbackSeconds=min(max(0,event.timestamp.timeIntervalSince(trip.startedAt)),trip.duration) } label: {
                         HStack(alignment:.top,spacing:10) {
                             Image(systemName:event.severity == .attention ? "exclamationmark.triangle.fill":"circle.fill").foregroundStyle(event.severity == .attention ? Palette.fuelAttention:Palette.cobalt).font(.caption)
@@ -237,6 +235,7 @@ struct TripStoryView:View {
                             Spacer();Image(systemName:"scope").foregroundStyle(Palette.tertiaryText)
                         }.frame(minHeight:40)
                     }.buttonStyle(.plain)
+                }
                 }
                 if let transfer=store.state.transfers.first(where:{$0.tripID==trip.id}) {
                     HStack { Image(systemName:"arrow.up.circle");Text("Transfer \(transfer.status.rawValue): \(transfer.message)");Spacer();StatusPill(state:transfer.status == .complete ? .ready:.queued) }.font(.caption)
@@ -261,10 +260,41 @@ struct TripStoryView:View {
                 catch { store.error=error.localizedDescription }
             }
             Button("Delete recording",role:.destructive) { delete=true }.frame(maxWidth:.infinity).padding(.top,8)
+            } else if let snapshotError {
+                EmptyStateCard(icon:"exclamationmark.triangle",title:"Trip Story unavailable",message:snapshotError)
+                Button("Retry") { self.snapshotError=nil; snapshot=nil;snapshotRetry += 1 }.accessibilityIdentifier("trip-story.retry")
+            } else {
+                HStack(spacing:12) { ProgressView();Text("Preparing recorded evidence").captionStyle() }
+                    .frame(maxWidth:.infinity,minHeight:120).accessibilityIdentifier("trip-story.loading")
+            }
         }.sheet(isPresented:$editingAnnotation) { JourneyAnnotationEditor(recordingID:trip.id) }
             .sheet(isPresented:$signalsOverview) { SignalsOverviewView(initialTripID:trip.id) }
             .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error)=result { store.error=error.localizedDescription } }
             .confirmationDialog("Delete this recording from this iPhone?",isPresented:$delete,titleVisibility:.visible) { Button("Delete recording",role:.destructive) { store.removeTrip(trip.id);dismiss() } }
+            .task(id:trip.id.uuidString+":\(snapshotRetry)") {
+                snapshot=nil; snapshotError=nil
+                let expected=trip.id
+                do {
+                    let prepared=try await TripStorySnapshotCache.shared.snapshot(recording:trip.sharedRecording)
+                    try Task.checkCancellation()
+                    guard prepared.key.recordingID == expected else { return }
+                    snapshot=prepared
+                } catch is CancellationError {
+                    return
+                } catch {
+                    snapshotError=error.localizedDescription
+                }
+            }
+    }
+    @ViewBuilder private func storyStatus(_ summary:DriveLineJourneySummary)->some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment:.leading,spacing:8) {
+                ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) }
+                StatusPill(state:summary.quality == .complete ? .ready:.stale,text:summary.quality.title)
+            }
+        } else {
+            HStack { ForEach(trip.sharedRecording.sourceIDs,id:\.self) { SourceBadge(source:$0.uppercased(),verified:true) };Spacer();StatusPill(state:summary.quality == .complete ? .ready:.stale,text:summary.quality.title) }
+        }
     }
     private func routePoint(_ point:DriveLineGPSPoint?)->RoutePoint? {
         guard let point else { return nil }
@@ -287,6 +317,7 @@ private struct PhoneSignalChart:View {
     let trip:Trip
     let choice:HistoricalSignalChoice
     let events:[DriveLineTripEvent]
+    let prepared:TripStorySignalSnapshot?
     @Binding var playbackSeconds:Double
     @State private var chartData:PhoneSignalChartData?
     var body:some View {
@@ -294,7 +325,7 @@ private struct PhoneSignalChart:View {
             if let chartData {
                 let series=chartData.series
                 HStack {
-                    SourceBadge(source:series.provenance == .derived ? "Derived · \(series.algorithmIdentifier ?? "policy")":"Measured",verified:true)
+                    SourceBadge(source:series.provenance == .derived ? "Derived · \(series.algorithmIdentifier ?? "policy")":(series.coverage?.sourceIDs.joined(separator:", ").uppercased() ?? "Measured"),verified:true)
                     if let coverage=series.coverage { Text("\(Int((coverage.fraction*100).rounded()))% coverage").captionStyle() }
                     Spacer();Text(choice.unit).captionStyle()
                 }
@@ -322,14 +353,16 @@ private struct PhoneSignalChart:View {
                     .frame(maxWidth:.infinity,minHeight:80).accessibilityIdentifier("trip-story.signal-loading")
             }
         }.padding(.vertical,5).task(id:trip.id.uuidString+":"+choice.key) {
+            if let prepared { chartData=PhoneSignalChartData(series:prepared.series,renderedSegments:prepared.renderedSegments);return }
             chartData=nil
             let recording=trip.sharedRecording,key=choice.key,unit=choice.unit
-            let prepared=await Task.detached(priority:.userInitiated) {
-                let series=DriveLineJourneyPolicy.signalSeries(key,unit:unit,recording:recording)
-                return PhoneSignalChartData(series:series,renderedSegments:DriveLineRenderingPolicy.signalSegments(series.segments))
-            }.value
-            guard !Task.isCancelled else { return }
-            chartData=prepared
+            do {
+                let signal=try await Task.detached(priority:.userInitiated) {
+                    try TripStorySnapshotBuilder.signal(key,unit:unit,recording:recording)
+                }.value
+                try Task.checkCancellation()
+                chartData=PhoneSignalChartData(series:signal.series,renderedSegments:signal.renderedSegments)
+            } catch { return }
         }
     }
 }

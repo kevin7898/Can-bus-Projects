@@ -404,6 +404,49 @@ public struct DriveLineReceiptMetadata: Codable, Equatable, Sendable {
     }
 }
 
+public enum DriveLineOdometerSourceType: String, Codable, CaseIterable, Sendable {
+    case scanned
+    case manual
+    case fuelEntry
+}
+
+/// Evidence for the odometer value saved with a fuel entry. Older archives do
+/// not contain this additive field and continue to decode with nil provenance.
+public struct DriveLineOdometerProvenance: Codable, Equatable, Sendable {
+    public var valueKm: Double
+    public var observedAt: Date
+    public var sourceIdentifier: String
+    public var recordingID: UUID?
+    public var sourceType: DriveLineOdometerSourceType
+
+    public init(valueKm: Double, observedAt: Date, sourceIdentifier: String,
+                recordingID: UUID? = nil, sourceType: DriveLineOdometerSourceType) {
+        self.valueKm = valueKm
+        self.observedAt = observedAt
+        self.sourceIdentifier = sourceIdentifier
+        self.recordingID = recordingID
+        self.sourceType = sourceType
+    }
+}
+
+public enum DriveLineStationSourceType: String, Codable, CaseIterable, Sendable {
+    case currentLocation
+    case manual
+}
+
+public struct DriveLineStationProvenance: Codable, Equatable, Sendable {
+    public var observedAt: Date
+    public var sourceIdentifier: String
+    public var sourceType: DriveLineStationSourceType
+
+    public init(observedAt: Date, sourceIdentifier: String,
+                sourceType: DriveLineStationSourceType) {
+        self.observedAt = observedAt
+        self.sourceIdentifier = sourceIdentifier
+        self.sourceType = sourceType
+    }
+}
+
 public struct DriveLineFuelEntry: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var vehicleID: UUID
@@ -414,13 +457,18 @@ public struct DriveLineFuelEntry: Codable, Equatable, Identifiable, Sendable {
     public var odometerKm: Double
     public var isFullFill: Bool
     public var stationName: String?
+    public var stationAddress: String?
+    public var odometerProvenance: DriveLineOdometerProvenance?
+    public var stationProvenance: DriveLineStationProvenance?
     public var notes: String?
     public var receipt: DriveLineReceiptMetadata?
     public var isSample: Bool
 
     public init(id: UUID = UUID(), vehicleID: UUID, date: Date, litresPurchased: Double,
                 totalCost: Double, currencyCode: String = "CAD", odometerKm: Double,
-                isFullFill: Bool, stationName: String? = nil, notes: String? = nil,
+                isFullFill: Bool, stationName: String? = nil, stationAddress: String? = nil,
+                odometerProvenance: DriveLineOdometerProvenance? = nil,
+                stationProvenance: DriveLineStationProvenance? = nil, notes: String? = nil,
                 receipt: DriveLineReceiptMetadata? = nil, isSample: Bool = false) {
         self.id = id
         self.vehicleID = vehicleID
@@ -431,6 +479,9 @@ public struct DriveLineFuelEntry: Codable, Equatable, Identifiable, Sendable {
         self.odometerKm = odometerKm
         self.isFullFill = isFullFill
         self.stationName = stationName
+        self.stationAddress = stationAddress
+        self.odometerProvenance = odometerProvenance
+        self.stationProvenance = stationProvenance
         self.notes = notes
         self.receipt = receipt
         self.isSample = isSample
@@ -645,6 +696,17 @@ public struct DriveLineArchive: Codable, Equatable, Sendable {
                   fill.totalCost.isFinite, fill.totalCost >= 0,
                   fill.odometerKm.isFinite, fill.odometerKm >= 0,
                   fill.date.timeIntervalSince1970.isFinite,
+                  (fill.stationName?.count ?? 0) <= 120,
+                  (fill.stationAddress?.count ?? 0) <= 240,
+                  fill.odometerProvenance.map({ provenance in
+                      provenance.valueKm.isFinite && provenance.valueKm >= 0 &&
+                      provenance.observedAt.timeIntervalSince1970.isFinite &&
+                      !provenance.sourceIdentifier.isEmpty && provenance.sourceIdentifier.count <= 120
+                  }) ?? true,
+                  fill.stationProvenance.map({ provenance in
+                      provenance.observedAt.timeIntervalSince1970.isFinite &&
+                      !provenance.sourceIdentifier.isEmpty && provenance.sourceIdentifier.count <= 120
+                  }) ?? true,
                   fill.receipt.map({ receipt in
                       receipt.byteCount >= 0 && !receipt.fileName.isEmpty && !receipt.mediaType.isEmpty &&
                       receipt.sha256.count == 64 && receipt.sha256.allSatisfy(\.isHexDigit)

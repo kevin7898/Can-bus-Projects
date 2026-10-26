@@ -256,13 +256,19 @@ public struct FuelEntry:Codable,Identifiable,Equatable,Sendable {
     public var odometerKm:Double
     public var isFullFill:Bool
     public var stationName:String?
+    public var stationAddress:String?
+    public var odometerProvenance:DriveLineOdometerProvenance?
+    public var stationProvenance:DriveLineStationProvenance?
     public var notes:String?
     public var receipt:DriveLineReceiptMetadata?
     public var isDemo:Bool
     public init(id:UUID = UUID(),vehicleID:UUID,date:Date,litresPurchased:Double,totalCost:Double,currencyCode:String="CAD",
-                odometerKm:Double,isFullFill:Bool,stationName:String?=nil,notes:String?=nil,receipt:DriveLineReceiptMetadata?=nil,isDemo:Bool=false) {
+                odometerKm:Double,isFullFill:Bool,stationName:String?=nil,stationAddress:String?=nil,
+                odometerProvenance:DriveLineOdometerProvenance?=nil,stationProvenance:DriveLineStationProvenance?=nil,
+                notes:String?=nil,receipt:DriveLineReceiptMetadata?=nil,isDemo:Bool=false) {
         self.id=id;self.vehicleID=vehicleID;self.date=date;self.litresPurchased=litresPurchased;self.totalCost=totalCost
         self.currencyCode=currencyCode;self.odometerKm=odometerKm;self.isFullFill=isFullFill;self.stationName=stationName
+        self.stationAddress=stationAddress;self.odometerProvenance=odometerProvenance;self.stationProvenance=stationProvenance
         self.notes=notes;self.receipt=receipt;self.isDemo=isDemo
     }
 }

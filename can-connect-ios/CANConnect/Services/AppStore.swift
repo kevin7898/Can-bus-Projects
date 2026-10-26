@@ -23,6 +23,7 @@ final class AppStore: ObservableObject {
     @Published var garagePresented = false
     let gps: any GPSRecording
     let scanner: ScannerRecorder
+    let fuelLocation:any FuelLocationProviding
     @Published var serverStatus = "Not connected"
     @Published var transferring = false
     private var scannerChanges: AnyCancellable?
@@ -51,9 +52,11 @@ final class AppStore: ObservableObject {
     private var canWrite = true
     init(disk: LocalStore = LocalStore(), scanner: ScannerRecorder? = nil,
          activity: RecordingActivityManaging? = nil, gps: (any GPSRecording)? = nil,
+         fuelLocation:(any FuelLocationProviding)? = nil,
          scannerAvailable: @escaping @MainActor (ScannerSettings) -> Bool = { (try? MXPlusAccessory.select(serial:$0.accessorySerial)) != nil }) {
         self.activity = activity ?? RecordingLiveActivity()
         self.gps = gps ?? GPSRecorder()
+        self.fuelLocation=fuelLocation ?? FuelLocationService()
         self.disk = disk
         self.scannerAvailable = scannerAvailable
         self.scanner = scanner ?? ScannerRecorder()
@@ -328,7 +331,9 @@ final class AppStore: ObservableObject {
     @discardableResult func saveFill(id:UUID? = nil,litres:Double,cost:Double,currencyCode:String,odometer:Double,
                                      full:Bool,date:Date,stationName:String?,notes:String?,
                                      receipt:ReceiptAttachment? = nil,removeReceipt:Bool = false,
-                                     allowOdometerCorrection:Bool = false) throws ->FuelEntry {
+                                     allowOdometerCorrection:Bool = false,stationAddress:String? = nil,
+                                     odometerProvenance:DriveLineOdometerProvenance? = nil,
+                                     stationProvenance:DriveLineStationProvenance? = nil) throws ->FuelEntry {
         guard canWrite else { throw AppFailure("Saved data is unavailable. Restart after recovering the original data file.") }
         let existing=id.flatMap { value in state.fills.first(where:{$0.id==value}) }
         guard let vehicleID=existing?.vehicleID ?? state.selectedVehicleID,state.vehicles.contains(where:{$0.id==vehicleID && !$0.isSample}) else { throw AppFailure("Choose a real vehicle before saving fuel.") }
@@ -337,23 +342,40 @@ final class AppStore: ObservableObject {
         let currency=currencyCode.trimmingCharacters(in:.whitespacesAndNewlines).uppercased()
         guard currency.count==3,currency.allSatisfy({$0.isASCII && $0.isLetter}) else { throw AppFailure("Use a three-letter currency code such as CAD or USD.") }
         let station=stationName?.trimmingCharacters(in:.whitespacesAndNewlines)
+        let address=stationAddress?.trimmingCharacters(in:.whitespacesAndNewlines)
         let note=notes?.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard (station?.count ?? 0)<=120,(note?.count ?? 0)<=1_000 else { throw AppFailure("Use a shorter station name or note.") }
+        guard (station?.count ?? 0)<=120,(address?.count ?? 0)<=240,(note?.count ?? 0)<=1_000 else { throw AppFailure("Use a shorter station name, address or note.") }
         let realFills=state.fills.filter { !$0.isSample && $0.vehicleID == vehicleID && $0.id != id }
         let outOfOrder=realFills.contains { $0.date<date && $0.odometerKM>odometer || $0.date>date && $0.odometerKM<odometer }
         guard !outOfOrder || allowOdometerCorrection else { throw AppFailure("The odometer conflicts with the dated fill order. Confirm this is a legitimate correction to save it.") }
         guard existing?.isSample != true else { throw AppFailure("Sample fuel entries cannot be edited as real history.") }
         if let receipt { try disk.storeReceipt(receipt) }
         let metadata=removeReceipt ? nil:(receipt?.metadata ?? existing?.receipt)
+        let odometerEvidence=odometerProvenance ?? DriveLineOdometerProvenance(valueKm:odometer,observedAt:date,
+            sourceIdentifier:allowOdometerCorrection ? "manual-correction":"manual-entry",sourceType:.manual)
+        let stationEvidence:DriveLineStationProvenance? = {
+            guard station?.isEmpty == false || address?.isEmpty == false else { return nil }
+            return stationProvenance ?? DriveLineStationProvenance(observedAt:date,sourceIdentifier:"manual-entry",sourceType:.manual)
+        }()
         let value=FuelEntry(id:id ?? UUID(),vehicleID:vehicleID,date:date,litres:litres,costCAD:cost,odometerKM:odometer,full:full,
                             currencyCode:currency,stationName:station?.isEmpty == true ? nil:station,
-                            notes:note?.isEmpty == true ? nil:note,receipt:metadata)
+                            notes:note?.isEmpty == true ? nil:note,receipt:metadata,
+                            stationAddress:address?.isEmpty == true ? nil:address,
+                            odometerProvenance:odometerEvidence,stationProvenance:stationEvidence)
         var next = state
         if let index=next.fills.firstIndex(where:{$0.id==value.id}) { next.fills[index]=value } else { next.fills.append(value) }
         try disk.save(next);state=next;notify(id == nil ? "Fill-up saved":"Fuel entry updated")
         return value
     }
     func prepareReceipt(_ url:URL) throws ->ReceiptAttachment { try disk.prepareReceipt(url) }
+    func fuelOdometerPrefill(at now:Date=Date())->DriveLineOdometerProvenance? {
+        guard let vehicleID=state.selectedVehicleID else { return nil }
+        // There is intentionally no production current scan candidate until a
+        // reviewed odometer decoder exists in OBDDecoder/VWMeasurementDecoder.
+        return FuelOdometerPrefillPolicy.choose(vehicleID:vehicleID,current:nil,
+            stored:state.scannedOdometerObservations ?? [],fills:state.fills,now:now)
+    }
+    func currentFuelStation() async throws ->FuelStationSuggestion { try await fuelLocation.currentStation() }
     func hasReceipt(_ metadata:DriveLineReceiptMetadata)->Bool { disk.receiptData(metadata) != nil }
     func addFill(litres: Double, cost: Double, odometer: Double, full: Bool, date: Date) throws {
         _=try saveFill(litres:litres,cost:cost,currencyCode:"CAD",odometer:odometer,full:full,date:date,stationName:nil,notes:nil)

@@ -31,21 +31,38 @@ struct SourceBadge:View {
     }
 }
 
+struct ObservationFreshnessDisplay:Equatable {
+    var state:DriveLineSemanticState
+    var label:String
+    static func resolve(observedAt:Date?,now:Date,staleAfter:TimeInterval,
+                        semanticState:DriveLineSemanticState?=nil,statusText:String?=nil)->Self {
+        let age=observedAt.map { max(0,now.timeIntervalSince($0)) }
+        let state=semanticState ?? (age == nil ? .unavailable:(age! > staleAfter ? .stale:.ready))
+        if let statusText { return Self(state:state,label:statusText) }
+        if state == .offline { return Self(state:state,label:"Scanner disconnected") }
+        if state == .unavailable { return Self(state:state,label:"Not observed") }
+        guard let age else { return Self(state:state,label:state == .stale ? "Stale":"Not observed") }
+        if state == .stale {
+            let text=age < 60 ? "\(max(1,Int(age)))s ago":age < 3_600 ? "\(Int(age/60))m ago":"\(Int(age/3_600))h ago"
+            return Self(state:state,label:"Stale · \(text)")
+        }
+        if age<5 { return Self(state:state,label:"Live") }
+        if age<60 { return Self(state:state,label:"Observed \(Int(age)) seconds ago") }
+        return Self(state:state,label:"Observed \(Int(age/60)) minutes ago")
+    }
+}
+
 struct FreshnessLabel:View {
     let observedAt:Date?
     var now=Date()
     var staleAfter:TimeInterval=60
+    var semanticState:DriveLineSemanticState?=nil
+    var statusText:String?=nil
     var body:some View {
-        let age=observedAt.map { max(0,now.timeIntervalSince($0)) }
-        let state:DriveLineSemanticState=age==nil ? .unavailable:(age!>staleAfter ? .stale:.ready)
-        Label(freshness(age),systemImage:state.icon).font(.caption2).foregroundStyle(state.phoneColor)
-            .accessibilityLabel("Freshness: \(freshness(age))")
-    }
-    private func freshness(_ age:TimeInterval?)->String {
-        guard let age else { return "Not observed" }
-        if age<5 { return "Live" }
-        if age<60 { return "Observed \(Int(age)) seconds ago" }
-        return "Observed \(Int(age/60)) minutes ago"
+        let display=ObservationFreshnessDisplay.resolve(observedAt:observedAt,now:now,staleAfter:staleAfter,
+            semanticState:semanticState,statusText:statusText)
+        Label(display.label,systemImage:display.state.icon).font(.caption2).foregroundStyle(display.state.phoneColor)
+            .accessibilityLabel("Freshness: \(display.label)")
     }
 }
 
@@ -55,13 +72,17 @@ struct AvailabilityValue:View {
     var source:String?=nil
     var observedAt:Date?=nil
     var showsFreshness=true
+    var state:DriveLineSemanticState = .ready
+    var statusText:String?=nil
+    var now=Date()
     var body:some View {
         VStack(alignment:.leading,spacing:5) {
             HStack(alignment:.firstTextBaseline,spacing:4) {
                 Text(value ?? "—").font(.title2.weight(.semibold)).monospacedDigit()
+                    .foregroundStyle(state == .ready ? Palette.primaryText:state.phoneColor)
                 if !unit.isEmpty { Text(unit).font(.caption).foregroundStyle(Palette.secondaryText) }
             }
-            HStack(spacing:8) { if let source { SourceBadge(source:source) };if showsFreshness { FreshnessLabel(observedAt:observedAt) } }
+            HStack(spacing:8) { if let source { SourceBadge(source:source) };if showsFreshness { FreshnessLabel(observedAt:observedAt,now:now,semanticState:state,statusText:statusText) } }
         }.accessibilityElement(children:.combine).accessibilityValue(value.map { "\($0) \(unit)" } ?? "Unavailable")
     }
 }
@@ -73,10 +94,14 @@ struct MetricTile:View {
     var state:DriveLineSemanticState = .ready
     var source:String?=nil
     var showsFreshness=true
+    var observedAt:Date?=nil
+    var statusText:String?=nil
+    var now=Date()
     var body:some View {
         VStack(alignment:.leading,spacing:10) {
             HStack { Text(title).font(.caption.weight(.medium)).foregroundStyle(Palette.secondaryText);Spacer();Image(systemName:state.icon).foregroundStyle(state.phoneColor) }
-            AvailabilityValue(value:value,unit:unit,source:source,observedAt:state == .unavailable ? nil:Date(),showsFreshness:showsFreshness)
+            AvailabilityValue(value:value,unit:unit,source:source,observedAt:observedAt,showsFreshness:showsFreshness,
+                state:state,statusText:statusText,now:now)
         }.padding(13).background(Palette.primarySurface,in:RoundedRectangle(cornerRadius:Palette.Radius.medium))
             .overlay(RoundedRectangle(cornerRadius:Palette.Radius.medium).stroke(Palette.border))
     }
