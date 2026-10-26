@@ -49,10 +49,9 @@ struct TripsView:View {
 
     private var filteredTrips:[Trip] {
         store.state.trips.sorted { $0.startedAt > $1.startedAt }.filter { trip in
-            let summary=DriveLineJourneyPolicy.summary(for:trip.sharedRecording)
             let annotation=store.journeyAnnotation(for:trip.id)
             let sourceMatch=sourceFilter == .all || trip.sharedRecording.sourceIDs.contains(sourceFilter.rawValue)
-            let qualityMatch=quality == .all || summary.quality.rawValue == quality.rawValue
+            let qualityMatch=quality == .all || DriveLineJourneyPolicy.summary(for:trip.sharedRecording).quality.rawValue == quality.rawValue
             let vehicleMatch=vehicleID == nil || trip.vehicleID == vehicleID
             let dateMatch=dateFilter.interval.map { trip.startedAt >= Date().addingTimeInterval(-$0) } ?? true
             return sourceMatch && qualityMatch && vehicleMatch && dateMatch && (purpose == nil || annotation.purpose == purpose)
@@ -60,6 +59,7 @@ struct TripsView:View {
     }
 
     var body:some View {
+        let trips=filteredTrips
         VStack(alignment:.leading,spacing:12) {
             ScrollView(.horizontal,showsIndicators:false) {
                 HStack(spacing:8) {
@@ -83,16 +83,16 @@ struct TripsView:View {
                 }.padding(.vertical,1)
             }.accessibilityIdentifier("journey.filters")
             HStack {
-                Text("\(filteredTrips.count) journeys").font(.system(size:14,weight:.medium))
+                Text("\(trips.count) journeys").font(.system(size:14,weight:.medium))
                 Spacer()
-                Text("\(filteredTrips.filter{!$0.isSample}.reduce(0){$0+$1.distanceKM}.text()) km real history").captionStyle()
+                Text("\(trips.filter{!$0.isSample}.reduce(0){$0+$1.distanceKM}.text()) km real history").captionStyle()
             }
-            if filteredTrips.isEmpty {
+            if trips.isEmpty {
                 EmptyStateCard(icon:"point.topleft.down.to.point.bottomright.curvepath",title:"No journeys match",message:"Change a filter or record a drive. Sample recordings remain labelled and never count toward real totals.")
             } else {
                 ScrollView {
                     LazyVStack(spacing:10) {
-                        ForEach(filteredTrips) { trip in
+                        ForEach(trips) { trip in
                             JourneyRow(trip:trip,annotation:store.journeyAnnotation(for:trip.id),
                                        transfer:store.state.transfers.first(where:{$0.tripID==trip.id})) { selected=trip }
                         }
@@ -175,15 +175,14 @@ struct TripStoryView:View {
     @State private var signalsOverview=false
     @State private var playbackSeconds=0.0
     @State private var signalKeys=["speedKph","rpm","boostKpa"]
-    private var summary:DriveLineJourneySummary { DriveLineJourneyPolicy.summary(for:trip.sharedRecording) }
-    private var selectedDate:Date { trip.startedAt.addingTimeInterval(playbackSeconds) }
-    private var cursor:DriveLineCursorSelection {
-        DriveLineJourneyPolicy.cursor(at:selectedDate,recording:trip.sharedRecording,
-                                      signalKeys:["speedKph","rpm","coolantC","fuelRateLph","dpfRegenTrigger"])
-    }
-    private var events:[DriveLineTripEvent] { DriveLineJourneyPolicy.timeline(for:trip.sharedRecording) }
     private var annotation:DriveLineJourneyAnnotation { store.journeyAnnotation(for:trip.id) }
     var body:some View {
+        let summary=DriveLineJourneyPolicy.summary(for:trip.sharedRecording)
+        let selectedDate=trip.startedAt.addingTimeInterval(playbackSeconds)
+        let cursor=DriveLineJourneyPolicy.cursor(at:selectedDate,recording:trip.sharedRecording,
+            signalKeys:["speedKph","rpm","coolantC","fuelRateLph","dpfRegenTrigger"])
+        let events=DriveLineJourneyPolicy.timeline(for:trip.sharedRecording)
+        let selectedRoutePoint=routePoint(cursor.gpsPoint)
         SheetShell(title:"Trip Story") {
             VStack(alignment:.leading,spacing:7) {
                 Text(trip.name).font(.title3)
@@ -222,7 +221,7 @@ struct TripStoryView:View {
                 ForEach(signalKeys.indices,id:\.self) { index in
                     let choice=HistoricalSignalChoice.choice(signalKeys[index])
                     Picker("Signal \(index+1)",selection:$signalKeys[index]) { ForEach(HistoricalSignalChoice.all) { option in Text(option.title).tag(option.key) } }
-                    PhoneSignalChart(trip:trip,choice:choice,playbackSeconds:$playbackSeconds)
+                    PhoneSignalChart(trip:trip,choice:choice,events:events,playbackSeconds:$playbackSeconds)
                 }
                 InfoNote(text:"Signal choices are independent, including duplicates. Lines use real observation times, break at gaps, and never smooth or forward-fill missing values.")
                 Button { signalsOverview=true } label: {
@@ -267,8 +266,8 @@ struct TripStoryView:View {
             .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"DriveLine-\(trip.id.uuidString.prefix(8))") { result in if case .failure(let error)=result { store.error=error.localizedDescription } }
             .confirmationDialog("Delete this recording from this iPhone?",isPresented:$delete,titleVisibility:.visible) { Button("Delete recording",role:.destructive) { store.removeTrip(trip.id);dismiss() } }
     }
-    private var selectedRoutePoint:RoutePoint? {
-        guard let point=cursor.gpsPoint else { return nil }
+    private func routePoint(_ point:DriveLineGPSPoint?)->RoutePoint? {
+        guard let point else { return nil }
         return RoutePoint(latitude:point.latitude,longitude:point.longitude,timestamp:point.timestamp,accuracy:point.horizontalAccuracyM ?? 0,speed:point.speedMps)
     }
     private func coverage(_ title:String,_ fraction:Double?)->some View {
@@ -287,36 +286,57 @@ struct TripStoryView:View {
 private struct PhoneSignalChart:View {
     let trip:Trip
     let choice:HistoricalSignalChoice
+    let events:[DriveLineTripEvent]
     @Binding var playbackSeconds:Double
-    private var series:DriveLineSignalSeries { DriveLineJourneyPolicy.signalSeries(choice.key,unit:choice.unit,recording:trip.sharedRecording) }
-    private var renderedSegments:[[DriveLineSignalPoint]] { DriveLineRenderingPolicy.signalSegments(series.segments) }
+    @State private var chartData:PhoneSignalChartData?
     var body:some View {
         VStack(alignment:.leading,spacing:6) {
-            HStack {
-                SourceBadge(source:series.provenance == .derived ? "Derived · \(series.algorithmIdentifier ?? "policy")":"Measured",verified:true)
-                if let coverage=series.coverage { Text("\(Int((coverage.fraction*100).rounded()))% coverage").captionStyle() }
-                Spacer();Text(choice.unit).captionStyle()
-            }
-            if series.segments.flatMap({$0}).isEmpty { Text("No recorded \(choice.title.lowercased()) observations").captionStyle().frame(maxWidth:.infinity,minHeight:80) }
-            else {
-                Chart {
-                    ForEach(Array(renderedSegments.enumerated()),id:\.offset) { segment,points in
-                        ForEach(points) { point in LineMark(x:.value("Time",point.timestamp),y:.value(choice.unit,point.value),series:.value("Observed segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt) }
+            if let chartData {
+                let series=chartData.series
+                HStack {
+                    SourceBadge(source:series.provenance == .derived ? "Derived · \(series.algorithmIdentifier ?? "policy")":"Measured",verified:true)
+                    if let coverage=series.coverage { Text("\(Int((coverage.fraction*100).rounded()))% coverage").captionStyle() }
+                    Spacer();Text(choice.unit).captionStyle()
+                }
+                if series.segments.flatMap({$0}).isEmpty { Text("No recorded \(choice.title.lowercased()) observations").captionStyle().frame(maxWidth:.infinity,minHeight:80) }
+                else {
+                    Chart {
+                        ForEach(Array(chartData.renderedSegments.enumerated()),id:\.offset) { segment,points in
+                            ForEach(points) { point in LineMark(x:.value("Time",point.timestamp),y:.value(choice.unit,point.value),series:.value("Observed segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt) }
+                        }
+                        ForEach(events.filter{$0.severity == .attention}) { event in RuleMark(x:.value("Evidence event",event.timestamp)).foregroundStyle(Palette.recordingFault.opacity(0.55)).lineStyle(StrokeStyle(lineWidth:1,dash:[2,3])) }
+                        RuleMark(x:.value("Shared cursor",trip.startedAt.addingTimeInterval(playbackSeconds))).foregroundStyle(Palette.tertiaryText).lineStyle(StrokeStyle(lineWidth:1,dash:[3]))
                     }
-                    ForEach(DriveLineJourneyPolicy.timeline(for:trip.sharedRecording).filter{$0.severity == .attention}) { event in RuleMark(x:.value("Evidence event",event.timestamp)).foregroundStyle(Palette.recordingFault.opacity(0.55)).lineStyle(StrokeStyle(lineWidth:1,dash:[2,3])) }
-                    RuleMark(x:.value("Shared cursor",trip.startedAt.addingTimeInterval(playbackSeconds))).foregroundStyle(Palette.tertiaryText).lineStyle(StrokeStyle(lineWidth:1,dash:[3]))
-                }.chartXScale(domain:trip.startedAt...max(trip.startedAt.addingTimeInterval(trip.duration),trip.startedAt.addingTimeInterval(0.001)))
-                    .frame(height:130).chartLegend(.hidden)
-                    .chartOverlay { proxy in GeometryReader { geometry in
-                        Rectangle().fill(.clear).contentShape(Rectangle()).gesture(DragGesture(minimumDistance:0).onChanged { value in
-                            guard let frame=proxy.plotFrame else { return }
-                            let x=value.location.x-geometry[frame].origin.x
-                            if let date:Date=proxy.value(atX:x) { playbackSeconds=min(max(0,date.timeIntervalSince(trip.startedAt)),trip.duration) }
-                        })
-                    } }
+                    .chartXScale(domain:trip.startedAt...max(trip.startedAt.addingTimeInterval(trip.duration),trip.startedAt.addingTimeInterval(0.001)))
+                        .frame(height:130).chartLegend(.hidden)
+                        .chartOverlay { proxy in GeometryReader { geometry in
+                            Rectangle().fill(.clear).contentShape(Rectangle()).gesture(DragGesture(minimumDistance:0).onChanged { value in
+                                guard let frame=proxy.plotFrame else { return }
+                                let x=value.location.x-geometry[frame].origin.x
+                                if let date:Date=proxy.value(atX:x) { playbackSeconds=min(max(0,date.timeIntervalSince(trip.startedAt)),trip.duration) }
+                            })
+                        } }
+                }
+            } else {
+                HStack { ProgressView();Text("Preparing recorded \(choice.title.lowercased()) observations").captionStyle() }
+                    .frame(maxWidth:.infinity,minHeight:80).accessibilityIdentifier("trip-story.signal-loading")
             }
-        }.padding(.vertical,5)
+        }.padding(.vertical,5).task(id:trip.id.uuidString+":"+choice.key) {
+            chartData=nil
+            let recording=trip.sharedRecording,key=choice.key,unit=choice.unit
+            let prepared=await Task.detached(priority:.userInitiated) {
+                let series=DriveLineJourneyPolicy.signalSeries(key,unit:unit,recording:recording)
+                return PhoneSignalChartData(series:series,renderedSegments:DriveLineRenderingPolicy.signalSegments(series.segments))
+            }.value
+            guard !Task.isCancelled else { return }
+            chartData=prepared
+        }
     }
+}
+
+private struct PhoneSignalChartData:Sendable {
+    let series:DriveLineSignalSeries
+    let renderedSegments:[[DriveLineSignalPoint]]
 }
 
 private struct PhoneSignalGroup:Identifiable {

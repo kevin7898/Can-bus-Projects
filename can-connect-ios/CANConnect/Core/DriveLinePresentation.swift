@@ -85,8 +85,11 @@ struct PhoneRecordingPresentation: Equatable {
         let draft=state.draft
         let elapsed=draft.map { max(0,now.timeIntervalSince($0.startedAt)) } ?? 0
         let observations=latestObservations(draft:draft)
+        let gpsStatusLower=gpsStatus.lowercased()
         let gpsFresh=gpsLastFix.map { (0...10).contains(now.timeIntervalSince($0)) } ?? false
-        let gpsMissing=draft != nil && draft?.source != .demo && elapsed>15 && !gpsFresh
+        let gpsSessionActive=gpsLastFix != nil && gpsStatusLower.hasPrefix("gps active")
+        let gpsMissing=draft != nil && draft?.source != .demo && elapsed>15 && !gpsFresh && !gpsSessionActive
+        let gpsAcquiring=gpsStatusLower.contains("waiting") || gpsStatusLower.contains("fix") || gpsStatusLower.contains("weak")
         let scannerMissing=draft?.source == .scanner && !scannerConnected
         let phase:PhoneRecordingPhase
         if recovered { phase = .recovered }
@@ -118,14 +121,14 @@ struct PhoneRecordingPresentation: Equatable {
         let queue=state.transfers.filter { $0.status == .queued || $0.status == .awaitingReceipt }.count
         let recovery:(String?,String?)
         if scannerMissing { recovery=("Scanner disconnected","GPS recording continues locally during the two-minute reconnect window.") }
-        else if gpsMissing && draft?.source == .scanner { recovery=("GPS unavailable","Scanner telemetry continues. Route coverage will show the location gap.") }
-        else if gpsMissing { recovery=("GPS unavailable","The recording remains local while DriveLine waits for a fresh location.") }
+        else if gpsMissing && draft?.source == .scanner { recovery=(gpsAcquiring ? "GPS acquiring":"GPS unavailable",gpsStatus+". Scanner telemetry continues; route coverage will show the location gap.") }
+        else if gpsMissing { recovery=(gpsAcquiring ? "GPS acquiring":"GPS unavailable",gpsStatus+". The recording remains local while DriveLine waits for a fresh location.") }
         else { recovery=(nil,nil) }
         let source=draft?.source ?? selectedSource
         return Self(phase:phase,sourceTitle:source.title,statusTitle:title(phase),
                     statusMessage:message(phase,scannerStatus:scannerStatus,gpsStatus:gpsStatus),elapsed:elapsed,
                     distanceKM:draft?.distanceKM ?? 0,speed:speedObservation,metrics:metrics,route:draft?.route ?? [],
-                    gpsState:gpsFresh ? .ready:(pendingGPS ? .waiting:(draft == nil ? .stale:.unavailable)),
+                    gpsState:(gpsFresh || gpsSessionActive) ? .ready:((pendingGPS || gpsAcquiring) ? .waiting:(draft == nil ? .stale:.unavailable)),
                     scannerState:scannerConnected ? .ready:(scannerConnecting ? .processing:.unavailable),
                     localState:draft == nil ? .ready:.active,queuedTransfers:queue,
                     recoveryTitle:recovery.0,recoveryMessage:recovery.1)

@@ -18,8 +18,9 @@ struct LiveView: View {
                     VStack(alignment:.leading,spacing:12) {
                         recordingHeader
                         if let title=presentation.recoveryTitle,let message=presentation.recoveryMessage {
-                            RecoveryBanner(title:title,message:message,actionTitle:store.source == .scanner ? "Retry connection":nil) {
-                                store.reconcileScannerConnection(at:Date().addingTimeInterval(61))
+                            RecoveryBanner(title:title,message:message,actionTitle:recoveryActionTitle) {
+                                if title == "GPS acquiring" || title == "GPS unavailable" { store.retryGPS() }
+                                else { store.reconcileScannerConnection(at:Date().addingTimeInterval(61)) }
                             }.accessibilityIdentifier("record.recovery")
                         }
                         if presentation.phase == .idle || presentation.phase == .starting { preflight }
@@ -136,6 +137,13 @@ struct LiveView: View {
         }
     }
     private var phaseSemantic:DriveLineSemanticState { presentation.phase == .starting ? .waiting:(presentation.phase == .idle ? .ready:.processing) }
+    private var recoveryActionTitle:String? {
+        switch presentation.recoveryTitle {
+        case "GPS acquiring","GPS unavailable":return "Retry GPS"
+        case "Scanner disconnected":return "Retry connection"
+        default:return nil
+        }
+    }
     private func color(_ state:DriveLineSemanticState)->Color { switch state {
         case .ready,.complete,.recovered:return Palette.healthy
         case .waiting,.queued,.processing,.degraded,.stale:return Palette.fuelAttention

@@ -94,6 +94,8 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(1),accuracy:51,beganAt:began,now:began.addingTimeInterval(2)))
         XCTAssertFalse(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(1),accuracy:-1,beganAt:began,now:began.addingTimeInterval(2)))
         XCTAssertFalse(GPSRecorder.acceptsFix(timestamp:began.addingTimeInterval(1),accuracy:9,beganAt:began,now:began.addingTimeInterval(30)))
+        XCTAssertEqual(GPSRecorder.bestLimitedAccuracy([(began.addingTimeInterval(1),84),(began.addingTimeInterval(1),63)],beganAt:began,now:began.addingTimeInterval(2)),63)
+        XCTAssertNil(GPSRecorder.bestLimitedAccuracy([(began.addingTimeInterval(-1),80),(began.addingTimeInterval(1),40)],beganAt:began,now:began.addingTimeInterval(2)))
     }
 
 }

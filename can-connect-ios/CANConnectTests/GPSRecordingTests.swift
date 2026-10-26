@@ -134,6 +134,21 @@ extension GPSRecordingTests {
         XCTAssertEqual(manager.starts,3)
     }
     @MainActor
+    func testWeakFixStaysUnrecordedAndRetryRestartsAcquisition() {
+        let manager=LocationManagerFixture()
+        let gps=GPSRecorder(manager:manager,isForeground:{true})
+        gps.start()
+        let weak=CLLocation(coordinate:CLLocationCoordinate2D(latitude:49,longitude:-124),altitude:0,
+            horizontalAccuracy:84,verticalAccuracy:10,timestamp:Date())
+        gps.locationManager(manager,didUpdateLocations:[weak])
+        XCTAssertTrue(gps.status.contains("GPS signal weak"))
+        XCTAssertNil(gps.lastFix,"A low-confidence location must not become recorded route evidence")
+        gps.retry()
+        XCTAssertEqual(manager.stops,1)
+        XCTAssertEqual(manager.starts,2)
+        XCTAssertEqual(gps.status,"Waiting for a GPS fix")
+    }
+    @MainActor
     func testAutomaticLocationPermissionUpgradeIsExplicitAndForegroundOnly() {
         let manager = LocationManagerFixture()
         var foreground = false

@@ -25,10 +25,14 @@ protocol GPSRecording: AnyObject {
     var onFailure: ((String) -> Void)? { get set }
     func requestAutomaticAuthorization()
     func start()
+    func retry()
     func stop()
 }
 
-extension GPSRecording { var permissionState:GPSPermissionState { .available } }
+extension GPSRecording {
+    var permissionState:GPSPermissionState { .available }
+    func retry() { stop(); start() }
+}
 
 @MainActor
 final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurrency CLLocationManagerDelegate {
@@ -60,7 +64,7 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
         self.isForeground = isForeground ?? { UIApplication.shared.applicationState == .active }
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         manager.distanceFilter = 5
         manager.activityType = .automotiveNavigation
         manager.pausesLocationUpdatesAutomatically = false
@@ -95,6 +99,15 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
             if isForeground() { manager.requestWhenInUseAuthorization() }
         default: fail("Allow location access in iPhone Settings to record a GPS drive.")
         }
+    }
+    func retry() {
+        guard wantsRecording else { start(); return }
+        manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
+        updatesBeganAt = nil
+        speedKMH = nil
+        lastFix = nil
+        start()
     }
     func stop() {
         wantsRecording = false
@@ -143,16 +156,28 @@ final class GPSRecorder: NSObject, ObservableObject, GPSRecording, @preconcurren
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard wantsRecording, let updatesBeganAt else { return }
-        for location in locations where Self.acceptsFix(timestamp:location.timestamp,accuracy:location.horizontalAccuracy,beganAt:updatesBeganAt,now:Date()) {
+        let now=Date()
+        var accepted=false
+        for location in locations where Self.acceptsFix(timestamp:location.timestamp,accuracy:location.horizontalAccuracy,beganAt:updatesBeganAt,now:now) {
+            accepted=true
             manager.distanceFilter = 5
             lastFix = location.timestamp
             speedKMH = location.speed >= 0 && location.speed <= 80 ? location.speed * 3.6 : nil
             status = "GPS active · ±\(Int(location.horizontalAccuracy)) m"
             onPoint?(RoutePoint(latitude:location.coordinate.latitude, longitude:location.coordinate.longitude, timestamp:location.timestamp, accuracy:location.horizontalAccuracy, speed:location.speed >= 0 && location.speed <= 80 ? location.speed : nil))
         }
+        if !accepted,let accuracy=Self.bestLimitedAccuracy(locations.map { ($0.timestamp,$0.horizontalAccuracy) },beganAt:updatesBeganAt,now:now) {
+            speedKMH=nil
+            status="GPS signal weak · ±\(Int(accuracy.rounded())) m · move outdoors"
+        }
     }
     nonisolated static func acceptsFix(timestamp: Date, accuracy: Double, beganAt: Date, now: Date) -> Bool {
         timestamp >= beganAt && abs(timestamp.timeIntervalSince(now)) < 15 && accuracy.isFinite && (0...50).contains(accuracy)
+    }
+    nonisolated static func bestLimitedAccuracy(_ fixes:[(Date,Double)],beganAt:Date,now:Date)->Double? {
+        fixes.compactMap { timestamp,accuracy in
+            timestamp >= beganAt && abs(timestamp.timeIntervalSince(now)) < 15 && accuracy.isFinite && accuracy > 50 ? accuracy:nil
+        }.min()
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         if (error as? CLError)?.code == .locationUnknown { status = "Waiting for a GPS fix"; speedKMH = nil }

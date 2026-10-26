@@ -295,6 +295,7 @@ final class AppStore: ObservableObject {
         else { state.draft = RecordingDraft(vehicleID:state.selectedVehicleID, source:.demo, startedAt:now, updatedAt:now); save() }
     }
     func cancelGPS() { pendingGPS = false; gps.stop() }
+    func retryGPS() { gps.retry() }
     func finishRecording(endedAt requestedEnd: Date? = nil) {
         DriveLinePerformance.event("Recording finalization")
         guard var draft = state.draft else { return }

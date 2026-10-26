@@ -86,7 +86,9 @@ final class AppStoreTests: XCTestCase {
             gpsSpeedKMH:nil,gpsLastFix:nil,now:now)
         XCTAssertEqual(gpsLoss.phase,.degraded)
         XCTAssertEqual(gpsLoss.scannerState,.ready)
-        XCTAssertEqual(gpsLoss.recoveryTitle,"GPS unavailable")
+        XCTAssertEqual(gpsLoss.recoveryTitle,"GPS acquiring")
+        XCTAssertEqual(gpsLoss.gpsState,.waiting)
+        XCTAssertTrue(gpsLoss.recoveryMessage?.contains("Waiting") == true)
         XCTAssertEqual(gpsLoss.queuedStatusTitle,"Upload queued · 1")
 
         let scannerLoss=PhoneRecordingPresentation.make(state:state,selectedSource:.scanner,pendingGPS:false,
@@ -95,6 +97,21 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(scannerLoss.phase,.degraded)
         XCTAssertEqual(scannerLoss.gpsState,.ready)
         XCTAssertEqual(scannerLoss.recoveryTitle,"Scanner disconnected")
+
+        let deniedGPS=PhoneRecordingPresentation.make(state:state,selectedSource:.scanner,pendingGPS:false,
+            scannerConnected:true,scannerConnecting:false,scannerStatus:"Connected",gpsStatus:"Location access is off",
+            gpsSpeedKMH:nil,gpsLastFix:nil,now:now)
+        XCTAssertEqual(deniedGPS.recoveryTitle,"GPS unavailable")
+        XCTAssertEqual(deniedGPS.gpsState,.unavailable)
+
+        var stationary=StoredState();stationary.draft=RecordingDraft(source:.phoneGPS,startedAt:now.addingTimeInterval(-90),updatedAt:now)
+        let stationaryGPS=PhoneRecordingPresentation.make(state:stationary,selectedSource:.phoneGPS,pendingGPS:false,
+            scannerConnected:false,scannerConnecting:false,scannerStatus:"Not connected",gpsStatus:"GPS active · ±7 m",
+            gpsSpeedKMH:18,gpsLastFix:now.addingTimeInterval(-60),now:now)
+        XCTAssertEqual(stationaryGPS.phase,.active,"The movement filter may produce no new point while stopped")
+        XCTAssertEqual(stationaryGPS.gpsState,.ready,"An active Core Location session must not flash disconnected while stationary")
+        XCTAssertNil(stationaryGPS.speed.value,"An old GPS speed must still be treated as stale evidence")
+        XCTAssertNil(stationaryGPS.recoveryTitle)
     }
 
     @MainActor
