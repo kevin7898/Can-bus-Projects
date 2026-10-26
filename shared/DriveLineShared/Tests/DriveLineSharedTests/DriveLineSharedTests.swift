@@ -472,4 +472,146 @@ final class DriveLineSharedTests: XCTestCase {
             preferredGPS:.phone,configuredSources:[.manual,.phoneGPS,.obdScanner])
         XCTAssertEqual(try JSONDecoder().decode(DriveLineVehicle.self,from:JSONEncoder().encode(vehicle)),vehicle)
     }
+
+    func testPhase9RenderingReductionPreservesGapsIsolatedPointsExtremaAndOriginalEvidence() throws {
+        let start=DriveLinePerformanceFixture.baseDate
+        var first:[DriveLineSignalPoint]=[]
+        first.reserveCapacity(5_000)
+        for index in 0..<5_000 {
+            let value:Double
+            if index == 1_337 { value = -900 }
+            else if index == 4_321 { value = 1_200 }
+            else { value = Double(index%100) }
+            first.append(DriveLineSignalPoint(timestamp:start.addingTimeInterval(Double(index)),value:value,sourceID:"sanitized-obd"))
+        }
+        let isolated=DriveLineSignalPoint(timestamp:start.addingTimeInterval(10_000),value:77,sourceID:"sanitized-obd")
+        let original=[first,[isolated]]
+        let rendered=DriveLineRenderingPolicy.signalSegments(original,limit:240)
+
+        XCTAssertEqual(original[0].count,5_000,"Display reduction must never mutate the original evidence")
+        XCTAssertEqual(rendered.count,2,"Recorded gaps remain separate segments")
+        XCTAssertEqual(rendered[1],[isolated],"An isolated recorded point must remain visible")
+        XCTAssertLessThanOrEqual(rendered.flatMap{$0}.count,242)
+        let renderedValues=rendered.flatMap{$0}.map{$0.value}
+        XCTAssertEqual(renderedValues.min(),-900)
+        XCTAssertEqual(renderedValues.max(),1_200)
+        XCTAssertEqual(original[0][1_337].value,-900,"Cursor/statistics retain access to original observations")
+    }
+
+    func testPhase9SanitizedCorpusHasRequiredScaleAndNeverContributesToRealTotals() {
+        let started=ContinuousClock.now
+        var observations=0
+        var gpsOnly=0,obdOnly=0,mixed=0,longGap=false
+        for index in 0..<DriveLinePerformanceFixture.journeyCount {
+            autoreleasepool {
+                let recording=DriveLinePerformanceFixture.recording(at:index)
+                observations += recording.gpsPoints.count + recording.signalSamples.count
+                if !recording.gpsPoints.isEmpty && recording.signalSamples.isEmpty { gpsOnly += 1 }
+                else if recording.gpsPoints.isEmpty && !recording.signalSamples.isEmpty { obdOnly += 1 }
+                else { mixed += 1 }
+                let timestamps=recording.gpsPoints.map(\.timestamp)+recording.signalSamples.map(\.timestamp)
+                let ordered=timestamps.sorted()
+                longGap = longGap || zip(ordered,ordered.dropFirst()).contains { $1.timeIntervalSince($0)>60 }
+                XCTAssertTrue(recording.isSample)
+            }
+        }
+        let elapsed=ContinuousClock.now-started
+        print("PHASE9_METRIC corpus_generation_seconds=\(elapsed.components.seconds).\(abs(elapsed.components.attoseconds)/1_000_000_000_000_000)")
+        XCTAssertEqual(observations,1_000_000)
+        XCTAssertEqual(DriveLinePerformanceFixture.vehicles.count,4)
+        XCTAssertTrue(DriveLinePerformanceFixture.vehicles.contains(where:\.isArchived))
+        XCTAssertEqual(DriveLinePerformanceFixture.fuelEntries.count,40)
+        XCTAssertTrue(DriveLinePerformanceFixture.fuelEntries.allSatisfy{$0.isSample && $0.receipt != nil})
+        XCTAssertEqual(Set(DriveLinePerformanceFixture.transferStates),["queued","failed","complete"])
+        XCTAssertGreaterThan(gpsOnly,0);XCTAssertGreaterThan(obdOnly,0);XCTAssertGreaterThan(mixed,0);XCTAssertTrue(longGap)
+        let samples=(0..<3).map { DriveLinePerformanceFixture.recording(at:$0) }
+        XCTAssertTrue(DriveLineMetricPolicy.latestObservations(samples).isEmpty,"Sample observations must not become real latest values")
+    }
+
+    func testPhase9ThirtyMinuteRecordingAndPlaybackUseOriginalEvidence() throws {
+        let recording=DriveLinePerformanceFixture.thirtyMinuteRecording()
+        XCTAssertEqual(recording.endedAt.timeIntervalSince(recording.startedAt),1_800)
+        XCTAssertEqual(recording.gpsPoints.count,1_801)
+        XCTAssertEqual(recording.signalSamples.count,1_801)
+        let metrics=DriveLineMetricPolicy.metrics(for:recording)
+        XCTAssertEqual(metrics.durationSeconds,1_800)
+        let series=DriveLineJourneyPolicy.signalSeries("rpm",unit:"rpm",recording:recording)
+        let rendered=DriveLineRenderingPolicy.signalSegments(series.segments,limit:300)
+        XCTAssertLessThanOrEqual(rendered.flatMap{$0}.count,300)
+        for second in stride(from:0,through:1_800,by:5) {
+            let date=recording.startedAt.addingTimeInterval(Double(second))
+            let cursor=DriveLineJourneyPolicy.cursor(at:date,recording:recording,signalKeys:["rpm"])
+            XCTAssertNotNil(cursor.observations["rpm"])
+            XCTAssertNotNil(cursor.gpsPoint)
+        }
+        XCTAssertEqual(series.segments.flatMap{$0}.count,1_801,"Playback rendering must not reduce stored evidence")
+    }
+
+    func testPhase9RepresentativeLibraryChartMapAndArchiveOperationsRemainBounded() throws {
+        func measured<T>(_ label:String,_ operation:()->T)->T {
+            let started=ContinuousClock.now
+            let result=operation()
+            let elapsed=ContinuousClock.now-started
+            let milliseconds=Double(elapsed.components.seconds)*1_000 +
+                Double(elapsed.components.attoseconds)/1_000_000_000_000_000
+            print("PHASE9_METRIC \(label)_milliseconds=\(String(format:"%.3f",milliseconds))")
+            XCTAssertLessThan(milliseconds,15_000,"\(label) exceeded the deliberately generous regression ceiling")
+            return result
+        }
+
+        let summaries=measured("library_filter_500") {
+            (0..<DriveLinePerformanceFixture.journeyCount).map {
+                DriveLinePerformanceFixture.recording(at:$0,observationCount:20)
+            }.filter { $0.name.localizedCaseInsensitiveContains("sample journey") }
+        }
+        XCTAssertEqual(summaries.count,500)
+
+        let analysisRecording=DriveLinePerformanceFixture.recording(at:2,observationCount:100_000)
+        let descriptors=measured("signal_search") {
+            DriveLineJourneyPolicy.groupedSignalDescriptors(recording:analysisRecording,query:"engine")
+        }
+        XCTAssertFalse(descriptors.isEmpty)
+        let series=measured("signal_series_50000") {
+            DriveLineJourneyPolicy.signalSeries("rpm",unit:"rpm",recording:analysisRecording)
+        }
+        XCTAssertEqual(series.segments.flatMap{$0}.count,50_000)
+        let rendered=measured("chart_prepare_50000") {
+            DriveLineRenderingPolicy.signalSegments(series.segments)
+        }
+        XCTAssertLessThanOrEqual(rendered.flatMap{$0}.count,DriveLineRenderingPolicy.defaultPointLimit+2)
+        let statistics=measured("visible_statistics_50000") {
+            DriveLineJourneyPolicy.signalStatistics(series,at:analysisRecording.endedAt,
+                visibleRange:DateInterval(start:analysisRecording.startedAt,end:analysisRecording.endedAt))
+        }
+        XCTAssertEqual(statistics.observationCount,50_000)
+
+        let routeRecording=DriveLinePerformanceFixture.recording(at:0,observationCount:50_000)
+        let route=measured("route_prepare_50000") {
+            DriveLineMetricPolicy.routeSegments(routeRecording.gpsPoints)
+        }
+        XCTAssertFalse(route.isEmpty)
+
+        measured("repeated_journey_selection_100") {
+            for index in 0..<100 {
+                autoreleasepool {
+                    let recording=DriveLinePerformanceFixture.recording(at:index,observationCount:2_000)
+                    _=DriveLineMetricPolicy.metrics(for:recording)
+                    _=DriveLineJourneyPolicy.signalSeries("rpm",unit:"rpm",recording:recording)
+                }
+            }
+        }
+
+        let archiveRecording=DriveLinePerformanceFixture.recording(at:2,observationCount:20_000)
+        let sources=[
+            DriveLineSourceDescriptor(id:"synthetic-gps",kind:.synthetic,name:"Sanitized GPS"),
+            DriveLineSourceDescriptor(id:"synthetic-obd",kind:.synthetic,name:"Sanitized OBD"),
+            DriveLineSourceDescriptor(id:"synthetic",kind:.synthetic,name:"Sanitized fixture")
+        ]
+        let archive=DriveLineArchive(producer:DriveLineProducer(app:"DriveLine tests",version:"9",platform:"sanitized"),
+            sources:sources,vehicles:DriveLinePerformanceFixture.vehicles,recordings:[archiveRecording])
+        let bytes=measured("archive_export_20000") { try! archive.encoded() }
+        let decoded=measured("archive_import_20000") { try! DriveLineArchive.decoded(bytes) }
+        XCTAssertEqual(decoded.recordings.first?.recordingID,archiveRecording.recordingID)
+        XCTAssertEqual(decoded.recordings.first?.signalSamples.count,archiveRecording.signalSamples.count)
+    }
 }
