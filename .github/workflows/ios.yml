@@ -30,7 +30,13 @@ jobs:
         working-directory: can-connect-ios
         run: |
           set -o pipefail
-          xcodebuild test -parallel-testing-enabled NO -project CANConnect.xcodeproj -scheme CANConnect -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath build -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO | tee xcodebuild.log
+          xcodebuild build-for-testing -parallel-testing-enabled NO -project CANConnect.xcodeproj -scheme CANConnect -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO | tee xcodebuild.log
+          xcrun simctl install "$DEVICE_ID" build/Build/Products/Debug-iphonesimulator/CANConnect.app
+          # Earlier fuel-form tests intentionally cover denied/unavailable
+          # location. Give the later synthetic GPS integration test a known
+          # permission baseline without changing production permission flows.
+          xcrun simctl privacy "$DEVICE_ID" grant location com.canconnect.companion
+          xcodebuild test-without-building -parallel-testing-enabled NO -project CANConnect.xcodeproj -scheme CANConnect -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath build -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO | tee -a xcodebuild.log
       - name: Export native screenshots
         if: always() && !cancelled()
         working-directory: can-connect-ios
