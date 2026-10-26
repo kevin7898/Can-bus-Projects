@@ -234,8 +234,15 @@ final class AppStore: ObservableObject {
         if let destination=DriveLinePhoneRoute.destination(for:url) { selectedTab=destination }
     }
     private func checkpoint(at date: Date, force: Bool = false) {
-        guard recording, force || date.timeIntervalSince(lastCheckpoint) >= 5 else { return }
-        DriveLinePerformance.measure("Recording checkpoint") { save() }; lastCheckpoint = date
+        guard let draft=state.draft,force || date.timeIntervalSince(lastCheckpoint) >= 5 else { return }
+        lastCheckpoint=date
+        disk.checkpoint(draft) { [weak self] message in
+            guard let message else { return }
+            Task { @MainActor [weak self] in
+                guard let self,self.state.draft?.id == draft.id else { return }
+                self.error=message
+            }
+        }
         updateLiveActivity()
     }
     private func updateLiveActivity() {
@@ -244,6 +251,12 @@ final class AppStore: ObservableObject {
     }
     // No background keep-alive trick: retries run while iOS schedules the app or
     // delivers accessory events. Force-quitting the app cannot be overridden.
+    func retryScannerNow(at date: Date = Date()) {
+        // A manual retry bypasses only scheduling backoff, never elapsed-time
+        // evidence, the reconnect grace period, or explicit disconnection.
+        nextReconnect = .distantPast
+        reconcileScannerConnection(at:date)
+    }
     func reconcileScannerConnection(at date: Date) {
         expireScannerGap(at:date)
         guard !recordingSaveFailed, canWrite, let vehicle = activeVehicle, !vehicle.isSample,

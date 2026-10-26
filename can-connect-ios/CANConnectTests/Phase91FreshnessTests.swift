@@ -2,6 +2,12 @@ import XCTest
 @testable import CANConnect
 
 final class Phase91FreshnessTests:XCTestCase {
+    func testFutureObservationCannotBeLiveEvenWithReadySemanticState() {
+        let now=Date(timeIntervalSince1970:1000)
+        let value=ObservationFreshnessDisplay.resolve(observedAt:now.addingTimeInterval(1),now:now,staleAfter:10,semanticState:.ready)
+        XCTAssertEqual(value.state,.unavailable)
+        XCTAssertNotEqual(value.label,"Live")
+    }
     private let now=Date(timeIntervalSince1970:10_000)
 
     func testFreshnessBoundaryUsesActualObservationTimestamp() {

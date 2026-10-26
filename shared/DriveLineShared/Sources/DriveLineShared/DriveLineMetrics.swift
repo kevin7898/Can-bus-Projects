@@ -17,6 +17,8 @@ public struct DriveLineObservation: Equatable, Sendable {
 }
 
 public struct DriveLineMetrics: Equatable, Sendable {
+    public var distanceCandidates: [DriveLineDistanceCandidate] = []
+    public var distanceIsPartial = false
     public var distanceKm: Double?
     public var durationSeconds: Double
     public var tripFuelLitres: Double?
@@ -36,6 +38,9 @@ public struct DriveLineMetrics: Equatable, Sendable {
 }
 
 public enum DriveLineMetricPolicy {
+    public static let version = "driveline.metrics.v2"
+    public static let comparableDistanceCoverage = 0.05
+    public static let adequateDistanceCoverage = 0.95
     public static let maximumGPSGap: TimeInterval = 30
     public static let maximumSignalGap: TimeInterval = 10
     public static let maximumHorizontalAccuracyM = 50.0
@@ -47,21 +52,28 @@ public enum DriveLineMetricPolicy {
     public static func metrics(for recording: DriveLineRecording) -> DriveLineMetrics {
         DriveLinePerformance.measure("Trip metric calculation") {
             let duration = max(0, recording.endedAt.timeIntervalSince(recording.startedAt))
-            let gpsDistance = distanceFromGPS(recording.gpsPoints)
-            let speed = integral("speedKph", samples: recording.signalSamples)
-            let speedDistance = speed.map { $0.value / 3600 }
-            let distance = gpsDistance ?? speedDistance ?? recording.recordedDistanceKm
-            let fuel = integral("fuelRateLph", samples: recording.signalSamples)
+            let candidates = distanceCandidates(for:recording)
+            let selected = selectDistance(candidates)
+            let distance = selected?.distanceKm ?? recording.recordedDistanceKm
+            let boundedSamples = recording.signalSamples.filter { $0.timestamp >= recording.startedAt && $0.timestamp <= recording.endedAt }
+            let fuel = integral("fuelRateLph", samples: boundedSamples)
             let measuredFuel = fuel.flatMap { duration > 0 && $0.coverage / duration >= requiredFuelCoverage ? $0.value / 3600 : nil }
             let tripFuel = measuredFuel ?? recording.tripFuelLitres
             let economy: Double? = distance.flatMap { km -> Double? in
-                guard km > 0.1, let tripFuel else { return nil }
+                // Whole-trip economy requires matching complete intervals, not
+                // unrelated partial fuel and distance totals above a threshold.
+                guard km > 0.1, let tripFuel, let selected,
+                      let fuel, duration > 0, fuel.coverage >= duration - 0.001,
+                      selected.coveredSeconds >= duration - 0.001 else { return nil }
                 return tripFuel / km * 100
             }
-            return DriveLineMetrics(distanceKm: distance, durationSeconds: duration,
+            var metrics = DriveLineMetrics(distanceKm: distance, durationSeconds: duration,
                 tripFuelLitres: tripFuel, economyL100Km: economy,
                 coverage: coverageSummaries(recording),
-                distanceSource:gpsDistance != nil ? "gps" : speedDistance != nil ? "speedKph" : recording.recordedDistanceKm != nil ? "recorded" : nil)
+                distanceSource:selected?.sourceID ?? (recording.recordedDistanceKm != nil ? "recorded" : nil))
+            metrics.distanceCandidates = candidates
+            metrics.distanceIsPartial = selected.map { $0.coverageFraction < adequateDistanceCoverage } ?? (distance != nil)
+            return metrics
         }
     }
 
@@ -74,7 +86,7 @@ public enum DriveLineMetricPolicy {
                 let metres = haversineMetres(previous, point)
                 if elapsed > 0, elapsed <= maximumGPSGap,
                    metres / elapsed * 3.6 <= maximumPlausibleSpeedKph {
-                    if metres >= minimumGPSMovementM { result[result.count - 1].append(point) }
+                    result[result.count - 1].append(point)
                 } else { result.append([point]) }
             }
             return result
@@ -86,7 +98,8 @@ public enum DriveLineMetricPolicy {
         var intervals = 0
         for segment in routeSegments(points) {
             for (a, b) in zip(segment, segment.dropFirst()) {
-                metres += haversineMetres(a, b)
+                let movement = haversineMetres(a, b)
+                metres += movement >= minimumGPSMovementM ? movement : 0
                 intervals += 1
             }
         }
@@ -94,8 +107,16 @@ public enum DriveLineMetricPolicy {
     }
 
     public static func integral(_ key: String, samples: [DriveLineSignalSample]) -> (value: Double, coverage: Double)? {
+        // Never integrate across different controllers. Choose one source's
+        // evidence rather than alternating or adding overlapping ECU values.
+        let groups = Dictionary(grouping:samples,by:\.sourceID)
+        if groups.count > 1 {
+            return groups.keys.sorted().compactMap { integral(key,samples:groups[$0]!) }
+                .max { $0.coverage < $1.coverage }
+        }
         let values = samples.compactMap { sample -> (Date, Double)? in
-            sample.values[key].map { (sample.timestamp, $0) }
+            guard let value=sample.values[key],value.isFinite else { return nil }
+            return (sample.timestamp,value)
         }.sorted { $0.0 < $1.0 }
         var value = 0.0
         var coverage = 0.0
@@ -113,12 +134,23 @@ public enum DriveLineMetricPolicy {
         var result: [DriveLineCoverageSummary] = []
         let keys = Set(recording.signalSamples.flatMap { $0.values.keys })
         for key in keys.sorted() {
-            let observations = recording.signalSamples.filter { $0.values[key] != nil }.sorted { $0.timestamp < $1.timestamp }
-            let observed = observationCoverage(observations.map(\.timestamp),maximumGap:maximumSignalGap)
+            let observations = recording.signalSamples.filter {
+                $0.values[key]?.isFinite == true && $0.timestamp >= recording.startedAt && $0.timestamp <= recording.endedAt
+            }.sorted { $0.timestamp < $1.timestamp }
+            let observed = DriveLineAcquisitionPolicy.availabilitySeconds(timestamps:observations.map(\.timestamp),key:key,
+                start:recording.startedAt,end:recording.endedAt)
             result.append(DriveLineCoverageSummary(key: key, observedSeconds: observed, recordingSeconds: duration,
                 fraction: duration > 0 ? min(1, observed / duration) : 0,
                 firstObservation: observations.first?.timestamp, lastObservation: observations.last?.timestamp,
                 sourceIDs: Array(Set(observations.map(\.sourceID))).sorted()))
+            let index=result.count-1
+            result[index].observationCount=observations.count
+            if observations.count > 1 {
+                result[index].achievedCadenceSeconds=observations.last!.timestamp.timeIntervalSince(observations.first!.timestamp)/Double(observations.count-1)
+            }
+            result[index].expectedCadenceSeconds=DriveLineAcquisitionPolicy.signal(key).expectedCadence
+            result[index].integrationSeconds=integral(key,samples:observations)?.coverage
+            result[index].policyVersion=DriveLineAcquisitionPolicy.version
         }
         let acceptedGPS=recording.gpsPoints.filter(accepts).sorted { $0.timestamp < $1.timestamp }
         var gpsSeconds=0.0
@@ -150,15 +182,24 @@ public enum DriveLineMetricPolicy {
     }
 
     public static func boostGaugeKpa(observations: [String: DriveLineObservation], at date: Date? = nil) -> DriveLineObservation? {
-        guard let pressure = observations["boostAbsoluteKpa"] ?? observations["mapKpa"],
-              let barometer = observations["barometricKpa"] else { return nil }
-        let reference = date ?? max(pressure.timestamp, barometer.timestamp)
-        guard abs(pressure.timestamp.timeIntervalSince(barometer.timestamp)) <= boostBarometerFreshness,
-              reference.timeIntervalSince(pressure.timestamp) <= maximumSignalGap,
-              reference.timeIntervalSince(barometer.timestamp) <= boostBarometerFreshness else { return nil }
-        return DriveLineObservation(key: "boostKpa", value: pressure.value - barometer.value,
-            timestamp: max(pressure.timestamp, barometer.timestamp), sourceID: pressure.sourceID,
-            recordingID: pressure.recordingID)
+        guard let barometer = observations["barometricKpa"], barometer.value.isFinite else { return nil }
+        for key in ["boostAbsoluteKpa", "mapKpa"] {
+            guard let pressure = observations[key], pressure.value.isFinite,
+                  pressure.recordingID == barometer.recordingID else { continue }
+            // Importers may use separate labels for atmospheric sensors. Only
+            // reject conflicting explicit ECU identity, not different labels.
+            let ecuIDs = ["7E8", "7E9", "7EA", "7EB", "7EC", "7ED", "7EE", "7EF"]
+            let pressureECU = ecuIDs.first { pressure.sourceID.uppercased().contains($0) }
+            let barometerECU = ecuIDs.first { barometer.sourceID.uppercased().contains($0) }
+            if let pressureECU, let barometerECU, pressureECU != barometerECU { continue }
+            let reference = date ?? max(pressure.timestamp, barometer.timestamp)
+            guard (0...maximumSignalGap).contains(reference.timeIntervalSince(pressure.timestamp)),
+                  (0...boostBarometerFreshness).contains(reference.timeIntervalSince(barometer.timestamp)) else { continue }
+            return DriveLineObservation(key: "boostKpa", value: pressure.value - barometer.value,
+                timestamp: min(pressure.timestamp, barometer.timestamp), sourceID: pressure.sourceID,
+                recordingID: pressure.recordingID)
+        }
+        return nil
     }
 
     public static func tankToTankEconomy(_ entries: [DriveLineFuelEntry], includeSamples: Bool = false) -> Double? {

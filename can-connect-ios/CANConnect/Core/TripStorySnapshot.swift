@@ -79,6 +79,8 @@ enum TripStorySnapshotBuilder {
         func mix(_ value: Double) { mix(value.bitPattern) }
         func mix(_ value: Date) { mix(value.timeIntervalSince1970) }
         func mix(_ value: String) { for byte in value.utf8 { mix(UInt64(byte)) } }
+        mix(DriveLineMetricPolicy.version)
+        mix(DriveLineAcquisitionPolicy.version)
         withUnsafeBytes(of: recording.recordingID.uuid) { for byte in $0 { mix(UInt64(byte)) } }
         mix(recording.startedAt); mix(recording.endedAt)
         mix(UInt64(recording.gpsPoints.count)); mix(UInt64(recording.signalSamples.count))

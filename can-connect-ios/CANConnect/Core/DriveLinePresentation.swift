@@ -140,6 +140,7 @@ struct PhoneRecordingPresentation: Equatable {
 
     private static func latestObservations(draft:RecordingDraft?)->[String:DriveLineObservation] {
         guard let draft else { return [:] }
+        if draft.liveEvidence.sampleCount == (draft.samples?.count ?? 0) { return draft.liveEvidence.latest }
         var result:[String:DriveLineObservation]=[:]
         for sample in draft.samples ?? [] {
             for (key,value) in sample.signals where result[key].map({$0.timestamp < sample.timestamp}) ?? true {
@@ -160,7 +161,8 @@ struct PhoneRecordingPresentation: Equatable {
         let freshness=key == "boostGaugeKpa" ? 10:max(OBDDecoder.freshness(for:key),VWMeasurementDecoder.freshness(for:key))
         let age=now.timeIntervalSince(observation.timestamp)
         return PhoneSignalPresentation(key:key,title:title,value:observation.value,unit:unit,observedAt:observation.timestamp,
-                                       state:(0...freshness).contains(age) ? .ready:.stale,source:"OBD")
+                                       state:!scannerConnected ? .offline:(age < 0 ? .unavailable:((0...freshness).contains(age) ? .ready:.stale)),source:"OBD",
+                                       statusText:!scannerConnected ? "Scanner disconnected":(age < 0 ? "Observation time unavailable":nil))
     }
 
     private static func title(_ phase:PhoneRecordingPhase)->String {

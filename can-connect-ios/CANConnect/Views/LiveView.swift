@@ -21,7 +21,7 @@ struct LiveView: View {
                         if let title=presentation.recoveryTitle,let message=presentation.recoveryMessage {
                             RecoveryBanner(title:title,message:message,actionTitle:recoveryActionTitle) {
                                 if title == "GPS acquiring" || title == "GPS unavailable" { store.retryGPS() }
-                                else { store.reconcileScannerConnection(at:Date().addingTimeInterval(61)) }
+                                else { store.retryScannerNow() }
                             }.accessibilityIdentifier("record.recovery")
                         }
                         if presentation.phase == .idle || presentation.phase == .starting { preflight }

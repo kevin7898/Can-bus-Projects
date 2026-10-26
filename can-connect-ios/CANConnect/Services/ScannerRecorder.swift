@@ -150,6 +150,11 @@ final class ScannerRecorder: ObservableObject {
                             let sample=OBDDecoder.decode(reply,pid:request.pid,at:self.sampleDate(),ecu:ecu)
                             let outcome=OBDPollScheduler.classify(reply:reply,pid:request.pid,decoded:sample,ecu:ecu)
                             scheduler.record(request,outcome:outcome,responseLatency:OBDPollScheduler.seconds(started.duration(to:finished)),at:finished)
+                            if outcome == .pending {
+                                // No verified drain for a delayed response exists
+                                // on this channel: do not issue a different PID.
+                                throw AppFailure("The ECU response is pending. Reconnecting before another request.")
+                            }
                             if let sample {
                                 missing.remove(request.pid)
                                 for (key,value) in sample.signals { self.readings[key]=(value,sample.timestamp) }
@@ -160,7 +165,10 @@ final class ScannerRecorder: ObservableObject {
                             let finished=self.pollClock()
                             scheduler.record(request,outcome:.timeout,responseLatency:OBDPollScheduler.seconds(started.duration(to:finished)),at:finished)
                             missing.insert(request.pid);self.diagnostics=scheduler.diagnostics(at:finished)
-                            if missing.count >= pids.count { throw error }
+                            // A transport failure has no verified prompt boundary.
+                            // Reopen through the existing teardown barrier before
+                            // another PID can consume a late reply.
+                            throw error
                         }
                         self.diagnostics=scheduler.diagnostics(at:self.pollClock())
                     }

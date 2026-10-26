@@ -322,7 +322,7 @@ public struct DriveLineCursorIndex: Sendable {
                 selected[key]=DriveLineObservation(key:key,value:accuracy,timestamp:point.timestamp,sourceID:point.sourceID,recordingID:recordingID)
             } else if key == "boostKpa" {
                 selected[key]=DriveLineMetricPolicy.boostGaugeKpa(observations:latest,at:timestamp)
-            } else if let value=latest[key],timestamp.timeIntervalSince(value.timestamp)<=DriveLineMetricPolicy.maximumSignalGap {
+            } else if let value=latest[key],timestamp.timeIntervalSince(value.timestamp)<=DriveLineAcquisitionPolicy.signal(key).displayValidity {
                 selected[key]=value
             }
         }
@@ -471,7 +471,7 @@ public enum DriveLineJourneyPolicy {
             let points = allPoints.filter { point in
                 point.value.isFinite && (visibleRange.map { point.timestamp >= $0.start && point.timestamp <= $0.end } ?? true)
             }.sorted { $0.timestamp < $1.timestamp }
-            var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineMetricPolicy.maximumSignalGap)
+            var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineAcquisitionPolicy.signal(series.key).displayValidity)
             result.latestObservation=allPoints.last?.timestamp
             result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
             return result
@@ -485,7 +485,7 @@ public enum DriveLineJourneyPolicy {
             let allPoints=series.segments.flatMap{$0}.filter{$0.value.isFinite}.sorted{$0.timestamp < $1.timestamp}
             let points = alignedSegments(series,recording:recording,alignment:alignment).flatMap { $0 }
                 .filter { visibleRange.contains($0.position) }.map(\.point)
-            var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineMetricPolicy.maximumSignalGap)
+            var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineAcquisitionPolicy.signal(series.key).displayValidity)
             result.latestObservation=allPoints.last?.timestamp
             result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
             return result
@@ -725,7 +725,7 @@ public enum DriveLineJourneyPolicy {
             } else if key == "boostKpa" {
                 observations[key]=DriveLineMetricPolicy.boostGaugeKpa(observations:latest,at:timestamp)
             } else if let observation=latest[key],
-                      timestamp.timeIntervalSince(observation.timestamp)<=DriveLineMetricPolicy.maximumSignalGap {
+                      timestamp.timeIntervalSince(observation.timestamp)<=DriveLineAcquisitionPolicy.signal(key).displayValidity {
                 observations[key]=observation
             }
         }

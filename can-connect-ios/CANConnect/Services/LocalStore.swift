@@ -6,7 +6,7 @@ struct ReceiptAttachment: Equatable {
     var data: Data
 }
 
-struct LocalStore {
+struct LocalStore:Sendable {
     let url: URL
     init(url: URL? = nil) {
         self.url = url ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("CANConnect/state.json")
@@ -16,16 +16,22 @@ struct LocalStore {
     var recoveryURL:URL { url.deletingLastPathComponent().appendingPathComponent("Recovery",isDirectory:true) }
     func receiptURL(_ metadata:DriveLineReceiptMetadata)->URL { receiptsURL.appendingPathComponent(metadata.sha256.lowercased()) }
     func load() throws -> StoredState? {
-        try DriveLinePerformance.measure("Library decode") {
+        try Self.persistenceQueue.sync { try DriveLinePerformance.measure("Library decode") {
             guard FileManager.default.fileExists(atPath:url.path) else { return nil }
             var state = try JSONDecoder().decode(StoredState.self, from:Data(contentsOf:url))
             guard (1...4).contains(state.schemaVersion) else { throw AppFailure("This saved data needs a newer app. Your file has been preserved.") }
             state.migrateVehicles()
+            if let checkpoint=try recoveredCheckpoint(),!state.trips.contains(where:{$0.id == checkpoint.id}),
+               (state.draft == nil || state.draft?.id == checkpoint.id),
+               checkpoint.vehicleID == state.selectedVehicleID,
+               checkpoint.updatedAt >= (state.draft?.updatedAt ?? .distantPast) {
+                state.draft=checkpoint
+            }
             return state
-        }
+        } }
     }
     func save(_ state: StoredState) throws {
-        try DriveLinePerformance.measure("Library save") {
+        try Self.persistenceQueue.sync { try DriveLinePerformance.measure("Library save") {
             try FileManager.default.createDirectory(at:url.deletingLastPathComponent(), withIntermediateDirectories:true)
             let data = try JSONEncoder().encode(state)
             _ = try JSONDecoder().decode(StoredState.self,from:data)
@@ -36,7 +42,7 @@ struct LocalStore {
                 try current.write(to:backupURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
             }
             try data.write(to:url, options:[.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        }
+        } }
     }
     func validBackup() ->StoredState? {
         guard let data=try? Data(contentsOf:backupURL),

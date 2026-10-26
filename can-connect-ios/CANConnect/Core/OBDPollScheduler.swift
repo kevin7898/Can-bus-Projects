@@ -1,7 +1,7 @@
 import Foundation
 
 enum OBDPollTier:Int,CaseIterable,Sendable { case core,secondary,slowDiagnostic }
-enum OBDPollOutcome:Sendable { case success,noData,malformed,ambiguous,timeout }
+enum OBDPollOutcome:String,Sendable { case success,noData,rejected,pending,wrongSourceOrService,malformed,ambiguous,timeout,cancelled }
 
 struct OBDPollRequest:Equatable,Sendable {
     var pid:Int
@@ -24,6 +24,8 @@ struct OBDPIDDiagnostics:Equatable,Sendable {
     var effectiveCadenceSeconds:Double?
     var coverageFraction:Double?
     var backoffSeconds=0.0
+    var maximumObservationGapSeconds=0.0
+    var outcomeCounts:[String:Int]=[:]
 }
 
 struct OBDPollDiagnostics:Equatable,Sendable {
@@ -51,6 +53,10 @@ struct OBDPollScheduler {
         var responseLatencyTotal=0.0
         var firstAttempt:ContinuousClock.Instant?
         var successTimes:[ContinuousClock.Instant]=[]
+        var firstSuccess:ContinuousClock.Instant?
+        var coveredSeconds=0.0
+        var maximumGap=0.0
+        var outcomeCounts:[String:Int]=[:]
     }
     private var states:[Int:State]
     private var rotation:[OBDPollTier:Int]=[:]
@@ -84,13 +90,16 @@ struct OBDPollScheduler {
             if selectionsSinceSlow >= 8,dueByTier[.slowDiagnostic]?.isEmpty == false { selectedTier = .slowDiagnostic }
             else if coreSelectionsSinceSecondary >= 2,dueByTier[.secondary]?.isEmpty == false { selectedTier = .secondary }
             else { selectedTier = .core }
-        } else if dueByTier[.secondary]?.isEmpty == false { selectedTier = .secondary }
+        } else if selectionsSinceSlow >= 8,dueByTier[.slowDiagnostic]?.isEmpty == false { selectedTier = .slowDiagnostic }
+        else if dueByTier[.secondary]?.isEmpty == false { selectedTier = .secondary }
         else if dueByTier[.slowDiagnostic]?.isEmpty == false { selectedTier = .slowDiagnostic }
         else { selectedTier = nil }
         guard let tier=selectedTier,let due=dueByTier[tier],!due.isEmpty else { return nil }
-        let index=(rotation[tier] ?? 0)%due.count
-        rotation[tier]=(index+1)%due.count
-        let pid=due[index]
+        // Earliest deadline, with stable PID tie-breaking. Rotation over a
+        // changing due-list could repeatedly skip a request.
+        let pid=due.min { a,b in
+            states[a]!.deadline == states[b]!.deadline ? a < b:states[a]!.deadline < states[b]!.deadline
+        }!
         switch tier {
         case .core:coreSelectionsSinceSecondary += 1;selectionsSinceSlow += 1
         case .secondary:coreSelectionsSinceSecondary=0;selectionsSinceSlow += 1
@@ -102,34 +111,41 @@ struct OBDPollScheduler {
                          responseLatency:TimeInterval,at now:ContinuousClock.Instant) {
         guard var state=states[request.pid] else { return }
         state.attempts += 1
+        state.outcomeCounts[outcome.rawValue,default:0] += 1
         if state.firstAttempt == nil { state.firstAttempt=now }
-        let delay=max(0,Self.seconds(request.deadline.duration(to:now)))
+        let delay=max(0,Self.seconds(request.deadline.duration(to:now))-max(0,responseLatency))
         state.requestDelayTotal += delay
         state.responseLatencyTotal += max(0,responseLatency)
         if delay > max(0.1,state.interval*0.5) { state.missedDeadlines += 1 }
         switch outcome {
         case .success:
+            if let last=state.successTimes.last {
+                let gap=max(0,Self.seconds(last.duration(to:now)))
+                state.maximumGap=max(state.maximumGap,gap)
+                state.coveredSeconds += min(gap,state.interval >= 30 ? state.interval+15:10)
+            }
+            if state.firstSuccess == nil { state.firstSuccess=now }
             state.successes += 1;state.consecutiveFailures=0;state.backoffUntil=nil
             state.successTimes.append(now)
             if state.successTimes.count > 256 { state.successTimes.removeFirst(state.successTimes.count-256) }
             state.deadline=now.advanced(by:.seconds(state.interval))
-        case .timeout,.noData,.malformed,.ambiguous:
+        case .timeout,.noData,.malformed,.ambiguous,.rejected,.pending,.wrongSourceOrService,.cancelled:
             state.consecutiveFailures=min(state.consecutiveFailures+1,7)
             switch outcome {
             case .timeout:state.timeouts += 1
             case .noData:state.noData += 1
             case .malformed:state.malformed += 1
             case .ambiguous:state.ambiguous += 1
-            case .success:break
+            default:break
             }
             let base:TimeInterval = state.tier == .core ? 1:(state.tier == .secondary ? 3:10)
-            let delay=min(300,base*pow(2,Double(state.consecutiveFailures-1)))
+            let delay=min(300,(outcome == .rejected ? max(30,base):base)*pow(2,Double(state.consecutiveFailures-1)))
             state.backoffUntil=now.advanced(by:.seconds(delay));state.deadline=state.backoffUntil!
         }
         states[request.pid]=state
     }
     mutating func prioritizeCore(at now:ContinuousClock.Instant) {
-        for pid in states.keys where states[pid]?.tier == .core { states[pid]?.deadline=now;states[pid]?.backoffUntil=nil }
+        for pid in states.keys where states[pid]?.tier == .core { states[pid]?.deadline=now }
     }
     func enhancedWindowOpportunity(at now:ContinuousClock.Instant)->Bool {
         let core=states.values.filter{$0.tier == .core}
@@ -146,19 +162,17 @@ struct OBDPollScheduler {
         var result=OBDPollDiagnostics(enhancedWindowCount:enhancedWindowCount,
             enhancedWindowTotalSeconds:enhancedWindowTotalSeconds,enhancedWindowMaximumSeconds:enhancedWindowMaximumSeconds)
         for (pid,state) in states {
-            let cadence:Double? = state.successTimes.count > 1 ?
-                Self.seconds(state.successTimes.first!.duration(to:state.successTimes.last!))/Double(state.successTimes.count-1):nil
+            let cadence:Double? = state.successes > 1 ?
+                Self.seconds(state.firstSuccess!.duration(to:state.successTimes.last!))/Double(state.successes-1):nil
             let duration=state.firstAttempt.map { max(0,Self.seconds($0.duration(to:now))) } ?? 0
-            var observed=0.0
-            for pair in zip(state.successTimes,state.successTimes.dropFirst()) {
-                observed += min(Self.seconds(pair.0.duration(to:pair.1)),max(DriveLineMetricPolicy.maximumSignalGap,state.interval*2))
-            }
+            let observed=state.coveredSeconds
             let backoff=state.backoffUntil.map { max(0,Self.seconds(now.duration(to:$0))) } ?? 0
             result.pids[pid]=OBDPIDDiagnostics(pid:pid,tier:state.tier,attempts:state.attempts,successes:state.successes,
                 timeouts:state.timeouts,noData:state.noData,malformed:state.malformed,ambiguous:state.ambiguous,
                 missedDeadlines:state.missedDeadlines,averageRequestDelaySeconds:state.attempts>0 ? state.requestDelayTotal/Double(state.attempts):0,
                 averageResponseLatencySeconds:state.attempts>0 ? state.responseLatencyTotal/Double(state.attempts):0,
-                effectiveCadenceSeconds:cadence,coverageFraction:duration>0 ? min(1,observed/duration):nil,backoffSeconds:backoff)
+                effectiveCadenceSeconds:cadence,coverageFraction:duration>0 ? min(1,observed/duration):nil,backoffSeconds:backoff,
+                maximumObservationGapSeconds:state.maximumGap,outcomeCounts:state.outcomeCounts)
         }
         return result
     }
@@ -166,8 +180,13 @@ struct OBDPollScheduler {
         if decoded != nil { return .success }
         let upper=reply.uppercased()
         if upper.contains("NO DATA") || upper.contains("UNABLE TO CONNECT") || upper.contains("STOPPED") { return .noData }
+        let all=ELMResponses.payloads(reply,ecu:ecu)
+        if let negative=all.first(where:{$0.count >= 3 && $0[0] == 0x7F && $0[1] == 0x01}) {
+            return negative[2] == 0x78 ? .pending:.rejected
+        }
         let payloads=ELMResponses.payloads(reply,ecu:ecu).filter { $0.count >= 2 && $0[0] == 0x41 && Int($0[1]) == pid }
         if payloads.count > 1 { return .ambiguous }
+        if payloads.isEmpty,!ELMResponses.payloads(reply).isEmpty { return .wrongSourceOrService }
         return .malformed
     }
     static func seconds(_ duration:Duration)->Double {

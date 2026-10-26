@@ -66,8 +66,11 @@ protocol ScannerTransport: AnyObject {
 enum ELMIdentification {
     static func read(restoreCANDefaults: Bool = false, command: (String) async throws -> String) async throws -> ScannerIdentity {
         let adapter = try await command("ATI")
-        let settings = ["ATE0","ATL0","ATS1","ATH1","ATCAF1"]
-            + (restoreCANDefaults ? ["ATCFC1","ATAT1","ATST32","ATSH7DF","ATCRA"] : []) + ["ATSP0"]
+        // AT D restores protocol-independent defaults, including stale header
+        // and receive-filter overrides, without resetting the MFi connection.
+        // ELM327 datasheet: D (set all to Defaults). Do not impose 7DF/11-bit
+        // addressing before automatic protocol discovery on generic vehicles.
+        let settings = ["ATD","ATE0","ATL0","ATS1","ATH1","ATCAF1","ATSP0"]
         for setting in settings {
             let response = try await command(setting)
             guard response.uppercased().contains("OK") else { throw AppFailure("The adapter rejected configuration \(setting). Check ELM327 compatibility.") }

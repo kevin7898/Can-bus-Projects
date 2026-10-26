@@ -69,10 +69,7 @@ enum OBDDecoder {
         }
     }
     static func freshness(for key: String) -> TimeInterval {
-        guard let definition = definitions.first(where:{signalKeys(pid:$0.pid).contains(key)}) else { return 10 }
-        let interval = pollInterval(pid:definition.pid)
-        // Include the periodic VW quiet interval and protocol-switching time.
-        return interval >= 30 ? interval+15 : 10
+        DriveLineAcquisitionPolicy.signal(key).displayValidity
     }
     static let keys = Set(labels.keys)
     static func signalKeys(pid: Int) -> Set<String> {
@@ -131,12 +128,66 @@ extension RecordingDraft {
     mutating func accept(_ sample: OBDSample) {
         guard source == .scanner, sample.isValid, sample.timestamp >= startedAt,
               sample.timestamp >= (samples?.last?.timestamp ?? startedAt) else { return }
+        prepareLiveEvidence()
         if samples == nil { samples = [] }
         samples?.append(sample)
-        if route.isEmpty, let speed = DriveLineMetricPolicy.integral("speedKph",samples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") }) {
-            distanceKM = speed.value/3600
-        }
+        liveEvidence.accept(sample,recordingID:id)
+        updateLiveDistance(at:sample.timestamp)
         updatedAt = max(updatedAt, sample.timestamp)
+    }
+}
+
+struct LiveRecordingEvidence {
+    var sampleCount=0
+    var pointCount=0
+    var latest:[String:DriveLineObservation]=[:]
+    var speedIntegral=0.0
+    var speedSeconds=0.0
+    var gpsKm=0.0
+    var gpsSeconds=0.0
+    var lastPoint:RoutePoint?
+    mutating func accept(_ sample:OBDSample,recordingID:UUID) {
+        for (key,value) in sample.signals where value.isFinite {
+            if let previous=latest[key],previous.timestamp > sample.timestamp { continue }
+            if key == "speedKph",let previous=latest[key] {
+                let seconds=sample.timestamp.timeIntervalSince(previous.timestamp)
+                if seconds > 0,seconds <= DriveLineMetricPolicy.maximumSignalGap,
+                   (0...DriveLineMetricPolicy.maximumPlausibleSpeedKph).contains(value),
+                   (0...DriveLineMetricPolicy.maximumPlausibleSpeedKph).contains(previous.value) {
+                    speedIntegral += (previous.value+value)/2*seconds;speedSeconds += seconds
+                }
+            }
+            latest[key] = .init(key:key,value:value,timestamp:sample.timestamp,sourceID:"obd",recordingID:recordingID)
+        }
+        sampleCount += 1
+    }
+    mutating func accept(_ point:RoutePoint) {
+        if let previous=lastPoint {
+            let seconds=point.timestamp.timeIntervalSince(previous.timestamp),metres=previous.distance(to:point)
+            if seconds > 0,seconds <= DriveLineMetricPolicy.maximumGPSGap,
+               metres/seconds*3.6 <= DriveLineMetricPolicy.maximumPlausibleSpeedKph {
+                gpsSeconds += seconds
+                if metres >= DriveLineMetricPolicy.minimumGPSMovementM { gpsKm += metres/1000 }
+            }
+        }
+        lastPoint=point;pointCount += 1
+    }
+}
+
+extension RecordingDraft {
+    mutating func prepareLiveEvidence() {
+        guard liveEvidence.sampleCount != (samples?.count ?? 0) || liveEvidence.pointCount != route.count else { return }
+        liveEvidence=LiveRecordingEvidence()
+        for sample in samples ?? [] { liveEvidence.accept(sample,recordingID:id) }
+        for point in route { liveEvidence.accept(point) }
+    }
+    mutating func updateLiveDistance(at date:Date) {
+        let duration=max(0,date.timeIntervalSince(startedAt))
+        let speedCoverage=duration > 0 ? liveEvidence.speedSeconds/duration:0
+        let gpsCoverage=duration > 0 ? liveEvidence.gpsSeconds/duration:0
+        if liveEvidence.gpsSeconds > 0,gpsCoverage >= speedCoverage-DriveLineMetricPolicy.comparableDistanceCoverage {
+            distanceKM=liveEvidence.gpsKm
+        } else if liveEvidence.speedSeconds > 0 { distanceKM=liveEvidence.speedIntegral/3600 }
     }
 }
 

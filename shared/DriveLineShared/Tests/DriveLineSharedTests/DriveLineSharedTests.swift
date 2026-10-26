@@ -3,6 +3,58 @@ import CryptoKit
 @testable import DriveLineShared
 
 final class DriveLineSharedTests: XCTestCase {
+    func testSlowSignalAvailabilityIsSeparateFromStrictIntegrationAndInterruptions() {
+        let start=Date(timeIntervalSince1970:1000),end=start.addingTimeInterval(204)
+        let times=[0.0,68,136,204].map { start.addingTimeInterval($0) }
+        XCTAssertEqual(DriveLineAcquisitionPolicy.availabilitySeconds(timestamps:times,key:"dpfSootG",start:start,end:end),204)
+        XCTAssertEqual(DriveLineAcquisitionPolicy.availabilitySeconds(timestamps:[start],key:"dpfSootG",start:start,end:end,interruptions:[start.addingTimeInterval(10)]),10)
+        XCTAssertEqual(DriveLineAcquisitionPolicy.availabilitySeconds(timestamps:times,key:"rpm",start:start,end:end),30)
+        XCTAssertNil(DriveLineMetricPolicy.integral("speedKph",samples:times.map { .init(timestamp:$0,values:["speedKph":60]) }))
+        XCTAssertNil(DriveLineAcquisitionPolicy.signal("unknown.raw").expectedCadence)
+    }
+    func testPartialGPSCannotOverrideCompleteOBDDistanceOrInventEconomy() throws {
+        let start=Date(timeIntervalSince1970:1000)
+        var recording=DriveLineRecording(recordingID:UUID(),vehicleID:UUID(),name:"Synthetic 20 km",startedAt:start,endedAt:start.addingTimeInterval(1200),sourceIDs:["gps","obd"],
+            gpsPoints:(0...20).map { .init(timestamp:start.addingTimeInterval(Double($0)*3),latitude:49+Double($0)*0.00045,longitude:-124,sourceID:"gps") },
+            signalSamples:(0...240).map { .init(timestamp:start.addingTimeInterval(Double($0)*5),values:["speedKph":60,"fuelRateLph":6],sourceID:"obd") },isSample:true)
+        let metrics=DriveLineMetricPolicy.metrics(for:recording)
+        XCTAssertEqual(metrics.distanceSource,"speedKph")
+        XCTAssertEqual(try XCTUnwrap(metrics.distanceKm),20,accuracy:0.0001)
+        XCTAssertEqual(try XCTUnwrap(metrics.economyL100Km),10,accuracy:0.0001)
+        XCTAssertFalse(metrics.distanceIsPartial)
+        recording.gpsPoints=Array(recording.gpsPoints.prefix(1))
+        XCTAssertEqual(DriveLineMetricPolicy.metrics(for:recording).distanceKm,20)
+        for i in recording.signalSamples.indices where i > 200 { recording.signalSamples[i].values.removeValue(forKey:"fuelRateLph") }
+        XCTAssertNotNil(DriveLineMetricPolicy.metrics(for:recording).tripFuelLitres)
+        XCTAssertNil(DriveLineMetricPolicy.metrics(for:recording).economyL100Km,"Partial fuel must not be divided by whole-trip distance")
+        recording.signalSamples=Array(recording.signalSamples.prefix(20))
+        XCTAssertTrue(DriveLineMetricPolicy.metrics(for:recording).distanceIsPartial)
+    }
+
+    func testIntegrationDoesNotMixControllersOrNonfiniteValues() throws {
+        let start=Date(timeIntervalSince1970:1000)
+        let samples=[DriveLineSignalSample(timestamp:start,values:["speedKph":60],sourceID:"7E8"),
+                     DriveLineSignalSample(timestamp:start.addingTimeInterval(5),values:["speedKph":120],sourceID:"7E9"),
+                     DriveLineSignalSample(timestamp:start.addingTimeInterval(10),values:["speedKph":60],sourceID:"7E8"),
+                     DriveLineSignalSample(timestamp:start.addingTimeInterval(11),values:["speedKph":.nan],sourceID:"7E8")]
+        XCTAssertEqual(try XCTUnwrap(DriveLineMetricPolicy.integral("speedKph",samples:samples)).value,600)
+    }
+    func testBoostUsesFreshAlternateAndConservativeTimestamp() {
+        let now=Date(timeIntervalSince1970:1000), id=UUID()
+        func observation(_ key:String,_ value:Double,_ age:Double)->DriveLineObservation {
+            .init(key:key,value:value,timestamp:now.addingTimeInterval(-age),sourceID:"7E8",recordingID:id)
+        }
+        var values=["boostAbsoluteKpa":observation("boostAbsoluteKpa",140,20),
+                    "mapKpa":observation("mapKpa",130,1),"barometricKpa":observation("barometricKpa",100,30)]
+        let derived=DriveLineMetricPolicy.boostGaugeKpa(observations:values,at:now)
+        XCTAssertEqual(derived?.value,30)
+        XCTAssertEqual(derived?.timestamp,now.addingTimeInterval(-30))
+        values["barometricKpa"]?.timestamp=now.addingTimeInterval(1)
+        XCTAssertNil(DriveLineMetricPolicy.boostGaugeKpa(observations:values,at:now))
+        values["barometricKpa"]=observation("barometricKpa",100,30)
+        values["barometricKpa"]?.sourceID="7E9"
+        XCTAssertNil(DriveLineMetricPolicy.boostGaugeKpa(observations:values,at:now))
+    }
     func testPhase91FuelLocationAndOdometerProvenanceRoundTripAdditively() throws {
         let vehicle=DriveLineVehicle(id:UUID(),name:"Sanitized vehicle")
         let observed=Date(timeIntervalSince1970:1_700_000_000)
@@ -203,7 +255,8 @@ final class DriveLineSharedTests: XCTestCase {
                                          endedAt:start.addingTimeInterval(50),sourceIDs:["gps","obd"],gpsPoints:gps,signalSamples:signals)
         let coverage=DriveLineMetricPolicy.coverageSummaries(recording)
         XCTAssertEqual(coverage.first(where:{$0.key == "gps"})?.observedSeconds,10)
-        XCTAssertEqual(coverage.first(where:{$0.key == "outsideC"})?.observedSeconds,10)
+        XCTAssertEqual(coverage.first(where:{$0.key == "outsideC"})?.observedSeconds,50,"Slow-signal availability uses its 75-second validity, not the integration gap")
+        XCTAssertNil(DriveLineMetricPolicy.integral("outsideC",samples:signals),"Negative temperatures are never integrated as speed or fuel")
     }
 
     func testPhase4AnnotationsAreSidecarStateAndDoNotChangeArchiveBytes() throws {

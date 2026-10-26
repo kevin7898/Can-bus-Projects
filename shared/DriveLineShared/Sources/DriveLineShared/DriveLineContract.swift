@@ -489,6 +489,11 @@ public struct DriveLineFuelEntry: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct DriveLineCoverageSummary: Codable, Equatable, Sendable {
+    public var observationCount: Int?
+    public var achievedCadenceSeconds: Double?
+    public var expectedCadenceSeconds: Double?
+    public var integrationSeconds: Double?
+    public var policyVersion: String?
     public var key: String
     public var observedSeconds: Double
     public var recordingSeconds: Double

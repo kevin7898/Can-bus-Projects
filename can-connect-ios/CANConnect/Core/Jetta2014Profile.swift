@@ -15,7 +15,10 @@ enum Jetta2014Profile {
 // Includes rejected/unsupported replies so unavailable signals can be diagnosed.
 @MainActor
 final class ScannerJournal {
-    private struct Exchange: Codable { var timestamp: Date; var command: String; var reply: String }
+    private struct Exchange: Codable, Sendable { var timestamp: Date; var command: String; var reply: String }
+    private static let writer=DispatchQueue(label:"DriveLine.scanner-evidence",qos:.utility)
+    private var pendingWrite:Task<Void,Never>?
+    private(set) var lastWriteError:String?
     private var entries: [Exchange] = []
     private let url: URL?
     private let eventsURL: URL?
@@ -37,14 +40,29 @@ final class ScannerJournal {
         if ["SESSION","VW","ERROR"].contains(command) {
             events.append(entry)
             if events.count > 256 { events.removeFirst(events.count-256) }
-            if let eventsURL, let data = try? JSONEncoder().encode(events) {
-                try? FileManager.default.createDirectory(at:eventsURL.deletingLastPathComponent(),withIntermediateDirectories:true)
-                try? data.write(to:eventsURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
-            }
         }
         if entries.count > 512 { entries.removeFirst(entries.count-512) }
-        guard let url, let data = try? JSONEncoder().encode(entries) else { return }
-        try? FileManager.default.createDirectory(at:url.deletingLastPathComponent(),withIntermediateDirectories:true)
-        try? data.write(to:url,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+        guard pendingWrite == nil else { return }
+        pendingWrite=Task { [self] in
+            try? await Task.sleep(for:.milliseconds(250))
+            guard !Task.isCancelled else { return }
+            do { try await flush() } catch { lastWriteError="Scanner diagnostic evidence could not be saved." }
+        }
+    }
+    func flush() async throws {
+        pendingWrite?.cancel();pendingWrite=nil
+        let entries=self.entries,events=self.events,url=self.url,eventsURL=self.eventsURL
+        try await withCheckedThrowingContinuation { (continuation:CheckedContinuation<Void,Error>) in
+            Self.writer.async {
+                do {
+                    for (destination,values) in [(url,entries),(eventsURL,events)] {
+                        guard let destination else { continue }
+                        try FileManager.default.createDirectory(at:destination.deletingLastPathComponent(),withIntermediateDirectories:true)
+                        try JSONEncoder().encode(values).write(to:destination,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+                    }
+                    continuation.resume()
+                } catch { continuation.resume(throwing:error) }
+            }
+        }
     }
 }

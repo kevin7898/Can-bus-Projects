@@ -17,10 +17,10 @@ final class VWDiagnosticsTests: XCTestCase {
                 }
             }
             let identify = try XCTUnwrap(commands.firstIndex(of:"0902"))
-            for reset in ["ATCFC1","ATAT1","ATST32","ATSH7DF","ATCRA"] {
-                if restore { XCTAssertLessThan(try XCTUnwrap(commands.firstIndex(of:reset)),identify) }
-                else { XCTAssertFalse(commands.contains(reset),"Generic non-CAN adapters keep their original startup path") }
+            for reset in ["ATD","ATE0","ATH1","ATCAF1","ATSP0"] {
+                XCTAssertLessThan(try XCTUnwrap(commands.firstIndex(of:reset)),identify)
             }
+            XCTAssertFalse(commands.contains("ATSH7DF"),"Discovery must not impose 11-bit addressing on an unknown protocol")
         }
     }
     func testCalibrationRequiresCompleteReplyFromCorrectControllerAndExactSoftware() {
@@ -273,17 +273,19 @@ final class VWDiagnosticsTests: XCTestCase {
         }
     }
     @MainActor
-    func testRecoveryEventsSurviveRoutinePollingAndReconnect() throws {
+    func testRecoveryEventsSurviveRoutinePollingAndReconnect() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let journal = ScannerJournal(directory:root)
         journal.append(command:"VW",reply:"SYNTHETIC recovery event")
         for _ in 0..<520 { journal.append(command:"010C",reply:"SYNTHETIC RPM") }
+        try await journal.flush()
         _ = ScannerJournal(directory:root)
         let events = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("scanner-events.json"))) as? [[String:Any]])
         XCTAssertTrue(events.contains { $0["reply"] as? String == "SYNTHETIC recovery event" })
         XCTAssertFalse(events.contains { $0["command"] as? String == "010C" })
         for _ in 0..<260 { journal.append(command:"VW",reply:"SYNTHETIC bounded event") }
+        try await journal.flush()
         let bounded = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("scanner-events.json"))) as? [[String:Any]])
         XCTAssertEqual(bounded.count,256)
     }

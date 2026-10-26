@@ -153,6 +153,12 @@ struct Preferences: Codable, Equatable {
     var cellularSummaries = true
 }
 struct RecordingDraft: Codable {
+    // Derived, process-local state. Legacy drafts hydrate once on their next
+    // observation; no cache is written into original archives or transfer data.
+    var liveEvidence = LiveRecordingEvidence()
+    enum CodingKeys:String,CodingKey {
+        case id,vehicleID,source,startedAt,updatedAt,distanceKM,route,samples,scannerTransport,scannerReconnectDeadline
+    }
     var id = UUID()
     var vehicleID: UUID?
     var source: TripSource
@@ -170,10 +176,11 @@ struct RecordingDraft: Codable {
             guard seconds > 0 else { return }
             let metres = last.distance(to: point)
             guard metres / seconds * 3.6 <= DriveLineMetricPolicy.maximumPlausibleSpeedKph else { return }
-            if seconds <= DriveLineMetricPolicy.maximumGPSGap && metres < DriveLineMetricPolicy.minimumGPSMovementM { return }
         }
+        prepareLiveEvidence()
         route.append(point)
-        if let measured = DriveLineMetricPolicy.distanceFromGPS(route.map(\.shared)) { distanceKM = measured }
+        liveEvidence.accept(point)
+        updateLiveDistance(at:point.timestamp)
         updatedAt = max(updatedAt, point.timestamp)
     }
     func trip(endedAt: Date, recovered: Bool = false) -> Trip {

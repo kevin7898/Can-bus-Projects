@@ -36,7 +36,8 @@ struct ObservationFreshnessDisplay:Equatable {
     var label:String
     static func resolve(observedAt:Date?,now:Date,staleAfter:TimeInterval,
                         semanticState:DriveLineSemanticState?=nil,statusText:String?=nil)->Self {
-        let age=observedAt.map { max(0,now.timeIntervalSince($0)) }
+        let age=observedAt.map { now.timeIntervalSince($0) }
+        if let age, age < 0 { return Self(state:.unavailable,label:"Observation time unavailable") }
         let state=semanticState ?? (age == nil ? .unavailable:(age! > staleAfter ? .stale:.ready))
         if let statusText { return Self(state:state,label:statusText) }
         if state == .offline { return Self(state:state,label:"Scanner disconnected") }
