@@ -15,7 +15,7 @@ enum Jetta2014Profile {
 // Includes rejected/unsupported replies so unavailable signals can be diagnosed.
 @MainActor
 final class ScannerJournal {
-    private struct Exchange: Codable, Sendable { var timestamp: Date; var command: String; var reply: String }
+    private struct Exchange: Codable, Sendable { var id:UUID? = UUID();var timestamp: Date; var command: String; var reply: String }
     private static let writer=DispatchQueue(label:"DriveLine.scanner-evidence",qos:.utility)
     private var pendingWrite:Task<Void,Never>?
     private(set) var lastWriteError:String?
@@ -57,8 +57,20 @@ final class ScannerJournal {
                 do {
                     for (destination,values) in [(url,entries),(eventsURL,events)] {
                         guard let destination else { continue }
+                        var output=values
+                        if destination == eventsURL,let bytes=try? Data(contentsOf:destination),
+                           let stored=try? JSONDecoder().decode([Exchange].self,from:bytes) {
+                            var seen=Set<String>()
+                            output=Array((stored+values).sorted{$0.timestamp<$1.timestamp}.filter {
+                                seen.insert($0.id?.uuidString ?? "\($0.timestamp.timeIntervalSince1970)|\($0.command)|\($0.reply)").inserted
+                            }.suffix(256))
+                        } else if let bytes=try? Data(contentsOf:destination),
+                                  let stored=try? JSONDecoder().decode([Exchange].self,from:bytes),
+                                  (stored.last?.timestamp ?? .distantPast) > (values.last?.timestamp ?? .distantPast) {
+                            continue // An older session's delayed flush cannot replace newer diagnostics.
+                        }
                         try FileManager.default.createDirectory(at:destination.deletingLastPathComponent(),withIntermediateDirectories:true)
-                        try JSONEncoder().encode(values).write(to:destination,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+                        try JSONEncoder().encode(output).write(to:destination,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
                     }
                     continuation.resume()
                 } catch { continuation.resume(throwing:error) }

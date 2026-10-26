@@ -83,6 +83,8 @@ enum TripStorySnapshotBuilder {
         mix(DriveLineAcquisitionPolicy.version)
         withUnsafeBytes(of: recording.recordingID.uuid) { for byte in $0 { mix(UInt64(byte)) } }
         mix(recording.startedAt); mix(recording.endedAt)
+        for boundary in recording.acquisitionInterruptions ?? [] { mix(boundary) }
+        for event in recording.events { mix(event.timestamp);mix(event.endTimestamp ?? event.timestamp);mix(event.kind);mix(event.note ?? "") }
         mix(UInt64(recording.gpsPoints.count)); mix(UInt64(recording.signalSamples.count))
         for point in recording.gpsPoints {
             mix(point.timestamp); mix(point.latitude); mix(point.longitude)

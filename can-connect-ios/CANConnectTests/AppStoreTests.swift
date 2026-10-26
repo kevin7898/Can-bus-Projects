@@ -125,7 +125,7 @@ final class AppStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testFinishSavesDraftExactlyOnce() throws {
+    func testFinishSavesDraftExactlyOnce() async throws {
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:directory) }
         let disk=LocalStore(url:directory.appendingPathComponent("state.json"))
@@ -133,6 +133,7 @@ final class AppStoreTests: XCTestCase {
         store.state.draft=RecordingDraft(vehicleID:store.state.selectedVehicleID,source:.demo,startedAt:Date(),updatedAt:Date())
         let id=try XCTUnwrap(store.state.draft?.id)
         store.finishRecording();store.finishRecording()
+        await store.waitForFinish()
         XCTAssertEqual(store.state.trips.filter{$0.id==id}.count,1)
         XCTAssertEqual(try disk.load()?.trips.filter{$0.id==id}.count,1)
     }

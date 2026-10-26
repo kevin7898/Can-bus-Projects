@@ -9,7 +9,7 @@ struct LiveView: View {
               scannerConnected:store.scanner.connected,scannerConnecting:store.scanner.connecting,
               scannerStatus:store.scanner.status,gpsStatus:store.gps.status,gpsSpeedKMH:store.gps.speedKMH,
               gpsLastFix:store.gps.lastFix,now:store.now,scannerSupportedKeys:store.scanner.supportedSignalKeys,
-              scannerUnsupportedKeys:store.scanner.unsupportedSignalKeys)
+              scannerUnsupportedKeys:store.scanner.unsupportedSignalKeys,isStopping:store.isFinishing,requestOutcomes:store.scanner.requestOutcomes)
     }
 
     var body:some View {
@@ -107,7 +107,7 @@ struct LiveView: View {
 
     private var recordButton:some View {
         VStack(spacing:7) {
-            AppButton(title:store.pendingGPS ? "Cancel GPS request":(store.recording ? "Finish & save":"Start recording"),
+            AppButton(title:store.isFinishing ? "Saving recording…":(store.pendingGPS ? "Cancel GPS request":(store.recording ? "Finish & save":"Start recording")),
                       icon:store.recording ? "stop.fill":"record.circle",destructive:store.recording) {
                 if store.pendingGPS { store.cancelGPS() } else if store.recording { store.finishRecording() } else { store.startRecording() }
             }.accessibilityIdentifier(store.recording ? "record.finish":"record.start")

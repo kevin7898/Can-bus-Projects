@@ -259,6 +259,7 @@ final class VWDiagnosticsTests: XCTestCase {
         XCTAssertEqual(scanner.value("dpfSootG",at:calendar),8.6)
         XCTAssertEqual(store.state.draft?.id,id); XCTAssertEqual(transport.opens,1)
         store.finishRecording()
+        await store.waitForFinish()
         let saved = try XCTUnwrap(store.state.trips.first)
         XCTAssertEqual(saved.id,id)
         XCTAssertEqual(saved.samples?.filter { $0.signals["dpfAshML"] != nil }.count,2)

@@ -7,6 +7,10 @@ struct FuelOdometerObservation: Codable, Equatable, Sendable {
     var sourceIdentifier: String
     var recordingID: UUID?
     var isTrusted: Bool
+    var definitionID:String? = nil
+    var definitionVersion:String? = nil
+    var controllerFingerprint:String? = nil
+    var validationStatus:String? = nil
 
     var isValid: Bool {
         valueKm.isFinite && (0...10_000_000).contains(valueKm) &&
@@ -14,8 +18,16 @@ struct FuelOdometerObservation: Codable, Equatable, Sendable {
     }
 
     var provenance: DriveLineOdometerProvenance {
-        DriveLineOdometerProvenance(valueKm:valueKm,observedAt:observedAt,
+        var value=DriveLineOdometerProvenance(valueKm:valueKm,observedAt:observedAt,
             sourceIdentifier:sourceIdentifier,recordingID:recordingID,sourceType:.scanned)
+        value.definitionID=definitionID;value.definitionVersion=definitionVersion
+        value.controllerFingerprint=controllerFingerprint;value.validationStatus=validationStatus
+        return value
+    }
+    func requiresReview(comparedWith previous:FuelOdometerObservation?) ->Bool {
+        guard let previous,previous.vehicleID == vehicleID,observedAt > previous.observedAt else { return false }
+        let hours=observedAt.timeIntervalSince(previous.observedAt)/3600
+        return valueKm < previous.valueKm || valueKm-previous.valueKm > max(5,hours*300)
     }
 }
 
@@ -30,7 +42,8 @@ enum FuelOdometerPrefillPolicy {
             item.vehicleID == vehicleID && item.isTrusted && item.isValid &&
             (0...maximumAge).contains(now.timeIntervalSince(item.observedAt))
         }
-        if let current, accepted(current,maximumAge:currentMaximumAge) { return current.provenance }
+        let previous=stored.filter { accepted($0,maximumAge:storedMaximumAge) }.max(by:{$0.observedAt<$1.observedAt})
+        if let current, accepted(current,maximumAge:currentMaximumAge),!current.requiresReview(comparedWith:previous) { return current.provenance }
         if let latest=stored.filter({ accepted($0,maximumAge:storedMaximumAge) }).max(by:{$0.observedAt<$1.observedAt}) {
             return latest.provenance
         }

@@ -61,12 +61,8 @@ enum OBDDecoder {
     // Slow environmental/tank values do not need to compete with live engine
     // readings. All PIDs still run immediately on a new connection.
     static func pollInterval(pid: Int) -> TimeInterval {
-        switch pid {
-        case 0x46,0x33: return 60
-        case 0x2F: return 30
-        case 0x0C,0x0D,0x5E,0x70,0x78,0x7A,0x04,0x10: return 0.5
-        default: return 3
-        }
+        guard let key=definitions.first(where:{$0.pid == pid})?.key else { return 3 }
+        return DriveLineAcquisitionPolicy.signal(key).expectedCadence ?? 3
     }
     static func freshness(for key: String) -> TimeInterval {
         DriveLineAcquisitionPolicy.signal(key).displayValidity
@@ -126,13 +122,12 @@ enum OBDDecoder {
 
 extension RecordingDraft {
     mutating func accept(_ sample: OBDSample) {
-        guard source == .scanner, sample.isValid, sample.timestamp >= startedAt,
-              sample.timestamp >= (samples?.last?.timestamp ?? startedAt) else { return }
+        guard source == .scanner, sample.isValid else { return }
         prepareLiveEvidence()
         if samples == nil { samples = [] }
         samples?.append(sample)
-        liveEvidence.accept(sample,recordingID:id)
-        updateLiveDistance(at:sample.timestamp)
+        liveEvidence.accept(sample,recordingID:id,notBefore:startedAt)
+        updateLiveDistance(at:max(updatedAt,sample.timestamp))
         updatedAt = max(updatedAt, sample.timestamp)
     }
 }
@@ -141,25 +136,26 @@ struct LiveRecordingEvidence {
     var sampleCount=0
     var pointCount=0
     var latest:[String:DriveLineObservation]=[:]
-    var speedIntegral=0.0
-    var speedSeconds=0.0
+    private var speed=DriveLineIntegralAccumulator(maximumValue:DriveLineMetricPolicy.maximumPlausibleSpeedKph)
+    private var fuel=DriveLineIntegralAccumulator()
+    var speedIntegral:Double { speed.value }
+    var speedSeconds:Double { speed.coveredSeconds }
+    var fuelIntegral:Double { fuel.value }
+    var fuelSeconds:Double { fuel.coveredSeconds }
     var gpsKm=0.0
     var gpsSeconds=0.0
     var lastPoint:RoutePoint?
-    mutating func accept(_ sample:OBDSample,recordingID:UUID) {
+    init() {}
+    mutating func interrupt(at date:Date) { speed.interrupt(at:date);fuel.interrupt(at:date) }
+    mutating func accept(_ sample:OBDSample,recordingID:UUID,notBefore:Date) {
+        sampleCount += 1
+        guard sample.timestamp >= notBefore else { return }
         for (key,value) in sample.signals where value.isFinite {
+            if key == "speedKph" { speed.insert(timestamp:sample.timestamp,value:value) }
+            if key == "fuelRateLph" { fuel.insert(timestamp:sample.timestamp,value:value) }
             if let previous=latest[key],previous.timestamp > sample.timestamp { continue }
-            if key == "speedKph",let previous=latest[key] {
-                let seconds=sample.timestamp.timeIntervalSince(previous.timestamp)
-                if seconds > 0,seconds <= DriveLineMetricPolicy.maximumSignalGap,
-                   (0...DriveLineMetricPolicy.maximumPlausibleSpeedKph).contains(value),
-                   (0...DriveLineMetricPolicy.maximumPlausibleSpeedKph).contains(previous.value) {
-                    speedIntegral += (previous.value+value)/2*seconds;speedSeconds += seconds
-                }
-            }
             latest[key] = .init(key:key,value:value,timestamp:sample.timestamp,sourceID:"obd",recordingID:recordingID)
         }
-        sampleCount += 1
     }
     mutating func accept(_ point:RoutePoint) {
         if let previous=lastPoint {
@@ -175,10 +171,18 @@ struct LiveRecordingEvidence {
 }
 
 extension RecordingDraft {
+    mutating func markAcquisitionInterruption(at date:Date) {
+        if acquisitionInterruptions == nil { acquisitionInterruptions=[] }
+        acquisitionInterruptions?.append(date)
+        liveEvidence.interrupt(at:date)
+    }
     mutating func prepareLiveEvidence() {
         guard liveEvidence.sampleCount != (samples?.count ?? 0) || liveEvidence.pointCount != route.count else { return }
         liveEvidence=LiveRecordingEvidence()
-        for sample in samples ?? [] { liveEvidence.accept(sample,recordingID:id) }
+        for boundary in acquisitionInterruptions ?? [] { liveEvidence.interrupt(at:boundary) }
+        for sample in samples ?? [] {
+            liveEvidence.accept(sample,recordingID:id,notBefore:startedAt)
+        }
         for point in route { liveEvidence.accept(point) }
     }
     mutating func updateLiveDistance(at date:Date) {
@@ -194,13 +198,17 @@ extension RecordingDraft {
 
 extension RecordingDraft {
     func integral(_ key: String) -> (value: Double, coverage: Double)? {
-        DriveLineMetricPolicy.integral(key,samples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") })
+        if liveEvidence.sampleCount == (samples?.count ?? 0) {
+            if key == "speedKph" { return liveEvidence.speedSeconds > 0 ? (liveEvidence.speedIntegral,liveEvidence.speedSeconds):nil }
+            if key == "fuelRateLph" { return liveEvidence.fuelSeconds > 0 ? (liveEvidence.fuelIntegral,liveEvidence.fuelSeconds):nil }
+        }
+        return DriveLineMetricPolicy.integral(key,samples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") },interruptions:acquisitionInterruptions ?? [])
     }
     func measuredFuel(endedAt: Date) -> (litres: Double?, economy: Double?) {
         let duration = endedAt.timeIntervalSince(startedAt)
         guard source == .scanner, duration > 0, let fuel = integral("fuelRateLph"), fuel.coverage/duration >= DriveLineMetricPolicy.requiredFuelCoverage else { return (nil,nil) }
         let litres = fuel.value/3600
-        guard let speed = integral("speedKph"), speed.coverage/duration >= 0.8, distanceKM > 0.1 else { return (litres,nil) }
+        guard let speed = integral("speedKph"),speed.coverage >= duration-0.001,fuel.coverage >= duration-0.001,distanceKM > 0.1 else { return (litres,nil) }
         return (litres,litres/distanceKM*100)
     }
 }

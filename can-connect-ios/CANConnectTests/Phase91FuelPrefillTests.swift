@@ -15,7 +15,7 @@ final class Phase91FuelPrefillTests:XCTestCase {
 
     func testCurrentTrustedScanWinsOverOlderStoredScanAndFuelEntry() {
         let fill=FuelEntry(vehicleID:vehicle,date:now.addingTimeInterval(-60),litres:40,costCAD:70,odometerKM:1000,full:true)
-        let stored=FuelOdometerObservation(vehicleID:vehicle,valueKm:1100,observedAt:now.addingTimeInterval(-120),sourceIdentifier:"verified.fixture",recordingID:UUID(),isTrusted:true)
+        let stored=FuelOdometerObservation(vehicleID:vehicle,valueKm:1199,observedAt:now.addingTimeInterval(-120),sourceIdentifier:"verified.fixture",recordingID:UUID(),isTrusted:true)
         let current=FuelOdometerObservation(vehicleID:vehicle,valueKm:1200,observedAt:now.addingTimeInterval(-10),sourceIdentifier:"verified.fixture",recordingID:UUID(),isTrusted:true)
         let result=FuelOdometerPrefillPolicy.choose(vehicleID:vehicle,current:current,stored:[stored],fills:[fill],now:now)
         XCTAssertEqual(result?.valueKm,1200);XCTAssertEqual(result?.sourceType,.scanned)

@@ -57,7 +57,7 @@ final class GPSRecordingTests: XCTestCase {
         XCTAssertEqual(RoutePoint.segments([point(0)]),[[point(0)]])
     }
     @MainActor
-    func testPhoneGPSStillStartsSavesAndStopsNormally() throws {
+    func testPhoneGPSStillStartsSavesAndStopsNormally() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
         let gps = GPSFixture(), disk = LocalStore(url:root.appendingPathComponent("state.json"))
@@ -72,6 +72,7 @@ final class GPSRecordingTests: XCTestCase {
         NotificationCenter.default.post(name:UIApplication.didEnterBackgroundNotification,object:nil)
         XCTAssertEqual(try disk.load()?.draft?.route,[point])
         store.finishRecording()
+        await store.waitForFinish()
         XCTAssertEqual(store.state.trips.first?.route,[point]); XCTAssertEqual(gps.stops,1)
         gps.onPoint?(point)
         XCTAssertNil(store.state.draft)

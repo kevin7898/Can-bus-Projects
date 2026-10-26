@@ -6,11 +6,15 @@ public struct DriveLineAcquisitionPolicy: Equatable, Sendable {
     public var requestID:String?
     public var expectedCadence:TimeInterval?
     public var displayValidity:TimeInterval
+    public var signalID:String
+    public var unit:String? { DriveLineJourneyPolicy.registeredSignal(signalID)?.unit }
+    public var sourceKind:DriveLineSourceKind? { requestID == nil ? nil:.obd }
+    public var definitionVersion:String { Self.version }
     public var integrationGap:TimeInterval { DriveLineMetricPolicy.maximumSignalGap }
     public static func signal(_ key:String)->Self {
         let groups:[(String,Double,[String])]=[
             ("0133",60,["barometricKpa"]),("0146",60,["outsideC"]),("012F",30,["fuelPercent"]),
-            ("vw.engine",60,["dpfAshML","dpfSootG"]),("vw.dsg",3,["dsgFluidC"]),
+            ("vw.engine",60,["dpfAshML","dpfSootG"]),("vw.dsg",5,["dsgFluidC"]),
             ("010C",0.5,["rpm"]),("010D",0.5,["speedKph"]),("015E",0.5,["fuelRateLph"]),
             ("0170",0.5,["boostAbsoluteKpa","boostCommandedKpa","boostBAbsoluteKpa","boostBCommandedKpa"]),
             ("0178",0.5,["egt1C","egt2C","egt3C","egt4C"]),
@@ -21,9 +25,9 @@ public struct DriveLineAcquisitionPolicy: Equatable, Sendable {
             ("0142",3,["voltage"]),("015C",3,["oilC"])
         ]
         guard let group=groups.first(where:{$0.2.contains(key)}) else {
-            return Self(requestID:nil,expectedCadence:nil,displayValidity:10)
+            return Self(requestID:nil,expectedCadence:nil,displayValidity:10,signalID:key)
         }
-        return Self(requestID:group.0,expectedCadence:group.1,displayValidity:group.1 >= 30 ? group.1+15:10)
+        return Self(requestID:group.0,expectedCadence:group.1,displayValidity:group.1 >= 30 ? group.1+15:10,signalID:key)
     }
 
     /// Union of validity windows, clipped to evidence bounds and explicit

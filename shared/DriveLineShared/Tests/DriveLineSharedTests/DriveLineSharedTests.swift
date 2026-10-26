@@ -3,6 +3,20 @@ import CryptoKit
 @testable import DriveLineShared
 
 final class DriveLineSharedTests: XCTestCase {
+    func testRecordedInterruptionStopsSlowValidityAndCursorParity() throws {
+        let start=Date(timeIntervalSince1970:1000)
+        let recording=DriveLineRecording(recordingID:UUID(),vehicleID:UUID(),name:"Synthetic interruption",startedAt:start,
+            endedAt:start.addingTimeInterval(60),sourceIDs:["obd"],signalSamples:[.init(timestamp:start,values:["dpfSootG":10],sourceID:"obd")],
+            isSample:true,acquisitionInterruptions:[start.addingTimeInterval(10)])
+        let cursor=start.addingTimeInterval(20)
+        let index=DriveLineCursorIndex(recording:recording,signalKeys:["dpfSootG"])
+        XCTAssertEqual(index.selection(at:cursor,signalKeys:["dpfSootG"]),DriveLineJourneyPolicy.cursor(at:cursor,recording:recording,signalKeys:["dpfSootG"]))
+        XCTAssertNil(index.selection(at:cursor,signalKeys:["dpfSootG"]).observations["dpfSootG"])
+        let series=DriveLineJourneyPolicy.signalSeries("dpfSootG",unit:"g",recording:recording)
+        XCTAssertNil(DriveLineJourneyPolicy.signalStatistics(series,at:cursor).current)
+        XCTAssertEqual(series.coverage?.observedSeconds,10)
+        XCTAssertEqual(try JSONDecoder().decode(DriveLineRecording.self,from:JSONEncoder().encode(recording)),recording)
+    }
     func testSlowSignalAvailabilityIsSeparateFromStrictIntegrationAndInterruptions() {
         let start=Date(timeIntervalSince1970:1000),end=start.addingTimeInterval(204)
         let times=[0.0,68,136,204].map { start.addingTimeInterval($0) }

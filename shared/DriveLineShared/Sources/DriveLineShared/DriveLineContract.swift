@@ -413,6 +413,10 @@ public enum DriveLineOdometerSourceType: String, Codable, CaseIterable, Sendable
 /// Evidence for the odometer value saved with a fuel entry. Older archives do
 /// not contain this additive field and continue to decode with nil provenance.
 public struct DriveLineOdometerProvenance: Codable, Equatable, Sendable {
+    public var definitionID:String?
+    public var definitionVersion:String?
+    public var controllerFingerprint:String?
+    public var validationStatus:String?
     public var valueKm: Double
     public var observedAt: Date
     public var sourceIdentifier: String
@@ -515,6 +519,7 @@ public struct DriveLineCoverageSummary: Codable, Equatable, Sendable {
 }
 
 public struct DriveLineRecording: Codable, Equatable, Identifiable, Sendable {
+    public var acquisitionInterruptions: [Date]?
     public var id: UUID { recordingID }
     public var recordingID: UUID
     public var vehicleID: UUID
@@ -536,7 +541,8 @@ public struct DriveLineRecording: Codable, Equatable, Identifiable, Sendable {
                 endedAt: Date, sourceIDs: [String], gpsPoints: [DriveLineGPSPoint] = [],
                 signalSamples: [DriveLineSignalSample] = [], notes: String? = nil,
                 events: [DriveLineTripEvent] = [], recordedDistanceKm: Double? = nil, tripFuelLitres: Double? = nil,
-                coverage: [DriveLineCoverageSummary] = [], isSample: Bool = false) {
+                coverage: [DriveLineCoverageSummary] = [], isSample: Bool = false, acquisitionInterruptions:[Date]? = nil) {
+        self.acquisitionInterruptions=acquisitionInterruptions
         self.recordingID = recordingID
         self.vehicleID = vehicleID
         self.name = name
@@ -557,10 +563,12 @@ public struct DriveLineRecording: Codable, Equatable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case recordingID, vehicleID, name, startedAt, endedAt, sourceIDs, gpsPoints, signalSamples
         case notes, events, recordedDistanceKm, tripFuelLitres, coverage, isSample, metadata
+        case acquisitionInterruptions
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy:CodingKeys.self)
+        acquisitionInterruptions=try values.decodeIfPresent([Date].self,forKey:.acquisitionInterruptions)
         recordingID = try values.decode(UUID.self,forKey:.recordingID)
         vehicleID = try values.decode(UUID.self,forKey:.vehicleID)
         name = try values.decode(String.self,forKey:.name)

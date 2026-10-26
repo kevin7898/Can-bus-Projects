@@ -35,6 +35,11 @@ struct ScannerConnectionView: View {
         }
         if let failure { Text(failure).foregroundStyle(Palette.red).font(.system(size:13)) }
         InfoNote(text:store.scanner.status)
+        if let message=store.scanner.diagnosticsJournalError { InfoNote(text:message) }
+        if !store.scanner.diagnostics.pids.isEmpty {
+            ShareLink("Share sanitized acquisition diagnostics",item:store.scanner.diagnosticsExport)
+                .accessibilityIdentifier("scanner.diagnostics.export")
+        }
         AppButton(title:"Connect selected vehicle",icon:"antenna.radiowaves.left.and.right") {
             do {
                 let settings: ScannerSettings

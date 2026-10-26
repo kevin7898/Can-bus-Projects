@@ -7,6 +7,7 @@ final class FuelLocationService:NSObject,FuelLocationProviding,@preconcurrency C
     private let geocoder:CLGeocoder
     private var continuation:CheckedContinuation<CLLocation,Error>?
     private var timeoutTask:Task<Void,Never>?
+    private var cachedSuggestion:FuelStationSuggestion?
 
     init(manager:CLLocationManager=CLLocationManager(),geocoder:CLGeocoder=CLGeocoder()) {
         self.manager=manager;self.geocoder=geocoder
@@ -14,15 +15,30 @@ final class FuelLocationService:NSObject,FuelLocationProviding,@preconcurrency C
     }
 
     func currentStation() async throws ->FuelStationSuggestion {
+        if manager.authorizationStatus == .denied { throw FuelLocationFailure.permissionDenied }
+        if manager.authorizationStatus == .restricted { throw FuelLocationFailure.restricted }
+        if let cachedSuggestion,(0...60).contains(Date().timeIntervalSince(cachedSuggestion.observedAt)) { return cachedSuggestion }
         let location=try await requestLocation()
+        let geocodeTimeout=Task { [weak self] in
+            try? await Task.sleep(for:.seconds(8))
+            guard !Task.isCancelled else { return }
+            self?.geocoder.cancelGeocode()
+        }
+        defer { geocodeTimeout.cancel() }
         do {
-            guard let placemark=try await geocoder.reverseGeocodeLocation(location).first else { throw FuelLocationFailure.noResult }
+            let placemarks=try await withTaskCancellationHandler(operation:{
+                try await geocoder.reverseGeocodeLocation(location)
+            },onCancel:{ Task { @MainActor [weak self] in self?.geocoder.cancelGeocode() } })
+            try Task.checkCancellation()
+            guard let placemark=placemarks.first else { throw FuelLocationFailure.noResult }
             let address=Self.formattedAddress(placemark)
             guard !address.isEmpty else { throw FuelLocationFailure.noResult }
-            return FuelStationSuggestion(stationName:Self.confidentStationName(placemark),stationAddress:address,
+            let suggestion=FuelStationSuggestion(stationName:Self.confidentStationName(placemark),stationAddress:address,
                 observedAt:location.timestamp)
+            cachedSuggestion=suggestion;return suggestion
         } catch let failure as FuelLocationFailure { throw failure }
         catch let error as CLError where error.code == .network { throw FuelLocationFailure.offline }
+        catch let error as CLError where error.code == .geocodeCanceled { throw FuelLocationFailure.timeout }
         catch { throw FuelLocationFailure.noResult }
     }
 
@@ -74,7 +90,7 @@ final class FuelLocationService:NSObject,FuelLocationProviding,@preconcurrency C
     }
     nonisolated static func accepts(_ location:CLLocation,now:Date)->Bool {
         location.horizontalAccuracy.isFinite && (0...100).contains(location.horizontalAccuracy) &&
-        abs(now.timeIntervalSince(location.timestamp)) <= 120
+        (0...120).contains(now.timeIntervalSince(location.timestamp))
     }
     nonisolated static func formattedAddress(_ placemark:CLPlacemark)->String {
         var parts:[String]=[]
@@ -84,9 +100,9 @@ final class FuelLocationService:NSObject,FuelLocationProviding,@preconcurrency C
         return parts.joined(separator:", ")
     }
     nonisolated static func confidentStationName(_ placemark:CLPlacemark)->String? {
-        guard placemark.areasOfInterest?.count == 1,let name=placemark.areasOfInterest?.first else { return nil }
-        let value=name.lowercased()
-        let stationWords=["fuel","gas","petro","shell","chevron","esso","mobil","husky","co-op"]
-        return stationWords.contains(where:value.contains) ? name:nil
+        // A reverse-geocoded name/area-of-interest is not a verified fuel POI
+        // category (for example, "Gas Works Museum"). Address is trustworthy;
+        // retain manual station-name entry until category evidence is available.
+        nil
     }
 }

@@ -176,7 +176,7 @@ struct FuelForm: View {
                 allowOdometerCorrection:allowCorrection,stationAddress:draft.stationAddress,
                 odometerProvenance:draft.odometerProvenance,stationProvenance:draft.stationProvenance);dismiss() } catch { self.error = error.localizedDescription }
             }
-        }.task {
+        }.task(id:date) {
             guard entryID == nil else { return }
             draft.applyOdometer(store.fuelOdometerPrefill())
             await refreshLocation(automatic:true)
@@ -191,9 +191,15 @@ struct FuelForm: View {
         if provenance.sourceType == .fuelEntry { return "From last fuel entry" }
         if provenance.sourceType == .manual { return "Manually entered" }
         let formatter=RelativeDateTimeFormatter();formatter.unitsStyle = .abbreviated
-        return "Scanned \(formatter.localizedString(for:provenance.observedAt,relativeTo:Date()))"
+        let review=Date().timeIntervalSince(provenance.observedAt)>FuelOdometerPrefillPolicy.currentMaximumAge ? " · Review last-known reading":""
+        return "Scanned \(formatter.localizedString(for:provenance.observedAt,relativeTo:Date()))\(review)"
     }
     @MainActor private func refreshLocation(automatic:Bool=false) async {
+        guard abs(date.timeIntervalSinceNow) <= 300 else {
+            if draft.stationProvenance?.sourceType == .currentLocation { draft.clearStation() }
+            locationMessage="For a historical fill, enter the station recorded on your receipt."
+            return
+        }
         guard !locating else { return }
         if !draft.stationIsPristine && (!draft.stationName.isEmpty || !draft.stationAddress.isEmpty) {
             if !automatic { locationMessage="Clear the edited station fields before using the current location." }
@@ -201,8 +207,11 @@ struct FuelForm: View {
         }
         draft.prepareForLocationRefresh();locating=true;locationMessage=nil
         defer { locating=false }
-        switch await FuelStationPrefillPolicy.resolve(using:store.fuelLocation) {
+        let result=await FuelStationPrefillPolicy.resolve(using:store.fuelLocation)
+        guard !Task.isCancelled else { return }
+        switch result {
         case .success(let suggestion):
+            guard !Task.isCancelled,abs(date.timeIntervalSinceNow) <= 300 else { return }
             draft.applyStation(suggestion)
             locationMessage=draft.stationProvenance == nil ? "The result arrived after you edited the station, so your text was kept.":nil
         case .failure(let failure):locationMessage=failure.message

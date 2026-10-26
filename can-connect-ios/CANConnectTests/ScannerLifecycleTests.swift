@@ -30,6 +30,28 @@ private final class ActivitySpy: RecordingActivityManaging {
 }
 
 final class ScannerLifecycleTests: XCTestCase {
+    @MainActor func testExplicitRetryAtSixtyAndNinetySecondsDoesNotAdvanceLossDeadline() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let disk=LocalStore(url:root.appendingPathComponent("state.json"));_ = try savedVehicle(disk)
+        let transport=LifecycleTransport(),scanner=ScannerRecorder(makeSession:{transport})
+        let store=AppStore(disk:disk,scanner:scanner,gps:GPSFixture(),scannerAvailable:{_ in true})
+        await until("recording") { store.recording }
+        transport.available=false
+        await until("lost scanner") { !scanner.connected }
+        let draft=try XCTUnwrap(store.state.draft),deadline=try XCTUnwrap(draft.scannerReconnectDeadline)
+        for remaining in [60.0,30.0] {
+            for _ in 0..<3 { store.retryScannerNow(at:deadline.addingTimeInterval(-remaining)) }
+            XCTAssertEqual(store.state.draft?.id,draft.id)
+            XCTAssertEqual(store.state.draft?.scannerReconnectDeadline,deadline)
+            await until("failed retry") { !scanner.connecting }
+        }
+        store.retryScannerNow(at:deadline)
+        await store.waitForFinish()
+        XCTAssertNil(store.state.draft)
+        XCTAssertEqual(store.state.trips.filter{$0.id == draft.id}.count,1)
+        store.disconnectScanner()
+    }
     @MainActor
     private func until(_ description: String, _ condition: @escaping () -> Bool) async {
         let wait = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in condition() },object:nil)
@@ -77,6 +99,7 @@ final class ScannerLifecycleTests: XCTestCase {
         XCTAssertTrue(store.recording); XCTAssertNil(store.error)
         XCTAssertEqual(store.state.draft?.id,first.id)
         store.finishRecording()
+        await store.waitForFinish()
         XCTAssertEqual(gps.stops,1)
         XCTAssertEqual(try disk.load()?.trips.first?.route,[point])
         XCTAssertNil(activity.snapshot)
@@ -87,6 +110,7 @@ final class ScannerLifecycleTests: XCTestCase {
         store.startRecording(); XCTAssertTrue(store.recording,"Manual Start remains available")
         XCTAssertEqual(gps.starts,2,"Manual scanner recording also starts GPS")
         store.finishRecording()
+        await store.waitForFinish()
     }
     @MainActor
     func testLossKeepsGPSAndBackoffReconnectResumesSameTripAndManualCancelStaysCancelled() async throws {
@@ -119,6 +143,7 @@ final class ScannerLifecycleTests: XCTestCase {
         XCTAssertEqual(gps.starts,1); XCTAssertEqual(gps.stops,0)
         XCTAssertEqual(store.state.draft?.route,[point])
         store.finishRecording(); store.disconnectScanner()
+        await store.waitForFinish()
         let afterCancel = transport.opens
         for _ in 0..<5 { store.reconcileScannerConnection(at:Date().addingTimeInterval(300)) }
         try await Task.sleep(nanoseconds:100_000_000)
@@ -127,6 +152,7 @@ final class ScannerLifecycleTests: XCTestCase {
         accessory = true; store.reconcileScannerConnection(at:Date())
         await until("next accessory connection rearms automation") { store.recording }
         store.finishRecording()
+        await store.waitForFinish()
     }
     @MainActor
     func testWrongVINAndNoDataDoNotCreateAutomaticTrips() async throws {
@@ -184,6 +210,7 @@ final class ScannerLifecycleTests: XCTestCase {
         store.state.draft = RecordingDraft(source:.phoneGPS,startedAt:Date(),updatedAt:Date())
         store.reconcileScannerConnection(at:Date()); XCTAssertEqual(transport.opens,0)
         store.finishRecording(); store.disconnectScanner()
+        await store.waitForFinish()
     }
     @MainActor
     func testStorageFailurePreservesDraftAndBlocksAutomaticReconnect() async throws {
@@ -202,6 +229,7 @@ final class ScannerLifecycleTests: XCTestCase {
         transport.available = false
         await until("scanner disconnect") { !scanner.connected }
         store.finishRecording()
+        await store.waitForFinish()
         XCTAssertTrue(store.recording); XCTAssertEqual(store.state.draft?.id,id)
         XCTAssertTrue(store.error?.contains("Could not save the recording") == true)
         let attempts = transport.opens
@@ -209,6 +237,7 @@ final class ScannerLifecycleTests: XCTestCase {
         XCTAssertEqual(transport.opens,attempts)
         try FileManager.default.removeItem(at:root)
         store.finishRecording()
+        await store.waitForFinish()
         XCTAssertFalse(store.recording); XCTAssertEqual(try disk.load()?.trips.first?.id,id)
     }
     @MainActor
@@ -232,6 +261,7 @@ final class ScannerLifecycleTests: XCTestCase {
         scanner.onSample?(OBDSample(timestamp:t,signals:["rpm":0],command:"010C",reply:"410C0000"))
         XCTAssertTrue(store.recording)
         scanner.onSample?(OBDSample(timestamp:t.addingTimeInterval(3),signals:["rpm":0],command:"010C",reply:"410C0000"))
+        await store.waitForFinish()
         XCTAssertFalse(store.recording); XCTAssertEqual(store.state.trips.first?.id,first)
         XCTAssertEqual(gps.stops,1)
         try await Task.sleep(nanoseconds:600_000_000)
@@ -257,6 +287,7 @@ final class ScannerLifecycleTests: XCTestCase {
         gps.onPoint?(walk)
         XCTAssertEqual(store.state.draft?.route,[walk])
         store.tick(end.addingTimeInterval(121))
+        await store.waitForFinish()
         XCTAssertFalse(store.recording); XCTAssertEqual(gps.stops,1)
         let saved = try XCTUnwrap(store.state.trips.first)
         XCTAssertEqual(saved.id,draft.id); XCTAssertTrue(saved.route.isEmpty)
@@ -308,6 +339,7 @@ final class ScannerLifecycleTests: XCTestCase {
         XCTAssertEqual(store.state.draft?.samples,before.samples)
         XCTAssertEqual(store.state.draft?.scannerReconnectDeadline,deadline)
         store.tick(deadline.addingTimeInterval(1))
+        await store.waitForFinish()
         XCTAssertFalse(store.recording); XCTAssertEqual(store.state.trips.first?.id,before.id)
     }
     @MainActor

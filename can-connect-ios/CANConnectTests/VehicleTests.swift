@@ -83,7 +83,7 @@ final class VehicleTests: XCTestCase {
         XCTAssertFalse(decoded.onboardingCompleted)
     }
     @MainActor
-    func testVehicleIsolationAndRecordingCannotSwitch() throws {
+    func testVehicleIsolationAndRecordingCannotSwitch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:directory) }
         let store = AppStore(disk:LocalStore(url:directory.appendingPathComponent("state.json")))
@@ -94,6 +94,7 @@ final class VehicleTests: XCTestCase {
         store.startRecording(); XCTAssertEqual(store.state.draft?.vehicleID,a.id)
         XCTAssertThrowsError(try store.chooseVehicle(b.id))
         store.finishRecording()
+        await store.waitForFinish()
         try store.saveVehicle(b)
         XCTAssertTrue(store.sortedTrips.isEmpty); XCTAssertEqual(store.signal("drive.0"),.coolant)
         try store.chooseVehicle(a.id)

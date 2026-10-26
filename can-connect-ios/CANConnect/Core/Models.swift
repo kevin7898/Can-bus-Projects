@@ -67,6 +67,8 @@ struct RoutePoint: Codable, Equatable, Sendable {
     var shared: DriveLineGPSPoint { DriveLineGPSPoint(timestamp:timestamp,latitude:latitude,longitude:longitude,horizontalAccuracyM:accuracy,speedMps:speed,sourceID:"gps") }
 }
 struct Trip: Codable, Identifiable, Equatable {
+    var acquisitionEvents:[DriveLineTripEvent]? = nil
+    var acquisitionInterruptions:[Date]? = nil
     var id: UUID = UUID()
     var vehicleID: UUID?
     var name: String
@@ -91,7 +93,7 @@ extension Trip {
         return DriveLineRecording(recordingID:id,vehicleID:vehicleID ?? UUID(uuidString:"00000000-0000-0000-0000-000000000000")!,name:name,startedAt:startedAt,
                                   endedAt:startedAt.addingTimeInterval(duration),
                                   sourceIDs:Array(Set(sourceIDs)).sorted(),
-                                  gpsPoints:route.map(\.shared),signalSamples:readings,recordedDistanceKm:distanceKM,tripFuelLitres:fuelLitres,isSample:isSample)
+                                  gpsPoints:route.map(\.shared),signalSamples:readings,events:acquisitionEvents ?? [],recordedDistanceKm:distanceKM,tripFuelLitres:fuelLitres,isSample:isSample,acquisitionInterruptions:acquisitionInterruptions)
     }
 }
 struct FuelEntry: Codable, Identifiable, Equatable {
@@ -153,11 +155,15 @@ struct Preferences: Codable, Equatable {
     var cellularSummaries = true
 }
 struct RecordingDraft: Codable {
+    var acquisitionEvents:[DriveLineTripEvent]? = nil
+    var acquisitionInterruptions:[Date]? = nil
     // Derived, process-local state. Legacy drafts hydrate once on their next
     // observation; no cache is written into original archives or transfer data.
     var liveEvidence = LiveRecordingEvidence()
     enum CodingKeys:String,CodingKey {
         case id,vehicleID,source,startedAt,updatedAt,distanceKM,route,samples,scannerTransport,scannerReconnectDeadline
+        case acquisitionInterruptions
+        case acquisitionEvents
     }
     var id = UUID()
     var vehicleID: UUID?
@@ -187,10 +193,10 @@ struct RecordingDraft: Codable {
         let duration = max(0,endedAt.timeIntervalSince(startedAt))
         let recording = DriveLineRecording(recordingID:id,vehicleID:vehicleID ?? UUID(uuidString:"00000000-0000-0000-0000-000000000000")!,name:"Recording",startedAt:startedAt,endedAt:endedAt,
             sourceIDs:Array(Set((route.isEmpty ? [] : ["gps"])+((samples?.isEmpty == false) ? ["obd"] : []))).sorted(),
-            gpsPoints:route.map(\.shared),signalSamples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") },isSample:source == .demo)
+            gpsPoints:route.map(\.shared),signalSamples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") },isSample:source == .demo,acquisitionInterruptions:acquisitionInterruptions)
         let metrics = DriveLineMetricPolicy.metrics(for:recording)
         let km = metrics.distanceKm ?? 0
-        return Trip(id:id,vehicleID:vehicleID,name:recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"),startedAt:startedAt,duration:duration,distanceKM:km,source:source,isSample:source == .demo,economy:metrics.economyL100Km,fuelLitres:metrics.tripFuelLitres,route:route,samples:samples,scannerTransport:scannerTransport)
+        return Trip(acquisitionEvents:acquisitionEvents,acquisitionInterruptions:acquisitionInterruptions,id:id,vehicleID:vehicleID,name:recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"),startedAt:startedAt,duration:duration,distanceKM:km,source:source,isSample:source == .demo,economy:metrics.economyL100Km,fuelLitres:metrics.tripFuelLitres,route:route,samples:samples,scannerTransport:scannerTransport)
     }
 }
 struct StoredState: Codable {
@@ -267,7 +273,7 @@ struct TripArchive: Codable {
             let source=recording.metadata["tripSource"].flatMap(TripSource.init(rawValue:)) ?? (!samples.isEmpty ? .scanner : !route.isEmpty ? .phoneGPS : .imported)
             let transport=recording.metadata["scannerTransport"].flatMap(ScannerConnectionKind.init(rawValue:))
             let vehicleID=recording.metadata["legacyVehicleID"] == "missing" ? nil : recording.vehicleID
-            return Trip(id:recording.recordingID,vehicleID:vehicleID,name:recording.name,startedAt:recording.startedAt,
+            return Trip(acquisitionEvents:recording.events.isEmpty ? nil:recording.events,acquisitionInterruptions:recording.acquisitionInterruptions,id:recording.recordingID,vehicleID:vehicleID,name:recording.name,startedAt:recording.startedAt,
                         duration:metrics.durationSeconds,distanceKM:metrics.distanceKm ?? 0,source:source,isSample:recording.isSample,
                         economy:metrics.economyL100Km,fuelLitres:metrics.tripFuelLitres,route:route,samples:samples.isEmpty ? nil : samples,scannerTransport:transport)
         }

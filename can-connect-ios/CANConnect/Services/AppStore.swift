@@ -6,7 +6,10 @@ import ExternalAccessory
 
 @MainActor
 final class AppStore: ObservableObject {
-    @Published var state: StoredState
+    @Published var state: StoredState { didSet { stateRevision &+= 1 } }
+    private var stateRevision:UInt64=0
+    @Published private(set) var isFinishing=false
+    private var finishTask:Task<Void,Never>?
     @Published var source: TripSource = .demo
     @Published var selectedTab: AppTab = .today
     @Published var overviewPage = 0
@@ -85,7 +88,7 @@ final class AppStore: ObservableObject {
             self.reconnectFailures = 0; self.nextReconnect = .distantPast
         }
         self.scanner.onSample = { [weak self] sample in
-            guard let self, sample.isValid else { return }
+            guard let self, sample.isValid,!self.isFinishing else { return }
             self.expireScannerGap(at:sample.timestamp)
             if self.awaitingEngineRestart, ScannerTripBoundary.engineRunning(sample) {
                 self.awaitingEngineRestart = false
@@ -117,8 +120,7 @@ final class AppStore: ObservableObject {
             self.checkpoint(at:Date())
             if (self.state.draft?.samples?.count ?? 0) >= 100_000 {
                 self.finishRecording()
-                if self.recording { self.disconnectScanner(); self.error = "Recording reached the 100,000-response limit. Free storage and retry Finish to save the draft." }
-                else { self.error = "Recording saved at the 100,000-response limit. Start a new recording to continue." }
+                self.error = "Recording reached the 100,000-response limit. Saving locally; start a new recording after saving completes."
             }
         }
         self.scanner.onDisconnect = { [weak self] message in
@@ -129,6 +131,7 @@ final class AppStore: ObservableObject {
                 // Repeated failed opens must not extend the same grace period.
                 if self.scannerGapDeadline == nil {
                     let last = self.state.draft?.samples?.last?.timestamp ?? Date()
+                    self.state.draft?.markAcquisitionInterruption(at:Date())
                     self.scannerGapDeadline = last.addingTimeInterval(ScannerTripBoundary.reconnectGrace)
                 }
                 self.checkpoint(at:Date(),force:true)
@@ -136,6 +139,14 @@ final class AppStore: ObservableObject {
             if self.scanner.failureRequiresAttention { self.error = message }
             self.reconnectFailures = min(self.reconnectFailures + 1, 6)
             self.nextReconnect = Date().addingTimeInterval(min(60, pow(2, Double(self.reconnectFailures))))
+        }
+        self.scanner.onEnhancedWindow = { [weak self] start,end,description in
+            guard let self,!self.isFinishing,self.state.draft?.source == .scanner else { return }
+            if self.state.draft?.acquisitionEvents == nil { self.state.draft?.acquisitionEvents=[] }
+            self.state.draft?.acquisitionEvents?.append(DriveLineTripEvent(timestamp:start,endTimestamp:end >= start ? end:nil,
+                kind:"acquisitionReservation",note:description+"; ordinary Mode 01 polling intentionally paused.",sourceID:"obd",
+                algorithmIdentifier:DriveLineAcquisitionPolicy.version))
+            self.state.draft?.markAcquisitionInterruption(at:start)
         }
         scannerChanges = self.scanner.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         backgroundChanges = NotificationCenter.default.publisher(for:UIApplication.didEnterBackgroundNotification).sink { [weak self] _ in
@@ -160,7 +171,7 @@ final class AppStore: ObservableObject {
         self.gps.onPoint = { [weak self] point in
             guard let self else { return }
             self.expireScannerGap(at:Date())
-            guard let source = self.state.draft?.source, source != .demo, !self.recordingSaveFailed else { return }
+            guard let source = self.state.draft?.source, source != .demo, !self.recordingSaveFailed,!self.isFinishing else { return }
             self.state.draft?.accept(point)
             self.checkpoint(at:Date())
         }
@@ -259,7 +270,7 @@ final class AppStore: ObservableObject {
     }
     func reconcileScannerConnection(at date: Date) {
         expireScannerGap(at:date)
-        guard !recordingSaveFailed, canWrite, let vehicle = activeVehicle, !vehicle.isSample,
+        guard !recordingSaveFailed,!isFinishing, canWrite, let vehicle = activeVehicle, !vehicle.isSample,
               let settings = vehicle.scannerConnection, settings.kind == .obdLinkMXPlus,
               settings.accessorySerial?.isEmpty == false else { return }
         let available = scannerAvailable(settings)
@@ -281,7 +292,7 @@ final class AppStore: ObservableObject {
         // must not append a walk or a ride in another vehicle to this trip.
         let end = state.draft?.samples?.last?.timestamp ?? state.draft!.startedAt
         finishRecording(endedAt:end)
-        if !recording { awaitingEngineRestart = true }
+        awaitingEngineRestart = true
     }
     func disconnectScanner() {
         if state.draft?.source == .scanner { finishRecording() }
@@ -314,26 +325,44 @@ final class AppStore: ObservableObject {
     func retryGPS() { gps.retry() }
     func finishRecording(endedAt requestedEnd: Date? = nil) {
         DriveLinePerformance.event("Recording finalization")
-        guard var draft = state.draft else { return }
+        guard !isFinishing,var draft = state.draft else { return }
         if draft.source == .scanner { automaticRecordingSuppressed = true }
         let endedAt = pendingRecordingEnd ?? requestedEnd ?? Date()
         pendingRecordingEnd = endedAt
         // An explicit ECU boundary may precede the latest GPS callback.
         if requestedEnd != nil || recordingSaveFailed {
             draft.route.removeAll { $0.timestamp > endedAt }
-            draft.samples?.removeAll { $0.timestamp > endedAt }
+            // Calendar corrections can reorder receipt timestamps. Preserve
+            // every accepted ECU response; metric bounds do not erase raw data.
             draft.updatedAt = endedAt
         }
         if draft.source == .demo { draft.route = SampleData.route(date:draft.startedAt) }
-        var next = state
-        next.trips.insert(draft.trip(endedAt:endedAt), at:0)
-        next.draft = nil
-        do {
-            try disk.save(next)
-            gps.stop(); scannerGapDeadline = nil; scannerBoundary.reset(); recordingSaveFailed = false; pendingRecordingEnd = nil
-            UIApplication.shared.isIdleTimerDisabled = false; state = next; updateLiveActivity(); notify("Recording saved on this iPhone")
-        } catch { recordingSaveFailed = true; gps.stop(); scanner.disconnect(); self.error = "Could not save the recording. Keep the app open and retry Finish. \(error.localizedDescription)" }
+        isFinishing=true;gps.stop()
+        finishTask=Task { [self] in
+            let trip=await disk.prepareFinalTrip(draft,endedAt:endedAt)
+            do {
+                // Metadata and transfer receipts can change during serialization.
+                // Retry from the newest revision rather than publishing stale state.
+                while state.draft?.id == draft.id {
+                    let revision=stateRevision
+                    var next=state
+                    if !next.trips.contains(where:{$0.id == trip.id}) { next.trips.insert(trip,at:0) }
+                    next.draft=nil
+                    try await disk.saveAsync(next)
+                    guard revision == stateRevision else { continue }
+                    state=next;scannerBoundary.reset();recordingSaveFailed=false;pendingRecordingEnd=nil
+                    UIApplication.shared.isIdleTimerDisabled=false
+                    updateLiveActivity();notify("Recording saved on this iPhone")
+                    break
+                }
+            } catch {
+                recordingSaveFailed=true;scanner.disconnect()
+                self.error="Could not save the recording. Keep the app open and retry Finish. \(error.localizedDescription)"
+            }
+            isFinishing=false;finishTask=nil
+        }
     }
+    func waitForFinish() async { await finishTask?.value }
     func signal(_ slot: String) -> Signal { dashboard.signals[slot] ?? .rpm }
     func setSignal(_ signal: Signal, slot: String) { dashboard.signals[slot] = signal; save() }
     func save() {

@@ -126,7 +126,10 @@ struct CANConnectApp: App {
     }
     var body: some Scene { WindowGroup {
         #if DEBUG
-        if let ids=Self.phase8EvidenceIDs {
+        if ProcessInfo.processInfo.arguments.contains("--obd-freshness-fixture") {
+            OBDFreshnessEvidenceView()
+                .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme)
+        } else if let ids=Self.phase8EvidenceIDs {
             Phase8StateEvidenceView(ids:ids)
                 .preferredColorScheme((DriveLineAppearance(rawValue:appearanceRaw) ?? .system).colorScheme).tint(Palette.blue)
         } else {

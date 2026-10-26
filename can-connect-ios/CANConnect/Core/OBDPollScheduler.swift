@@ -1,6 +1,6 @@
 import Foundation
 
-enum OBDPollTier:Int,CaseIterable,Sendable { case core,secondary,slowDiagnostic }
+enum OBDPollTier:Int,Codable,CaseIterable,Sendable { case core,secondary,slowDiagnostic }
 enum OBDPollOutcome:String,Sendable { case success,noData,rejected,pending,wrongSourceOrService,malformed,ambiguous,timeout,cancelled }
 
 struct OBDPollRequest:Equatable,Sendable {
@@ -9,7 +9,7 @@ struct OBDPollRequest:Equatable,Sendable {
     var deadline:ContinuousClock.Instant
 }
 
-struct OBDPIDDiagnostics:Equatable,Sendable {
+struct OBDPIDDiagnostics:Codable,Equatable,Sendable {
     var pid:Int
     var tier:OBDPollTier
     var attempts=0
@@ -28,7 +28,7 @@ struct OBDPIDDiagnostics:Equatable,Sendable {
     var outcomeCounts:[String:Int]=[:]
 }
 
-struct OBDPollDiagnostics:Equatable,Sendable {
+struct OBDPollDiagnostics:Codable,Equatable,Sendable {
     var pids:[Int:OBDPIDDiagnostics]=[:]
     var enhancedWindowCount=0
     var enhancedWindowTotalSeconds=0.0

@@ -2,6 +2,17 @@ import XCTest
 @testable import CANConnect
 
 final class Phase91FreshnessTests:XCTestCase {
+    func testNoDataRetainsLastKnownValueWithoutCallingItLive() {
+        let now=Date(timeIntervalSince1970:1000)
+        var draft=RecordingDraft(source:.scanner,startedAt:now.addingTimeInterval(-60),updatedAt:now)
+        draft.accept(OBDSample(timestamp:now.addingTimeInterval(-1),signals:["rpm":1800],command:"010C",reply:"SYNTHETIC"))
+        let value=PhoneRecordingPresentation.make(state:StoredState(draft:draft),selectedSource:.scanner,pendingGPS:false,
+            scannerConnected:true,scannerConnecting:false,scannerStatus:"Connected",gpsStatus:"Waiting",gpsSpeedKMH:nil,gpsLastFix:nil,
+            now:now,scannerSupportedKeys:["rpm"],requestOutcomes:["rpm":.noData])
+        XCTAssertEqual(value.metrics.first?.value,1800)
+        XCTAssertEqual(value.metrics.first?.state,.stale)
+        XCTAssertEqual(value.metrics.first?.observedAt,now.addingTimeInterval(-1))
+    }
     func testFutureObservationCannotBeLiveEvenWithReadySemanticState() {
         let now=Date(timeIntervalSince1970:1000)
         let value=ObservationFreshnessDisplay.resolve(observedAt:now.addingTimeInterval(1),now:now,staleAfter:10,semanticState:.ready)

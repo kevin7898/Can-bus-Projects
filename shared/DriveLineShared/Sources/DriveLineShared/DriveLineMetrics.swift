@@ -16,6 +16,52 @@ public struct DriveLineObservation: Equatable, Sendable {
     }
 }
 
+/// The same strict segment rule used by live accumulation and saved metrics.
+/// Ordered arrivals append; rare out-of-order arrivals repair only adjacent
+/// segments. Raw samples remain in their original receipt order elsewhere.
+public struct DriveLineIntegralAccumulator:Sendable {
+    private struct Point:Sendable { let date:Date;let value:Double }
+    private var points:[Point]=[]
+    private var boundaries:[Date]=[]
+    public private(set) var value=0.0
+    public private(set) var coveredSeconds=0.0
+    private let maximumValue:Double
+    public init(maximumValue:Double = .infinity) { self.maximumValue=maximumValue }
+    private func segment(_ a:Point,_ b:Point)->(Double,Double) {
+        let seconds=b.date.timeIntervalSince(a.date)
+        guard seconds > 0,seconds <= DriveLineMetricPolicy.maximumSignalGap,
+              a.value.isFinite,b.value.isFinite,a.value >= 0,b.value >= 0,a.value <= maximumValue,b.value <= maximumValue,
+              !boundaries.contains(where:{$0 > a.date && $0 <= b.date}) else { return (0,0) }
+        return ((a.value+b.value)/2*seconds,seconds)
+    }
+    private mutating func adjust(_ a:Point,_ b:Point,_ multiplier:Double) {
+        let contribution=segment(a,b)
+        value += contribution.0*multiplier;coveredSeconds += contribution.1*multiplier
+    }
+    public mutating func insert(timestamp:Date,value:Double) {
+        guard timestamp.timeIntervalSince1970.isFinite else { return }
+        var lower=0,upper=points.count
+        while lower < upper {
+            let middle=(lower+upper)/2
+            if points[middle].date <= timestamp { lower=middle+1 } else { upper=middle }
+        }
+        let point=Point(date:timestamp,value:value),index=lower
+        if index > 0,index < points.count { adjust(points[index-1],points[index],-1) }
+        if index > 0 { adjust(points[index-1],point,1) }
+        if index < points.count { adjust(point,points[index],1) }
+        points.insert(point,at:index)
+    }
+    public mutating func interrupt(at date:Date) {
+        guard !boundaries.contains(date) else { return }
+        // A newly known boundary invalidates an already accumulated crossing.
+        if let index=points.firstIndex(where:{$0.date >= date}),index > 0 {
+            adjust(points[index-1],points[index],-1)
+            boundaries.append(date)
+            adjust(points[index-1],points[index],1)
+        } else { boundaries.append(date) }
+    }
+}
+
 public struct DriveLineMetrics: Equatable, Sendable {
     public var distanceCandidates: [DriveLineDistanceCandidate] = []
     public var distanceIsPartial = false
@@ -56,7 +102,7 @@ public enum DriveLineMetricPolicy {
             let selected = selectDistance(candidates)
             let distance = selected?.distanceKm ?? recording.recordedDistanceKm
             let boundedSamples = recording.signalSamples.filter { $0.timestamp >= recording.startedAt && $0.timestamp <= recording.endedAt }
-            let fuel = integral("fuelRateLph", samples: boundedSamples)
+            let fuel = integral("fuelRateLph", samples: boundedSamples,interruptions:recording.acquisitionInterruptions ?? [])
             let measuredFuel = fuel.flatMap { duration > 0 && $0.coverage / duration >= requiredFuelCoverage ? $0.value / 3600 : nil }
             let tripFuel = measuredFuel ?? recording.tripFuelLitres
             let economy: Double? = distance.flatMap { km -> Double? in
@@ -84,7 +130,7 @@ public enum DriveLineMetricPolicy {
                 guard let previous = result.last?.last else { result.append([point]); continue }
                 let elapsed = point.timestamp.timeIntervalSince(previous.timestamp)
                 let metres = haversineMetres(previous, point)
-                if elapsed > 0, elapsed <= maximumGPSGap,
+                if previous.sourceID == point.sourceID,elapsed > 0, elapsed <= maximumGPSGap,
                    metres / elapsed * 3.6 <= maximumPlausibleSpeedKph {
                     result[result.count - 1].append(point)
                 } else { result.append([point]) }
@@ -106,27 +152,20 @@ public enum DriveLineMetricPolicy {
         return intervals > 0 ? metres / 1000 : nil
     }
 
-    public static func integral(_ key: String, samples: [DriveLineSignalSample]) -> (value: Double, coverage: Double)? {
+    public static func integral(_ key: String, samples: [DriveLineSignalSample],interruptions:[Date] = []) -> (value: Double, coverage: Double)? {
         // Never integrate across different controllers. Choose one source's
         // evidence rather than alternating or adding overlapping ECU values.
         let groups = Dictionary(grouping:samples,by:\.sourceID)
         if groups.count > 1 {
-            return groups.keys.sorted().compactMap { integral(key,samples:groups[$0]!) }
+            return groups.keys.sorted().compactMap { integral(key,samples:groups[$0]!,interruptions:interruptions) }
                 .max { $0.coverage < $1.coverage }
         }
-        let values = samples.compactMap { sample -> (Date, Double)? in
-            guard let value=sample.values[key],value.isFinite else { return nil }
-            return (sample.timestamp,value)
-        }.sorted { $0.0 < $1.0 }
-        var value = 0.0
-        var coverage = 0.0
-        for (a, b) in zip(values, values.dropFirst()) {
-            let seconds = b.0.timeIntervalSince(a.0)
-            guard seconds > 0, seconds <= maximumSignalGap, a.1 >= 0, b.1 >= 0 else { continue }
-            value += (a.1 + b.1) / 2 * seconds
-            coverage += seconds
+        var accumulator=DriveLineIntegralAccumulator(maximumValue:key == "speedKph" ? maximumPlausibleSpeedKph:.infinity)
+        for boundary in interruptions { accumulator.interrupt(at:boundary) }
+        for sample in samples.sorted(by:{$0.timestamp < $1.timestamp}) {
+            if let value=sample.values[key] { accumulator.insert(timestamp:sample.timestamp,value:value) }
         }
-        return coverage > 0 ? (value, coverage) : nil
+        return accumulator.coveredSeconds > 0 ? (accumulator.value,accumulator.coveredSeconds):nil
     }
 
     public static func coverageSummaries(_ recording: DriveLineRecording) -> [DriveLineCoverageSummary] {
@@ -138,7 +177,7 @@ public enum DriveLineMetricPolicy {
                 $0.values[key]?.isFinite == true && $0.timestamp >= recording.startedAt && $0.timestamp <= recording.endedAt
             }.sorted { $0.timestamp < $1.timestamp }
             let observed = DriveLineAcquisitionPolicy.availabilitySeconds(timestamps:observations.map(\.timestamp),key:key,
-                start:recording.startedAt,end:recording.endedAt)
+                start:recording.startedAt,end:recording.endedAt,interruptions:recording.acquisitionInterruptions ?? [])
             result.append(DriveLineCoverageSummary(key: key, observedSeconds: observed, recordingSeconds: duration,
                 fraction: duration > 0 ? min(1, observed / duration) : 0,
                 firstObservation: observations.first?.timestamp, lastObservation: observations.last?.timestamp,
@@ -149,15 +188,17 @@ public enum DriveLineMetricPolicy {
                 result[index].achievedCadenceSeconds=observations.last!.timestamp.timeIntervalSince(observations.first!.timestamp)/Double(observations.count-1)
             }
             result[index].expectedCadenceSeconds=DriveLineAcquisitionPolicy.signal(key).expectedCadence
-            result[index].integrationSeconds=integral(key,samples:observations)?.coverage
+            if key == "speedKph" || key == "fuelRateLph" {
+                result[index].integrationSeconds=integral(key,samples:observations,interruptions:recording.acquisitionInterruptions ?? [])?.coverage
+            }
             result[index].policyVersion=DriveLineAcquisitionPolicy.version
         }
-        let acceptedGPS=recording.gpsPoints.filter(accepts).sorted { $0.timestamp < $1.timestamp }
+        let acceptedGPS=recording.gpsPoints.filter { accepts($0) && $0.timestamp >= recording.startedAt && $0.timestamp <= recording.endedAt }.sorted { $0.timestamp < $1.timestamp }
         var gpsSeconds=0.0
         for (a,b) in zip(acceptedGPS,acceptedGPS.dropFirst()) {
             let elapsed=b.timestamp.timeIntervalSince(a.timestamp)
             let speed=elapsed > 0 ? haversineMetres(a,b)/elapsed*3.6 : .infinity
-            if elapsed <= maximumGPSGap,speed <= maximumPlausibleSpeedKph { gpsSeconds += elapsed }
+            if a.sourceID == b.sourceID,elapsed > 0,elapsed <= maximumGPSGap,speed <= maximumPlausibleSpeedKph { gpsSeconds += elapsed }
         }
         if !recording.gpsPoints.isEmpty {
             result.append(DriveLineCoverageSummary(key: "gps", observedSeconds: gpsSeconds, recordingSeconds: duration,
@@ -172,7 +213,7 @@ public enum DriveLineMetricPolicy {
         var result: [String: DriveLineObservation] = [:]
         for recording in recordings where includeSamples || !recording.isSample {
             for sample in recording.signalSamples {
-                for (key, value) in sample.values where result[key].map({ $0.timestamp < sample.timestamp }) ?? true {
+                for (key, value) in sample.values where value.isFinite && (result[key].map({ $0.timestamp < sample.timestamp }) ?? true) {
                     result[key] = DriveLineObservation(key: key, value: value, timestamp: sample.timestamp,
                         sourceID: sample.sourceID, recordingID: recording.recordingID)
                 }

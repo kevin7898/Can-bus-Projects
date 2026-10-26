@@ -156,6 +156,20 @@ struct EmptyStateCard:View {
 }
 
 #if DEBUG
+struct OBDFreshnessEvidenceView:View {
+    private let observedAt=Date().addingTimeInterval(-30)
+    @State private var redraw=0
+    var body:some View {
+        VStack(spacing:16) {
+            Text("SANITIZED SAMPLE · 2013 Volkswagen Jetta TDI")
+            MetricTile(title:"Engine RPM",value:"1800",unit:"rpm",state:.stale,source:"OBD",
+                observedAt:observedAt,now:Date())
+            Button("Redraw \(redraw)") { redraw += 1 }.accessibilityIdentifier("obd.freshness.redraw")
+            Text("No recording or real totals are created by this fixture.")
+        }.padding().background(Palette.appBackground).foregroundStyle(Palette.primaryText)
+    }
+}
+
 struct Phase8StateEvidenceView:View {
     let ids:[Int]
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize

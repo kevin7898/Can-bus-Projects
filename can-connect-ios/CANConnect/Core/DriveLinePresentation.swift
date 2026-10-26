@@ -83,7 +83,7 @@ struct PhoneRecordingPresentation: Equatable {
                      scannerConnected: Bool, scannerConnecting: Bool, scannerStatus: String,
                      gpsStatus: String, gpsSpeedKMH: Double?, gpsLastFix: Date?, now: Date,
                      scannerSupportedKeys:Set<String> = [],scannerUnsupportedKeys:Set<String> = [],
-                     isStopping: Bool = false, recovered: Bool = false) -> Self {
+                     isStopping: Bool = false, recovered: Bool = false,requestOutcomes:[String:OBDPollOutcome] = [:]) -> Self {
         let draft=state.draft
         let elapsed=draft.map { max(0,now.timeIntervalSince($0.startedAt)) } ?? 0
         let observations=latestObservations(draft:draft)
@@ -100,7 +100,7 @@ struct PhoneRecordingPresentation: Equatable {
         else if draft != nil { phase = (scannerMissing || gpsMissing) ? .degraded:.active }
         else { phase = .idle }
 
-        let speedObservation:PhoneSignalPresentation
+        var speedObservation:PhoneSignalPresentation
         if let obd=observations["speedKph"],draft?.source == .scanner {
             speedObservation=signal(key:"speedKph",title:"Speed",unit:"km/h",observation:obd,now:now,
                 scannerConnected:scannerConnected,supportedKeys:scannerSupportedKeys,unsupportedKeys:scannerUnsupportedKeys)
@@ -110,6 +110,8 @@ struct PhoneRecordingPresentation: Equatable {
             speedObservation=PhoneSignalPresentation(key:"speedKph",title:"Speed",value:nil,unit:"km/h",observedAt:gpsLastFix,state:gpsLastFix == nil ? .unavailable:.stale,source:"iPhone GPS",statusText:gpsLastFix == nil ? "Not observed":nil)
         }
 
+        if scannerConnected,speedObservation.source == "OBD",speedObservation.value != nil,
+           let outcome=requestOutcomes["speedKph"],outcome != .success { speedObservation.state = .stale }
         var display=observations
         if let boost=DriveLineMetricPolicy.boostGaugeKpa(observations:observations,at:now) { display["boostGaugeKpa"]=boost }
         let definitions:[(String,String,String)]=[
@@ -120,6 +122,9 @@ struct PhoneRecordingPresentation: Equatable {
             var item=signal(key:key,title:title,unit:unit,observation:display[key],now:now,
                 scannerConnected:scannerConnected,supportedKeys:scannerSupportedKeys,unsupportedKeys:scannerUnsupportedKeys)
             if key == "dpfRegenTrigger",let value=item.value { item.value=DriveLineMetricPolicy.normalizedDPFRegenTrigger(value) }
+            if scannerConnected,item.value != nil,let outcome=requestOutcomes[key],outcome != .success {
+                item.state = .stale
+            }
             return item
         }
         let queue=state.transfers.filter { $0.status == .queued || $0.status == .awaitingReceipt }.count

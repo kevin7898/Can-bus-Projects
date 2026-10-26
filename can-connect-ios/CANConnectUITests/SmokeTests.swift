@@ -3,6 +3,18 @@ import Network
 import CoreLocation
 
 final class SmokeTests: XCTestCase {
+    @MainActor func testStaleObservationRemainsStaleThroughNativeRedraws() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--obd-freshness-fixture"];app.launch()
+        let stale=app.staticTexts.containing(NSPredicate(format:"label CONTAINS[c] %@","Stale")).firstMatch
+        XCTAssertTrue(stale.waitForExistence(timeout:10))
+        for _ in 0..<3 {
+            app.buttons["obd.freshness.redraw"].tap()
+            XCTAssertTrue(stale.exists)
+            XCTAssertFalse(app.staticTexts["Live"].exists)
+        }
+        let attachment=XCTAttachment(screenshot:app.screenshot())
+        attachment.name="Sanitized stale RPM native label";attachment.lifetime = .keepAlways;add(attachment)
+    }
     override func setUpWithError() throws {
         try super.setUpWithError()
         continueAfterFailure = false

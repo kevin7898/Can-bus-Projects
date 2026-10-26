@@ -1,6 +1,8 @@
 import Foundation
 import Combine
 
+enum ScannerAdapterState:String { case disconnected,discovery,targetedStandard,enhanced,restoring,error }
+
 @MainActor
 final class ScannerRecorder: ObservableObject {
     @Published private(set) var connected = false
@@ -10,11 +12,26 @@ final class ScannerRecorder: ObservableObject {
     @Published private(set) var supportedSignalKeys:Set<String> = []
     @Published private(set) var unsupportedSignalKeys:Set<String> = []
     @Published private(set) var diagnostics=OBDPollDiagnostics()
+    private(set) var requestOutcomes:[String:OBDPollOutcome]=[:]
+    @Published private(set) var adapterState:ScannerAdapterState = .disconnected
+    private(set) var identityVerified=false
+    var diagnosticsJournalError:String? { journal?.lastWriteError }
+    #if DEBUG
+    enum EnhancedMode { case normal,standardOnly,dsgOnly,engineOnly }
+    var enhancedMode:EnhancedMode = .normal
+    #endif
+    var diagnosticsExport:String {
+        // Whitelisted aggregate fields only: never journal text, VIN, adapter
+        // serial, profile name, timestamps, coordinates or transport settings.
+        let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        return (try? encoder.encode(diagnostics)).flatMap { String(data:$0,encoding:.utf8) } ?? "{}"
+    }
     private(set) var vehicleID: UUID?
     private(set) var failureRequiresAttention = false
     var onConnected: (() -> Void)?
     var onSample: ((OBDSample) -> Void)?
     var onDisconnect: ((String) -> Void)?
+    var onEnhancedWindow:((Date,Date,String)->Void)?
     private var work: Task<Void,Never>?
     private var pendingTeardown: Task<Void,Never>?
     private var session: ScannerTransport?
@@ -59,7 +76,7 @@ final class ScannerRecorder: ObservableObject {
         else if settings.kind == .wifi { transport = ELMWiFiSession() }
         else { transport = ELMMXPlusSession(serial:settings.accessorySerial,journal:journal,restoreCANDefaults:Jetta2014Profile.matches(vehicle)) }
         session = transport
-        connecting = true; status = "Identifying vehicle…"
+        connecting = true; status = "Identifying vehicle…";adapterState = .discovery
         work = Task { [weak self] in
             guard let self else { return }
             var needsUserCorrection = false
@@ -76,7 +93,7 @@ final class ScannerRecorder: ObservableObject {
                 }
                 if let expected = vehicle.vin, !expected.isEmpty, expected != identity.vin {
                     needsUserCorrection = true
-                    throw AppFailure("The scanner VIN differs from the selected vehicle or could not be verified. Add or choose the correct vehicle before recording.")
+                    throw AppFailure(identity.vin == nil ? "The vehicle did not provide its VIN. The saved identity cannot be verified; recording is blocked.":"The scanner VIN differs from the selected vehicle. Add or choose the correct vehicle before recording.")
                 }
                 let jetta = Jetta2014Profile.matches(vehicle)
                 let ecu: String? = jetta ? "7E8" : nil
@@ -127,7 +144,17 @@ final class ScannerRecorder: ObservableObject {
                 var knownKeys=OBDDecoder.keys;knownKeys.insert("boostGaugeKpa")
                 self.unsupportedSignalKeys=knownKeys.subtracting(supportedKeys)
                 self.vehicleID = vehicle.id; self.connected = true; self.connecting = false
-                self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals"
+                self.identityVerified=vehicle.vin != nil && vehicle.vin == identity.vin
+                self.adapterState = .targetedStandard
+                self.status = "\(settings.kind.shortTitle) connected · \(pids.count) signals" + (self.identityVerified ? "":" · Manual vehicle identity")
+                #if DEBUG
+                switch self.enhancedMode {
+                case .normal:break
+                case .standardOnly:enhancedControllers=[]
+                case .dsgOnly:enhancedControllers=enhancedControllers.intersection([.dsg])
+                case .engineOnly:enhancedControllers=enhancedControllers.intersection([.engine])
+                }
+                #endif
                 self.onConnected?()
                 // A generic ECU exposing only slow PIDs must not time out before
                 // its next scheduled response. RPM-capable ECUs retain 20 seconds.
@@ -143,13 +170,16 @@ final class ScannerRecorder: ObservableObject {
                     let now=self.pollClock()
                     if let request=scheduler.next(at:now) {
                         let started=self.pollClock()
+                        var outcomeRecorded=false
                         do {
                             let reply=try await self.exchange(String(format:"01%02X",request.pid),transport:transport)
                             try Task.checkCancellation()
                             let finished=self.pollClock()
                             let sample=OBDDecoder.decode(reply,pid:request.pid,at:self.sampleDate(),ecu:ecu)
                             let outcome=OBDPollScheduler.classify(reply:reply,pid:request.pid,decoded:sample,ecu:ecu)
+                            for key in OBDDecoder.signalKeys(pid:request.pid) { self.requestOutcomes[key]=outcome }
                             scheduler.record(request,outcome:outcome,responseLatency:OBDPollScheduler.seconds(started.duration(to:finished)),at:finished)
+                            outcomeRecorded=true
                             if outcome == .pending {
                                 // No verified drain for a delayed response exists
                                 // on this channel: do not issue a different PID.
@@ -160,10 +190,17 @@ final class ScannerRecorder: ObservableObject {
                                 for (key,value) in sample.signals { self.readings[key]=(value,sample.timestamp) }
                                 lastReceived=finished;self.onSample?(sample)
                             } else { missing.insert(request.pid) }
-                        } catch is CancellationError { throw CancellationError() }
+                        } catch is CancellationError {
+                            if !outcomeRecorded {
+                                let finished=self.pollClock()
+                                scheduler.record(request,outcome:.cancelled,responseLatency:OBDPollScheduler.seconds(started.duration(to:finished)),at:finished)
+                                self.diagnostics=scheduler.diagnostics(at:finished)
+                            }
+                            throw CancellationError()
+                        }
                         catch {
                             let finished=self.pollClock()
-                            scheduler.record(request,outcome:.timeout,responseLatency:OBDPollScheduler.seconds(started.duration(to:finished)),at:finished)
+                            if !outcomeRecorded { scheduler.record(request,outcome:.timeout,responseLatency:OBDPollScheduler.seconds(started.duration(to:finished)),at:finished) }
                             missing.insert(request.pid);self.diagnostics=scheduler.diagnostics(at:finished)
                             // A transport failure has no verified prompt boundary.
                             // Reopen through the existing teardown barrier before
@@ -177,15 +214,19 @@ final class ScannerRecorder: ObservableObject {
                     if let controller=due.sorted(by:{$0.rawValue<$1.rawValue}).first,
                        scheduler.enhancedWindowOpportunity(at:enhancedNow) {
                         let windowStarted=self.pollClock()
+                        let windowDate=self.sampleDate()
+                        self.adapterState = .enhanced
                         do {
                             let samples = try await vw.read(controllers:Set([controller]))
                             for sample in samples {
                                 try Task.checkCancellation()
                                 for (key,value) in sample.signals { self.readings[key] = (value,sample.timestamp) }
+                                for key in sample.signals.keys { self.requestOutcomes[key] = .success }
                                 lastReceived = self.pollClock(); self.onSample?(sample)
                             }
                         } catch is CancellationError { throw CancellationError() }
                         catch {
+                            self.adapterState = .restoring
                             self.journal?.append(command:"VW",reply:"Enhanced measurements unavailable: \(error.localizedDescription)")
                             // A cleanup error does not permanently disable enhanced
                             // polling. Re-establish and verify ordinary OBD first.
@@ -199,7 +240,11 @@ final class ScannerRecorder: ObservableObject {
                             lastReceived=self.pollClock();self.onSample?(sample)
                         }
                         let windowEnded=self.pollClock()
+                        self.adapterState = .targetedStandard
                         scheduler.recordEnhancedWindow(seconds:OBDPollScheduler.seconds(windowStarted.duration(to:windowEnded)))
+                        if OBDPollScheduler.seconds(windowStarted.duration(to:windowEnded)) > 0.1 {
+                            self.onEnhancedWindow?(windowDate,self.sampleDate(),controller == .engine ? "VW engine quiet/setup/read/restore":"VW DSG setup/read/restore")
+                        }
                         scheduler.prioritizeCore(at:windowEnded)
                         self.diagnostics=scheduler.diagnostics(at:windowEnded)
                         nextEnhanced[controller]=windowEnded.advanced(by:.seconds(controller.pollInterval))
@@ -214,6 +259,7 @@ final class ScannerRecorder: ObservableObject {
                 // A wrong vehicle/profile still requires the user's attention.
                 self.failureRequiresAttention = needsUserCorrection
                 self.connected = false; self.connecting = false; self.readings = [:]; self.vehicleID = nil
+                self.adapterState = .error;self.identityVerified=false
                 self.status = error.localizedDescription; self.journal?.append(command:"ERROR",reply:self.status)
                 transport.disconnect(); self.onDisconnect?(self.status)
             }
@@ -235,5 +281,7 @@ final class ScannerRecorder: ObservableObject {
         } else { session?.disconnect() }
         work = nil; session = nil
         connected = false; connecting = false; vehicleID = nil; readings = [:]; status = "Not connected"; journal = nil
+        adapterState = .disconnected;identityVerified=false
+        requestOutcomes=[:]
     }
 }

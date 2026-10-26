@@ -115,6 +115,7 @@ public struct DriveLineSignalPoint: Equatable, Identifiable, Sendable {
 }
 
 public struct DriveLineSignalSeries: Equatable, Sendable {
+    public var interruptions:[Date]
     public var key: String
     public var unit: String
     public var provenance: DriveLineSignalProvenance
@@ -126,7 +127,8 @@ public struct DriveLineSignalSeries: Equatable, Sendable {
     public init(key: String, unit: String, provenance: DriveLineSignalProvenance,
                 algorithmIdentifier: String? = nil, algorithmVersion: String? = nil,
                 segments: [[DriveLineSignalPoint]],
-                coverage: DriveLineCoverageSummary?) {
+                coverage: DriveLineCoverageSummary?,interruptions:[Date] = []) {
+        self.interruptions=interruptions
         self.key = key
         self.unit = unit
         self.provenance = provenance
@@ -282,11 +284,13 @@ public struct DriveLineCursorSelection: Equatable, Sendable {
 /// forward-fills across the shared evidence gaps.
 public struct DriveLineCursorIndex: Sendable {
     public var recordingID:UUID
+    private var interruptions:[Date]
     private var gps:[DriveLineGPSPoint]
     private var observations:[String:[DriveLineObservation]]
 
     public init(recording:DriveLineRecording,signalKeys:[String]) {
         recordingID=recording.recordingID
+        interruptions=recording.acquisitionInterruptions ?? []
         gps=recording.gpsPoints.sorted{$0.timestamp<$1.timestamp}
         let requested=Set(signalKeys)
         var indexed=requested.subtracting(["gps.speedKph","gps.horizontalAccuracyM","boostKpa"])
@@ -312,7 +316,8 @@ public struct DriveLineCursorIndex: Sendable {
         var needed=requested.subtracting(["gps.speedKph","gps.horizontalAccuracyM","boostKpa"])
         if requested.contains("boostKpa") { needed.formUnion(["boostAbsoluteKpa","mapKpa","barometricKpa"]) }
         for key in needed {
-            if let value=last(atOrBefore:timestamp,in:observations[key] ?? [],keyPath:\.timestamp) { latest[key]=value }
+            if let value=last(atOrBefore:timestamp,in:observations[key] ?? [],keyPath:\.timestamp),
+               !interruptions.contains(where:{$0 > value.timestamp && $0 <= timestamp}) { latest[key]=value }
         }
         var selected:[String:DriveLineObservation]=[:]
         for key in signalKeys {
@@ -423,6 +428,7 @@ public enum DriveLineJourneyPolicy {
         return Dictionary(uniqueKeysWithValues: values.map { ($0.key, $0) })
     }()
 
+    public static func registeredSignal(_ key:String)->DriveLineSignalDescriptor? { knownSignals[key] }
     public static func signalDescriptor(_ key: String, recording: DriveLineRecording) -> DriveLineSignalDescriptor {
         let sourceIDs = sourceIDs(for:key,recording:recording)
         if var known = knownSignals[key] {
@@ -472,6 +478,10 @@ public enum DriveLineJourneyPolicy {
                 point.value.isFinite && (visibleRange.map { point.timestamp >= $0.start && point.timestamp <= $0.end } ?? true)
             }.sorted { $0.timestamp < $1.timestamp }
             var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineAcquisitionPolicy.signal(series.key).displayValidity)
+            if !series.key.hasPrefix("gps."),let current=result.current,
+               series.interruptions.contains(where:{$0 > current.timestamp && $0 <= cursor}) {
+                result.current=nil;result.freshness = .stale
+            }
             result.latestObservation=allPoints.last?.timestamp
             result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
             return result
@@ -486,6 +496,10 @@ public enum DriveLineJourneyPolicy {
             let points = alignedSegments(series,recording:recording,alignment:alignment).flatMap { $0 }
                 .filter { visibleRange.contains($0.position) }.map(\.point)
             var result=statistics(points:points,cursor:cursor,maximumAge:series.key.hasPrefix("gps.") ? DriveLineMetricPolicy.maximumGPSGap:DriveLineAcquisitionPolicy.signal(series.key).displayValidity)
+            if !series.key.hasPrefix("gps."),let current=result.current,
+               (recording.acquisitionInterruptions ?? []).contains(where:{$0 > current.timestamp && $0 <= cursor}) {
+                result.current=nil;result.freshness = .stale
+            }
             result.latestObservation=allPoints.last?.timestamp
             result.sourceIDs=Array(Set(allPoints.map(\.sourceID))).sorted()
             return result
@@ -596,7 +610,7 @@ public enum DriveLineJourneyPolicy {
         else if recording.gpsPoints.isEmpty || recording.signalSamples.isEmpty { quality = .limited }
         else { quality = .complete }
 
-        let fuelCoverage = metrics.coverage.first(where: { $0.key == "fuelRateLph" })?.fraction
+        let fuelCoverage = metrics.coverage.first(where: { $0.key == "fuelRateLph" })?.integrationSeconds.map { metrics.durationSeconds > 0 ? $0/metrics.durationSeconds:0 }
         let fuelSource: String?
         if metrics.tripFuelLitres == nil { fuelSource = nil }
         else if fuelCoverage.map({ $0 >= DriveLineMetricPolicy.requiredFuelCoverage }) == true { fuelSource = "Measured fuel rate" }
@@ -606,7 +620,7 @@ public enum DriveLineJourneyPolicy {
             sourceKinds: sourceKinds, gpsCoverage: gps, obdCoverage: obd, quality: quality,
             gaps: gaps, fuelSource: fuelSource,
             statement: statement(gps: gps, obd: obd, gaps: gaps, fuelAvailable: metrics.tripFuelLitres != nil,
-                                 fuelCoverage: fuelCoverage))
+                                 fuelCoverage: fuelCoverage)+(metrics.distanceIsPartial ? " Distance is partial observed evidence, not a complete-trip estimate.":""))
     }
 
     public static func timeline(for recording: DriveLineRecording) -> [DriveLineTripEvent] {
@@ -689,7 +703,8 @@ public enum DriveLineJourneyPolicy {
             algorithmIdentifier: provenance == .derived ? boostAlgorithmIdentifier : nil,
             algorithmVersion: provenance == .derived ? boostAlgorithmVersion : nil,
             segments: segments(points,maximumGap:maximumGap),
-            coverage: calculatedCoverage ?? DriveLineMetricPolicy.coverageSummaries(recording).first(where: { $0.key == key }))
+            coverage: calculatedCoverage ?? DriveLineMetricPolicy.coverageSummaries(recording).first(where: { $0.key == key }),
+            interruptions:recording.acquisitionInterruptions ?? [])
     }
 
     public static func cursor(at timestamp: Date, recording: DriveLineRecording,
@@ -705,6 +720,7 @@ public enum DriveLineJourneyPolicy {
         if needsBoost { observedKeys.formUnion(["boostAbsoluteKpa","mapKpa","barometricKpa"]) }
         var latest:[String:DriveLineObservation]=[:]
         for sample in recording.signalSamples where sample.timestamp <= timestamp {
+            if (recording.acquisitionInterruptions ?? []).contains(where:{$0 > sample.timestamp && $0 <= timestamp}) { continue }
             for key in observedKeys {
                 guard let raw=sample.values[key],raw.isFinite,
                       latest[key].map({$0.timestamp < sample.timestamp}) ?? true else { continue }

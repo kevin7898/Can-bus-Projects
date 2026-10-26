@@ -1,6 +1,9 @@
 import Foundation
 import CryptoKit
 
+// Immutable value snapshot with no shared mutable references.
+private struct StateWriteSnapshot:@unchecked Sendable { let value:StoredState }
+
 struct ReceiptAttachment: Equatable {
     var metadata: DriveLineReceiptMetadata
     var data: Data
@@ -31,7 +34,19 @@ struct LocalStore:Sendable {
         } }
     }
     func save(_ state: StoredState) throws {
-        try Self.persistenceQueue.sync { try DriveLinePerformance.measure("Library save") {
+        try Self.persistenceQueue.sync { try saveOnPersistenceQueue(state) }
+    }
+    func saveAsync(_ state:StoredState) async throws {
+        let snapshot=StateWriteSnapshot(value:state)
+        try await withCheckedThrowingContinuation { (continuation:CheckedContinuation<Void,Error>) in
+            Self.persistenceQueue.async {
+                do { try self.saveOnPersistenceQueue(snapshot.value);continuation.resume() }
+                catch { continuation.resume(throwing:error) }
+            }
+        }
+    }
+    private func saveOnPersistenceQueue(_ state:StoredState) throws {
+        try DriveLinePerformance.measure("Library save") {
             try FileManager.default.createDirectory(at:url.deletingLastPathComponent(), withIntermediateDirectories:true)
             let data = try JSONEncoder().encode(state)
             _ = try JSONDecoder().decode(StoredState.self,from:data)
@@ -42,7 +57,10 @@ struct LocalStore:Sendable {
                 try current.write(to:backupURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
             }
             try data.write(to:url, options:[.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        } }
+            let handle=try FileHandle(forWritingTo:url);defer { try? handle.close() }
+            try handle.synchronize()
+            try markFinalizedCheckpoint(in:state)
+        }
     }
     func validBackup() ->StoredState? {
         guard let data=try? Data(contentsOf:backupURL),

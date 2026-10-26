@@ -198,7 +198,7 @@ struct TripStoryView:View {
                 Slider(value:$playbackSeconds,in:0...max(0.001,trip.duration)).accessibilityLabel("Shared trip playback position")
                 HStack { Text(selectedDate.formatted(date:.omitted,time:.standard)).monospacedDigit();Spacer();Text("\(Int(playbackSeconds))s of \(Int(trip.duration))s").captionStyle() }
             }.padding(12).background(Palette.fieldSurface,in:RoundedRectangle(cornerRadius:12))
-            HStack { Metric(title:"Measured distance",value:summary.metrics.distanceKm?.text() ?? "—",unit:"km");Metric(title:"Duration",value:trip.durationText) }
+            HStack { Metric(title:summary.metrics.distanceIsPartial ? "Partial observed distance":"Measured distance",value:summary.metrics.distanceKm?.text() ?? "—",unit:"km");Metric(title:"Duration",value:trip.durationText) }
             HStack { Metric(title:"Trip economy",value:summary.metrics.economyL100Km?.text() ?? "—",unit:"L/100 km");Metric(title:"Measured trip fuel",value:summary.metrics.tripFuelLitres?.text(2) ?? "—",unit:"L") }
             InfoNote(text:summary.statement,icon:"checkmark.shield")
             SectionCard(title:"Start and finish",icon:"mappin.and.ellipse") {
