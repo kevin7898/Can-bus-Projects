@@ -124,12 +124,17 @@ public enum DriveLinePerformanceFixture {
                 longitude:0.01+Double(position)*0.000_0015,horizontalAccuracyM:6+Double(position%4),
                 speedMps:14+Double(position%6),sourceID:"synthetic-gps")
         }
-        let signals=(0..<signalCount).map { position in
-            DriveLineSignalSample(timestamp:timestamp(position,signalCount),values:[
-                "rpm":1_700+Double(position%900),"speedKph":50+Double(position%35),
-                "fuelRateLph":4+Double(position%6)/10,"boostAbsoluteKpa":125+Double(position%30),
-                "barometricKpa":100,"dpfRegenTrigger":Double(position%101)
-            ],sourceID:"synthetic-obd")
+        let signals:[DriveLineSignalSample]=(0..<signalCount).map { position in
+            let observedAt=timestamp(position,signalCount)
+            let values:[String:Double]=[
+                "rpm":1_700+Double(position%900),
+                "speedKph":50+Double(position%35),
+                "fuelRateLph":4+Double(position%6)/10,
+                "boostAbsoluteKpa":125+Double(position%30),
+                "barometricKpa":100,
+                "dpfRegenTrigger":Double(position%101)
+            ]
+            return DriveLineSignalSample(timestamp:observedAt,values:values,sourceID:"synthetic-obd")
         }
         let end=max(gps.last?.timestamp ?? start,signals.last?.timestamp ?? start)
         return DriveLineRecording(recordingID:uuid(20_000+index),vehicleID:vehicles[index%vehicles.count].id,
