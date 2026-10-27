@@ -21,6 +21,15 @@ enum ELMIdentityParser {
         }
     }
     static func vin(_ reply: String) throws -> String? {
+        let framed=TelemetryELM.parse(reply)
+        let hasHeaders=reply.components(separatedBy:CharacterSet(charactersIn:"\r\n>")).contains { raw in
+            let tokens=raw.split(whereSeparator: \.isWhitespace)
+            return tokens.count > 1 && (tokens.first.map { [3,8].contains($0.count) && $0.allSatisfy(\.isHexDigit) } ?? false)
+        }
+        if hasHeaders || !framed.payloads.isEmpty {
+            do { return try TelemetryELM.identities(framed.payloads).values.first }
+            catch { throw AppFailure("The scanner reported different VINs. Review the vehicle manually.") }
+        }
         var current: [UInt8] = [], candidates = Set<String>()
         func collect() {
             let letters = current.filter { $0 != 0 }.map { Character(UnicodeScalar($0)) }
@@ -54,40 +63,56 @@ enum ELMIdentityParser {
     }
 }
 
+enum ScannerOpeningStage:String {
+    case transport, selectingAccessory, openingBluetooth, adapterIdentity, configuration, vehicleVIN, capabilities, protocolName, ready
+}
+
 @MainActor
 protocol ScannerTransport: AnyObject {
+    var openingStage:ScannerOpeningStage { get }
     func open(host: String, port: UInt16) async throws -> ScannerIdentity
     func command(_ text: String) async throws -> String
     func disconnect()
 }
 
+extension ScannerTransport {
+    var openingStage:ScannerOpeningStage { .transport }
+}
+
 // The same reviewed identity and read-only configuration for every transport.
 @MainActor
 enum ELMIdentification {
-    static func read(restoreCANDefaults: Bool = false, command: (String) async throws -> String) async throws -> ScannerIdentity {
+    static func read(progress:(ScannerOpeningStage)->Void = {_ in},command: (String) async throws -> String) async throws -> ScannerIdentity {
+        progress(.adapterIdentity)
         let adapter = try await command("ATI")
         // AT D restores protocol-independent defaults, including stale header
         // and receive-filter overrides, without resetting the MFi connection.
         // ELM327 datasheet: D (set all to Defaults). Do not impose 7DF/11-bit
         // addressing before automatic protocol discovery on generic vehicles.
         let settings = ["ATD","ATE0","ATL0","ATS1","ATH1","ATCAF1","ATSP0"]
+        progress(.configuration)
         for setting in settings {
             let response = try await command(setting)
             guard response.uppercased().contains("OK") else { throw AppFailure("The adapter rejected configuration \(setting). Check ELM327 compatibility.") }
         }
+        progress(.vehicleVIN)
         let vinReply = try await command("0902")
         let vin = try ELMIdentityParser.vin(vinReply)
         let respondingAddress=ELMIdentityParser.respondingAddress(vinReply)
+        progress(.configuration)
         let headersOff=try await command("ATH0")
         guard headersOff.uppercased().contains("OK") else { throw AppFailure("The adapter could not restore header-free diagnostic replies.") }
+        progress(.capabilities)
         var supported: [Int] = []
         for base in stride(from:0,through:224,by:32) {
             if base != 0 && !supported.contains(base) { break }
             let response = try await command(String(format:"01%02X",base))
             supported += ELMIdentityParser.supportedPIDs(response,base:base)
         }
+        progress(.protocolName)
         let vehicleProtocol = try await command("ATDP")
         guard vin != nil || !supported.isEmpty else { throw AppFailure("The adapter replied, but the vehicle did not provide identification. Check ignition and connection, or continue manually.") }
+        progress(.ready)
         return ScannerIdentity(vin:vin,adapter:Self.clean(adapter),vehicleProtocol:["ISO","CAN","J1850","SAE"].contains(where:{vehicleProtocol.uppercased().contains($0)}) ? Self.clean(vehicleProtocol) : "Unknown",supportedPIDs:supported.filter {$0 % 32 != 0},respondingAddress:respondingAddress,observedAt:Date())
     }
     private static func clean(_ value: String) -> String { value.components(separatedBy:.newlines).filter {!$0.uppercased().hasPrefix("AT") && !$0.isEmpty}.joined(separator:" ").trimmingCharacters(in:.whitespacesAndNewlines) }
@@ -95,6 +120,8 @@ enum ELMIdentification {
 
 @MainActor
 final class ELMWiFiSession: ScannerTransport {
+    private let owner=UUID()
+    private var lease:String?
     private var connection: NWConnection?
     private var opening: CheckedContinuation<Void, Error>?
     private var waiting: CheckedContinuation<String, Error>?
@@ -127,6 +154,8 @@ final class ELMWiFiSession: ScannerTransport {
     private func connect(host: String, port: UInt16) async throws {
         try Task.checkCancellation()
         disconnect()
+        let key="wifi:\(host.lowercased()):\(port)"
+        try AdapterOwnership.acquire(key,owner:owner);lease=key
         let c = NWConnection(host:NWEndpoint.Host(host),port:NWEndpoint.Port(rawValue:port)!,using:.tcp)
         connection = c
         try await withCheckedThrowingContinuation { continuation in
@@ -149,12 +178,14 @@ final class ELMWiFiSession: ScannerTransport {
         try Task.checkCancellation()
         guard ready, waiting == nil, let c = connection else { throw AppFailure("Scanner connection is unavailable.") }
         buffer = ""
-        return try await withCheckedThrowingContinuation { continuation in
+        return try await withTaskCancellationHandler {
+          try await withCheckedThrowingContinuation { continuation in
             waiting = continuation; pendingCommand = text; armTimeout()
             c.send(content:Data((text+"\r").utf8),completion:.contentProcessed { [weak self] error in
                 if let error { Task { @MainActor in if self?.connection === c { self?.fail(error) } } }
             })
-        }
+          }
+        } onCancel: { Task { @MainActor [weak self] in if self?.connection === c { self?.disconnect() } } }
     }
     private func receive() {
         guard let c = connection else { return }
@@ -166,10 +197,8 @@ final class ELMWiFiSession: ScannerTransport {
                 while let end = self.buffer.firstIndex(of:">") {
                     let response = String(self.buffer[..<end])
                     self.buffer = String(self.buffer[self.buffer.index(after:end)...])
-                    let normalized = response.uppercased().replacingOccurrences(of:self.pendingCommand,with:"").trimmingCharacters(in:.whitespacesAndNewlines)
-                    let configuration = self.pendingCommand.hasPrefix("AT") && !["ATI","ATDP","ATZ"].contains(self.pendingCommand)
-                    let accepted = !normalized.isEmpty && (!configuration || normalized.contains("OK") || normalized.contains("?") || normalized.contains("ERROR"))
-                    if accepted, let pending = self.waiting {
+                    let content=response.uppercased().replacingOccurrences(of:self.pendingCommand,with:"").trimmingCharacters(in:.whitespacesAndNewlines)
+                    if !content.isEmpty,let pending = self.waiting {
                         self.waiting = nil; self.timeout?.cancel(); pending.resume(returning:response)
                     }
                 }
@@ -189,6 +218,7 @@ final class ELMWiFiSession: ScannerTransport {
     }
     private func fail(_ error: Error) {
         timeout?.cancel(); ready = false
+        if let lease { AdapterOwnership.release(lease,owner:owner);self.lease=nil }
         let start = opening; opening = nil; start?.resume(throwing:error)
         let request = waiting; waiting = nil; request?.resume(throwing:error)
         let c = connection; connection = nil; c?.stateUpdateHandler = nil; c?.cancel()

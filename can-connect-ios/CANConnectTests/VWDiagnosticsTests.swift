@@ -4,9 +4,9 @@ import XCTest
 final class VWDiagnosticsTests: XCTestCase {
     @MainActor
     func testVWReconnectClearsRawCANSettingsBeforeVehicleIdentification() async throws {
-        for restore in [false,true] {
+        for _ in 0..<2 {
             var commands: [String] = []
-            _ = try await ELMIdentification.read(restoreCANDefaults:restore) { command in
+            _ = try await ELMIdentification.read { command in
                 commands.append(command)
                 switch command {
                 case "ATI": return "SYNTHETIC ELM"
@@ -83,6 +83,28 @@ final class VWDiagnosticsTests: XCTestCase {
         XCTAssertEqual(VWMeasurementDecoder.freshness(for:"rpm"),10)
         XCTAssertGreaterThan(VWMeasurementDecoder.freshness(for:"dpfSootG"),VWController.engine.pollInterval+6)
     }
+    @MainActor
+    func testDSGMileageProbeIsFingerprintGatedAndPreservesPayloadWithoutDecoding() async throws {
+        let fixture=VWProtocolFixture()
+        let reader=VWMeasuringBlocks(exchange:fixture.command)
+        do { _ = try await reader.probeDSGMileage(calibrationReply:"NO DATA");XCTFail("Unverified controller must be blocked") } catch {}
+        XCTAssertTrue(fixture.commands.isEmpty)
+        let transport=VWScannerFixture()
+        _ = try await transport.command("ATSH7E1")
+        let calibration=try await transport.command("0904")
+        XCTAssertTrue(VWController.dsg.matchesCalibration(calibration))
+        let probe=VWMeasuringBlocks(exchange:fixture.command)
+        let reply=try await probe.probeDSGMileage(calibrationReply:calibration)
+        XCTAssertEqual(reply.payload,[0x61,109,0x25,1,2,0x25,3,4,0x25,5,6,0x25,7,8])
+        XCTAssertEqual(fixture.groupRequests,[109])
+        XCTAssertNil(VWMeasurementDecoder.decode(reply,controller:.dsg,group:109))
+        XCTAssertEqual(Array(fixture.commands.suffix(VWMeasuringBlocks.restoreCommands.count)),VWMeasuringBlocks.restoreCommands)
+        fixture.rejectedGroups=[109]
+        let rejected=try await probe.probeDSGMileage(calibrationReply:calibration)
+        XCTAssertEqual(rejected.payload,[0x7F,0x21,0x31])
+        XCTAssertEqual(Array(fixture.commands.suffix(VWMeasuringBlocks.restoreCommands.count)),VWMeasuringBlocks.restoreCommands)
+    }
+
     @MainActor
     func testEngineQuietWindowTransientRejectionRetryAndCancellation() async throws {
         let fixture = VWProtocolFixture(); var pauses: [TimeInterval] = []; var clock = ContinuousClock.now
@@ -283,7 +305,7 @@ final class VWDiagnosticsTests: XCTestCase {
         try await journal.flush()
         _ = ScannerJournal(directory:root)
         let events = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("scanner-events.json"))) as? [[String:Any]])
-        XCTAssertTrue(events.contains { $0["reply"] as? String == "SYNTHETIC recovery event" })
+        XCTAssertTrue(events.contains { $0["reply"] as? String == "measurement recovery" })
         XCTAssertFalse(events.contains { $0["command"] as? String == "010C" })
         for _ in 0..<260 { journal.append(command:"VW",reply:"SYNTHETIC bounded event") }
         try await journal.flush()
@@ -370,6 +392,7 @@ private final class VWProtocolFixture {
             if rejectedGroups.contains(group) { payload = [0x7F,0x21,0x31] }
             else if group==108 {payload=[0x61,108,0x68,5,141,0x25,0,0,0x25,0,0,0x25,0,0]}
             else if group==114 {payload=[0x61,114]+Array(repeating:[UInt8(0x25),0,0],count:5).flatMap{$0}+[0x7E,2,43,0x25,0,0,0x25,0,0]}
+            else if group==109 {payload=[0x61,109,0x25,1,2,0x25,3,4,0x25,5,6,0x25,7,8]}
             else if group==19 {payload=[0x61,19,0x1A,0,80,0x25,0,0,0x25,0,0,0x25,0,0]}
             else {payload=[0x7F,0x21,0x31]}
         }

@@ -24,6 +24,10 @@ final class ScannerRecorder: ObservableObject {
         // Whitelisted aggregate fields only: never journal text, VIN, adapter
         // serial, profile name, timestamps, coordinates or transport settings.
         let encoder=JSONEncoder();encoder.outputFormatting=[.prettyPrinted,.sortedKeys]
+        if let rebuilt {
+            struct Export:Encodable { var rates:[String:[Int:TelemetryRates.Summary]];var cluster:RebuiltScannerEngine.ClusterTiming }
+            return (try? encoder.encode(Export(rates:rebuilt.rateWindows,cluster:rebuilt.clusterTiming))).flatMap { String(data:$0,encoding:.utf8) } ?? "{}"
+        }
         return (try? encoder.encode(diagnostics)).flatMap { String(data:$0,encoding:.utf8) } ?? "{}"
     }
     private(set) var vehicleID: UUID?
@@ -32,6 +36,12 @@ final class ScannerRecorder: ObservableObject {
     var onSample: ((OBDSample) -> Void)?
     var onDisconnect: ((String) -> Void)?
     var onEnhancedWindow:((Date,Date,String)->Void)?
+    enum Engine { case legacy, rebuilt }
+    let engine:Engine
+    private(set) var odometerProbeRunning = false
+    private var rebuilt:RebuiltScannerEngine?
+    private var lastSnapshot=Date.distantPast
+    private var latestReadings:[String:(value:Double,date:Date)]=[:]
     private var work: Task<Void,Never>?
     private var pendingTeardown: Task<Void,Never>?
     private var session: ScannerTransport?
@@ -41,12 +51,21 @@ final class ScannerRecorder: ObservableObject {
     private let pollClock: () -> ContinuousClock.Instant
     private let sampleDate: () -> Date
     private let measurementPause: (TimeInterval) async throws -> Void
-    init(makeSession: (@MainActor () -> ScannerTransport)? = nil,
+    init(engine:Engine? = nil, makeSession: (@MainActor () -> ScannerTransport)? = nil,
          pollClock: @escaping () -> ContinuousClock.Instant = { .now },
          sampleDate: @escaping () -> Date = Date.init,
          measurementPause: @escaping (TimeInterval) async throws -> Void = { seconds in
              try await Task.sleep(nanoseconds:UInt64(seconds*1_000_000_000))
          }) {
+        #if DEBUG && DRIVELINE_OBD_REBUILD
+        // Dedicated on-car development builds keep the new engine enabled
+        // across Home Screen launches, without requiring debugger arguments.
+        self.engine=engine ?? .rebuilt
+        #elseif DEBUG
+        self.engine=engine ?? (ProcessInfo.processInfo.arguments.contains("--obd-rebuild") ? .rebuilt:.legacy)
+        #else
+        self.engine=engine ?? .legacy
+        #endif
         self.makeSession = makeSession; self.pollClock = pollClock; self.sampleDate = sampleDate; self.measurementPause = measurementPause
     }
 
@@ -57,25 +76,67 @@ final class ScannerRecorder: ObservableObject {
     /// One bounded, read-only identification session for onboarding. The VIN is
     /// returned to the caller and is never written to the scanner journal.
     func identify(settings:ScannerSettings) async throws -> ScannerIdentity {
+        guard !odometerProbeRunning else { throw AppFailure("Wait for the odometer probe to finish.") }
         disconnect()
         await pendingTeardown?.value
         let transport:ScannerTransport
         if let makeSession { transport=makeSession() }
         else if settings.kind == .wifi { transport=ELMWiFiSession() }
-        else { transport=ELMMXPlusSession(serial:settings.accessorySerial,journal:nil,restoreCANDefaults:false) }
+        else { transport=ELMMXPlusSession(serial:settings.accessorySerial,journal:nil) }
         defer { transport.disconnect() }
         return try await transport.open(host:settings.host,port:settings.port)
     }
+    func probeOdometer(settings:ScannerSettings,vehicle:VehicleProfile,tripDiscovery:Bool=false,tripBatch:VWTripDiscoveryBatch = .first,progress:@escaping (String)->Void) async throws -> VWOdometerProbeReport {
+        guard !odometerProbeRunning else { throw AppFailure("An odometer probe is already running.") }
+        odometerProbeRunning=true
+        defer { odometerProbeRunning=false }
+        disconnect()
+        await pendingTeardown?.value
+        try Task.checkCancellation()
+        let transport:ScannerTransport
+        if let makeSession { transport=makeSession() }
+        else if settings.kind == .wifi { transport=ELMWiFiSession() }
+        else { transport=ELMMXPlusSession(serial:settings.accessorySerial,journal:nil) }
+        return await VWOdometerProbe(transport:transport,progress:progress).run(settings:settings,vehicle:vehicle,tripDiscovery:tripDiscovery,tripBatch:tripBatch)
+    }
     func connect(settings: ScannerSettings, vehicle: VehicleProfile) {
+        guard !odometerProbeRunning else { return }
         disconnect()
         failureRequiresAttention = false
         let previous = pendingTeardown
-        journal = makeSession == nil ? ScannerJournal() : nil
+        journal = makeSession == nil && engine == .legacy ? ScannerJournal() : nil
         let transport: ScannerTransport
         if let makeSession { transport = makeSession() }
         else if settings.kind == .wifi { transport = ELMWiFiSession() }
-        else { transport = ELMMXPlusSession(serial:settings.accessorySerial,journal:journal,restoreCANDefaults:Jetta2014Profile.matches(vehicle)) }
+        else { transport = ELMMXPlusSession(serial:settings.accessorySerial,journal:journal) }
         session = transport
+        if engine == .rebuilt {
+            let replacement=RebuiltScannerEngine(transport:transport,vehicle:vehicle,settings:settings)
+            rebuilt=replacement; connecting=true; adapterState = .discovery; status="Identifying vehicle…"
+            replacement.onReady = { [weak self] pids,_,verified in
+                guard let self else { return }
+                self.connecting=false;self.connected=true;self.vehicleID=vehicle.id;self.identityVerified=verified
+                self.supportedSignalKeys=Set(pids.flatMap { OBDDecoder.signalKeys(pid:$0) })
+                self.unsupportedSignalKeys=OBDDecoder.keys.subtracting(self.supportedSignalKeys)
+                self.adapterState = .targetedStandard;self.status="\(settings.kind.shortTitle) connected · \(pids.count) signals"+(verified ? "":" · Manual vehicle identity")
+                self.onConnected?()
+            }
+            replacement.onSample = { [weak self] sample in
+                guard let self else { return }
+                for (key,value) in sample.signals { self.latestReadings[key]=(value,sample.timestamp);self.requestOutcomes[key] = .success }
+                self.onSample?(sample)
+                if sample.timestamp.timeIntervalSince(self.lastSnapshot) >= 0.25 {
+                    self.readings=self.latestReadings;self.lastSnapshot=sample.timestamp
+                }
+            }
+            replacement.onFailure = { [weak self] message in
+                guard let self else { return }
+                self.connected=false;self.connecting=false;self.identityVerified=false;self.adapterState = .error
+                self.readings=[:];self.status=message;self.onDisconnect?(message)
+            }
+            replacement.start(after:previous)
+            return
+        }
         connecting = true; status = "Identifying vehicle…";adapterState = .discovery
         work = Task { [weak self] in
             guard let self else { return }
@@ -128,7 +189,10 @@ final class ScannerRecorder: ObservableObject {
                             let calibration = try await self.exchange("0904",transport:transport)
                             if controller.matchesCalibration(calibration) { enhancedControllers.insert(controller) }
                         }
-                        for setting in ["ATSH7E0","ATCRA7E8"] { _ = try await self.exchange(setting,transport:transport) }
+                        for setting in ["ATSH7E0","ATCRA7E8"] {
+                            let restored=try await self.exchange(setting,transport:transport)
+                            guard restored.trimmingCharacters(in:.whitespacesAndNewlines).uppercased() == "OK" else { throw AppFailure("Could not restore standard ECU routing.") }
+                        }
                     }
                 }
                 let pids = OBDDecoder.definitions.filter { supported.contains($0.pid) }
@@ -271,6 +335,9 @@ final class ScannerRecorder: ObservableObject {
         return reply
     }
     func disconnect() {
+        let hadRebuilt=rebuilt != nil
+        if let rebuilt { rebuilt.onReady=nil;rebuilt.onSample=nil;rebuilt.onFailure=nil;pendingTeardown=rebuilt.stop();self.rebuilt=nil }
+        latestReadings=[:];lastSnapshot = .distantPast
         if let work {
             work.cancel()
             if let transport = session as? ELMMXPlusSession {
@@ -278,7 +345,7 @@ final class ScannerRecorder: ObservableObject {
                 // restored ordinary OBD settings. A reconnect awaits this task.
                 pendingTeardown = Task { await work.value; transport.disconnect() }
             } else { session?.disconnect(); pendingTeardown = work }
-        } else { session?.disconnect() }
+        } else if !hadRebuilt { session?.disconnect() }
         work = nil; session = nil
         connected = false; connecting = false; vehicleID = nil; readings = [:]; status = "Not connected"; journal = nil
         adapterState = .disconnected;identityVerified=false

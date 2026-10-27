@@ -34,6 +34,17 @@ private final class FixtureAccessoryStreams: AccessoryStreams {
 }
 
 final class MXPlusTransportTests: XCTestCase {
+    @MainActor func testInformationalAndRejectedATRepliesCompleteAtPrompt() async throws {
+        let streams=FixtureAccessoryStreams()
+        let tested=ELMAccessoryChannel(streams:streams,timeoutNanoseconds:100_000_000)
+        streams.response = { command in command == "ATRV" ? "12.6V\r>" : "REJECTED\r>" }
+        try await tested.open();defer { tested.disconnect() }
+        let voltage=try await tested.command("ATRV")
+        XCTAssertTrue(voltage.contains("12.6V"))
+        let rejected=try await tested.command("ATE0")
+        XCTAssertTrue(rejected.contains("REJECTED"))
+    }
+
     @MainActor
     func testFragmentedStreamIdentificationAndShortWrites() async throws {
         let streams = FixtureAccessoryStreams()

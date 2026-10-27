@@ -6,8 +6,36 @@ import ExternalAccessory
 
 @MainActor
 final class AppStore: ObservableObject {
-    @Published var state: StoredState { didSet { stateRevision &+= 1 } }
+    var state: StoredState {
+        willSet { publishStateChange(critical:state.draft?.id != newValue.draft?.id) }
+        didSet { stateRevision &+= 1 }
+    }
+    private var lastStatePublish=ProcessInfo.processInfo.systemUptime
+    private var deferredStatePublish:Task<Void,Never>?
+    private func publishStateChange(critical:Bool) {
+        let now=ProcessInfo.processInfo.systemUptime
+        if critical || scanner.engine == .legacy || state.draft == nil || now-lastStatePublish >= 0.25 {
+            deferredStatePublish?.cancel();deferredStatePublish=nil
+            lastStatePublish=now;objectWillChange.send()
+        } else if deferredStatePublish == nil {
+            deferredStatePublish=Task { [weak self] in
+                try? await Task.sleep(for:.seconds(0.25-(now-(self?.lastStatePublish ?? now))))
+                guard !Task.isCancelled,let self else { return }
+                self.deferredStatePublish=nil;self.lastStatePublish=ProcessInfo.processInfo.systemUptime;self.objectWillChange.send()
+            }
+        }
+    }
+    private var rangeCollector=MatchedFuelCollector()
+    private var rangeRecordingID:UUID?
+    var liveFuelWindow:RollingFuelWindow { rangeRecordingID == state.draft?.id ? rangeCollector.window:RollingFuelWindow() }
+    func setFuelReserve(_ litres:Double,vehicleID:UUID) {
+        guard canWrite,litres.isFinite,(0...50).contains(litres),let index=state.vehicles.firstIndex(where:{$0.id == vehicleID && !$0.isSample}) else { return }
+        state.vehicles[index].reserveLitres=litres;save()
+    }
     private var stateRevision:UInt64=0
+    @Published private(set) var odometerProbeRunning=false
+    @Published private(set) var odometerProbeStatus=""
+    @Published private(set) var odometerProbeReport:VWOdometerProbeReport?
     @Published private(set) var isFinishing=false
     private var finishTask:Task<Void,Never>?
     @Published var source: TripSource = .demo
@@ -34,6 +62,7 @@ final class AppStore: ObservableObject {
     private var lifecycleChanges: [AnyCancellable] = []
     private let scannerAvailable: @MainActor (ScannerSettings) -> Bool
     private var automaticConnectionSuppressed = false
+    var automaticScannerRecordingEnabled:Bool { !automaticRecordingSuppressed }
     private var automaticRecordingSuppressed = false
     private var accessoryWasAvailable = false
     private var reconnectFailures = 0
@@ -45,7 +74,7 @@ final class AppStore: ObservableObject {
         set { state.draft?.scannerReconnectDeadline = newValue }
     }
     private var pendingRecordingEnd: Date?
-    private var awaitingEngineRestart = false
+    private var awaitingVehicleResponse = false
     private var recordingSaveFailed = false
     private let activity: RecordingActivityManaging
     private let disk: LocalStore
@@ -83,22 +112,22 @@ final class AppStore: ObservableObject {
         source = activeVehicle?.isSample == true ? .demo : .phoneGPS
         self.scanner.onConnected = { [weak self] in
             guard let self else { return }
-            if !self.awaitingEngineRestart { self.automaticRecordingSuppressed = false }
+            if !self.awaitingVehicleResponse { self.automaticRecordingSuppressed = false }
             self.scannerBoundary.reset()
             self.reconnectFailures = 0; self.nextReconnect = .distantPast
         }
         self.scanner.onSample = { [weak self] sample in
             guard let self, sample.isValid,!self.isFinishing else { return }
             self.expireScannerGap(at:sample.timestamp)
-            if self.awaitingEngineRestart, ScannerTripBoundary.engineRunning(sample) {
-                self.awaitingEngineRestart = false
+            if self.awaitingVehicleResponse, ScannerTripBoundary.vehicleResponding(sample) {
+                self.awaitingVehicleResponse = false
                 self.automaticRecordingSuppressed = false
             }
-            // Start only after identity validation and a decoded response. A paired
-            // adapter with the ignition off must not create empty recordings.
+            // Start only after identity validation and actual live ECU data.
+            // Zero RPM is useful ignition-only data; adapter presence is not.
             if !self.recording, !self.pendingGPS, !self.automaticRecordingSuppressed,
                self.canWrite, self.scanner.connected, self.activeVehicle?.isSample == false,
-               self.scanner.vehicleID == self.state.selectedVehicleID, ScannerTripBoundary.engineRunning(sample) {
+               self.scanner.vehicleID == self.state.selectedVehicleID, ScannerTripBoundary.vehicleResponding(sample) {
                 self.source = .scanner
                 self.state.draft = RecordingDraft(vehicleID:self.state.selectedVehicleID, source:.scanner,
                     startedAt:sample.timestamp, updatedAt:sample.timestamp,
@@ -111,21 +140,32 @@ final class AppStore: ObservableObject {
                   self.state.draft?.vehicleID == self.scanner.vehicleID,
                   !self.recordingSaveFailed else { return }
             self.scannerGapDeadline = nil
-            self.state.draft?.accept(sample)
-            if self.scannerBoundary.engineOff(after:sample) {
-                self.finishRecording(endedAt:sample.timestamp)
-                self.awaitingEngineRestart = true
-                return
+            if self.scanner.engine == .rebuilt,let draft=self.state.draft {
+                do {
+                    if draft.rebuiltBuffer == nil {
+                        let url=self.disk.url.deletingLastPathComponent().appendingPathComponent("TripLogs/"+draft.id.uuidString+".dlt")
+                        self.state.draft?.rebuiltBuffer=try RebuiltTripBuffer(url:url,draft:draft)
+                        self.state.draft?.liveEvidence.streaming=true
+                    }
+                    try self.state.draft?.rebuiltBuffer?.append(sample)
+                } catch {
+                    self.recordingSaveFailed=true;self.error="Recording storage failed. Free storage and retry Finish.";self.scanner.disconnect();return
+                }
             }
+            if self.rangeRecordingID != self.state.draft?.id {
+                self.rangeRecordingID=self.state.draft?.id;self.rangeCollector=MatchedFuelCollector()
+            }
+            self.rangeCollector.accept(sample)
+            self.state.draft?.accept(sample)
             self.checkpoint(at:Date())
-            if (self.state.draft?.samples?.count ?? 0) >= 100_000 {
+            if max(self.state.draft?.liveEvidence.sampleCount ?? 0,self.state.draft?.samples?.count ?? 0) >= 100_000 {
                 self.finishRecording()
                 self.error = "Recording reached the 100,000-response limit. Saving locally; start a new recording after saving completes."
             }
         }
         self.scanner.onDisconnect = { [weak self] message in
             guard let self else { return }
-            self.scannerBoundary.reset()
+            self.scannerBoundary.reset();self.rangeCollector.interrupt()
             if self.state.draft?.source == .scanner {
                 // Keep GPS and the draft alive through a temporary transport loss.
                 // Repeated failed opens must not extend the same grace period.
@@ -148,7 +188,11 @@ final class AppStore: ObservableObject {
                 algorithmIdentifier:DriveLineAcquisitionPolicy.version))
             self.state.draft?.markAcquisitionInterruption(at:start)
         }
-        scannerChanges = self.scanner.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        scannerChanges = self.scanner.objectWillChange.sink { [weak self] _ in
+            guard let self else { return }
+            if self.scanner.engine == .rebuilt { self.publishStateChange(critical:!self.scanner.connected || self.scanner.connecting) }
+            else { self.objectWillChange.send() }
+        }
         backgroundChanges = NotificationCenter.default.publisher(for:UIApplication.didEnterBackgroundNotification).sink { [weak self] _ in
             // ExternalAccessory owns background execution for the MX+. Closing
             // its streams here used to terminate every trip on an app switch.
@@ -172,7 +216,12 @@ final class AppStore: ObservableObject {
             guard let self else { return }
             self.expireScannerGap(at:Date())
             guard let source = self.state.draft?.source, source != .demo, !self.recordingSaveFailed,!self.isFinishing else { return }
+            let previousCount=self.state.draft?.liveEvidence.pointCount ?? 0
             self.state.draft?.accept(point)
+            if let draft=self.state.draft,let buffer=draft.rebuiltBuffer,draft.liveEvidence.pointCount > previousCount {
+                do { try buffer.append(point) }
+                catch { self.recordingSaveFailed=true;self.error="GPS recording storage failed. Retry Finish after storage is available.";self.scanner.disconnect() }
+            }
             self.checkpoint(at:Date())
         }
         self.gps.onFailure = { [weak self] message in
@@ -228,9 +277,7 @@ final class AppStore: ObservableObject {
     var weekTrips: [Trip] { let interval = Calendar.current.dateInterval(of:.weekOfYear, for:now); return sortedTrips.filter { !$0.isSample && (interval?.contains($0.startedAt) ?? false) } }
     var weekKM: Double { weekTrips.reduce(0) { $0 + $1.distanceKM } }
     var weekEconomy: Double? {
-        let measured = weekTrips.filter { $0.economy != nil && $0.distanceKM > 0 }
-        let distance = measured.reduce(0) { $0 + $1.distanceKM }
-        return distance > 0 ? measured.reduce(0) { $0 + $1.distanceKM * ($1.economy ?? 0) } / distance : nil
+        DriveLineMetricPolicy.weightedEconomy(weekTrips.compactMap { DriveLineMetricPolicy.matchedEconomy(for:$0.sharedRecording) })
     }
     func tick(_ date: Date) {
         expireScannerGap(at:date)
@@ -245,15 +292,18 @@ final class AppStore: ObservableObject {
         if let destination=DriveLinePhoneRoute.destination(for:url) { selectedTab=destination }
     }
     private func checkpoint(at date: Date, force: Bool = false) {
-        guard let draft=state.draft,force || date.timeIntervalSince(lastCheckpoint) >= 5 else { return }
+        guard !isFinishing,let draft=state.draft,force || date.timeIntervalSince(lastCheckpoint) >= 5 else { return }
         lastCheckpoint=date
-        disk.checkpoint(draft) { [weak self] message in
+        let completion:@Sendable (String?)->Void = { [weak self] message in
             guard let message else { return }
             Task { @MainActor [weak self] in
                 guard let self,self.state.draft?.id == draft.id else { return }
                 self.error=message
+                if self.scanner.engine == .rebuilt { self.recordingSaveFailed=true;self.scanner.disconnect() }
             }
         }
+        if let buffer=draft.rebuiltBuffer { buffer.checkpoint(draft,completion:completion) }
+        else { disk.checkpoint(draft,completion:completion) }
         updateLiveActivity()
     }
     private func updateLiveActivity() {
@@ -270,13 +320,21 @@ final class AppStore: ObservableObject {
     }
     func reconcileScannerConnection(at date: Date) {
         expireScannerGap(at:date)
-        guard !recordingSaveFailed,!isFinishing, canWrite, let vehicle = activeVehicle, !vehicle.isSample,
+        guard !odometerProbeRunning,!recordingSaveFailed,!isFinishing, canWrite, let vehicle = activeVehicle, !vehicle.isSample,
               let settings = vehicle.scannerConnection, settings.kind == .obdLinkMXPlus,
               settings.accessorySerial?.isEmpty == false else { return }
         let available = scannerAvailable(settings)
         if accessoryWasAvailable && !available {
             automaticConnectionSuppressed = false
             nextReconnect = .distantPast; reconnectFailures = 0
+            if state.draft?.source == .scanner {
+                let deadline=date.addingTimeInterval(ScannerTripBoundary.bluetoothLossGrace)
+                scannerGapDeadline=min(scannerGapDeadline ?? deadline,deadline)
+                state.draft?.markAcquisitionInterruption(at:date)
+                rangeCollector.interrupt()
+                scanner.disconnect()
+                checkpoint(at:date,force:true)
+            }
         }
         accessoryWasAvailable = available
         guard available, !automaticConnectionSuppressed, !scanner.connected, !scanner.connecting,
@@ -292,23 +350,38 @@ final class AppStore: ObservableObject {
         // must not append a walk or a ride in another vehicle to this trip.
         let end = state.draft?.samples?.last?.timestamp ?? state.draft!.startedAt
         finishRecording(endedAt:end)
-        awaitingEngineRestart = true
+        awaitingVehicleResponse = true
     }
     func disconnectScanner() {
         if state.draft?.source == .scanner { finishRecording() }
-        awaitingEngineRestart = false
+        awaitingVehicleResponse = false
         automaticConnectionSuppressed = true
         automaticRecordingSuppressed = true
         scanner.disconnect()
     }
     private func resetScannerAutomation() {
-        scannerGapDeadline = nil; scannerBoundary.reset(); awaitingEngineRestart = false
+        scannerGapDeadline = nil; scannerBoundary.reset(); awaitingVehicleResponse = false
         scanner.disconnect()
         automaticConnectionSuppressed = false; automaticRecordingSuppressed = false
         accessoryWasAvailable = false; reconnectFailures = 0; nextReconnect = .distantPast
     }
+    /// Today is an action, not a detour through the setup screen. A saved
+    /// scanner is preferred; its validated engine-running sample auto-starts
+    /// recording after connection. Vehicles without a scanner use phone GPS.
+    func startRecordingFromToday() {
+        guard !odometerProbeRunning,!isFinishing,!recording,!pendingGPS else { return }
+        guard let vehicle=activeVehicle else { vehicleSetupPresented=true;return }
+        if vehicle.isSample { source = .demo;startRecording();return }
+        if let settings=vehicle.scannerConnection {
+            source = .scanner
+            if scanner.connected && scanner.vehicleID == vehicle.id { startRecording() }
+            else if !scanner.connecting {
+                do { try connectScanner(settings:settings) } catch { self.error=error.localizedDescription }
+            }
+        } else { source = .phoneGPS;startRecording() }
+    }
     func startRecording() {
-        guard canWrite, !recording, !pendingGPS else { return }
+        guard !odometerProbeRunning, canWrite, !recording, !pendingGPS else { return }
         guard activeVehicle != nil else { vehicleSetupPresented = true; return }
         now = Date()
         if source == .phoneGPS { pendingGPS = true; gps.start() }
@@ -339,8 +412,8 @@ final class AppStore: ObservableObject {
         if draft.source == .demo { draft.route = SampleData.route(date:draft.startedAt) }
         isFinishing=true;gps.stop()
         finishTask=Task { [self] in
-            let trip=await disk.prepareFinalTrip(draft,endedAt:endedAt)
             do {
+                let trip=try await disk.prepareFinalTrip(draft,endedAt:endedAt)
                 // Metadata and transfer receipts can change during serialization.
                 // Retry from the newest revision rather than publishing stale state.
                 while state.draft?.id == draft.id {
@@ -490,7 +563,7 @@ final class AppStore: ObservableObject {
     }
     func chooseVehicle(_ id: UUID) throws {
         guard canWrite else { throw AppFailure("Saved data is unavailable.") }
-        guard !recording && !pendingGPS else { throw AppFailure("Finish the current recording before switching vehicles.") }
+        guard !odometerProbeRunning && !recording && !pendingGPS else { throw AppFailure("Finish the current recording before switching vehicles.") }
         guard state.vehicles.contains(where:{$0.id == id}) else { throw AppFailure("Vehicle not found.") }
         var next = state; next.selectedVehicleID = id; next.onboardingCompleted = true
         next.scanner = next.vehicles.first(where:{$0.id==id})?.scannerConnection ?? ScannerSettings()
@@ -498,7 +571,7 @@ final class AppStore: ObservableObject {
         resetScannerAutomation(); source = activeVehicle?.isSample == true ? .demo : .phoneGPS
     }
     func saveVehicle(_ vehicle: VehicleProfile) throws {
-        guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before setting up a vehicle.") }
+        guard !odometerProbeRunning, canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before setting up a vehicle.") }
         let value = try vehicle.validated()
         if let vin = value.vin, state.vehicles.contains(where:{$0.id != value.id && $0.vin == vin}) { throw AppFailure("This VIN is already in your garage. Choose that vehicle instead.") }
         if let old = state.vehicles.first(where:{$0.id == value.id}), let oldVIN = old.vin, let newVIN = value.vin, oldVIN != newVIN,
@@ -512,7 +585,7 @@ final class AppStore: ObservableObject {
         notify("Vehicle ready: \(value.title)")
     }
     func setVehicleArchived(_ id:UUID,archived:Bool) throws {
-        guard canWrite,!recording,!pendingGPS else { throw AppFailure("Finish recording before changing Garage profiles.") }
+        guard !odometerProbeRunning,canWrite,!recording,!pendingGPS else { throw AppFailure("Finish recording before changing Garage profiles.") }
         guard let index=state.vehicles.firstIndex(where:{$0.id==id}) else { throw AppFailure("Vehicle not found.") }
         var next=state
         next.vehicles[index].isArchived=archived
@@ -524,7 +597,7 @@ final class AppStore: ObservableObject {
         try disk.save(next);state=next;tripPage=0;resetScannerAutomation();source=activeVehicle?.isSample==true ? .demo:.phoneGPS
     }
     func deleteEmptyVehicle(_ id:UUID) throws {
-        guard canWrite,!recording,!pendingGPS else { throw AppFailure("Finish recording before changing Garage profiles.") }
+        guard !odometerProbeRunning,canWrite,!recording,!pendingGPS else { throw AppFailure("Finish recording before changing Garage profiles.") }
         guard !state.trips.contains(where:{$0.vehicleID==id}),
               !state.fills.contains(where:{$0.vehicleID==id}),
               !state.transfers.contains(where:{$0.vehicle.id==id}) else {
@@ -536,7 +609,7 @@ final class AppStore: ObservableObject {
         try disk.save(next);state=next;tripPage=0;resetScannerAutomation();source=activeVehicle?.isSample==true ? .demo:.phoneGPS
     }
     func useSampleVehicle() throws {
-        guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before switching vehicles.") }
+        guard !odometerProbeRunning, canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before switching vehicles.") }
         var next = state
         if let existing = next.vehicles.first(where:\.isSample) { next.selectedVehicleID = existing.id }
         else { let sample = VehicleProfile.sample; next.vehicles.append(sample); next.selectedVehicleID = sample.id }
@@ -575,11 +648,27 @@ final class AppStore: ObservableObject {
         }
     }
     var scannerTitle: String { (activeVehicle?.scannerConnection ?? state.scanner).kind.shortTitle }
+    func runOdometerProbe(settings:ScannerSettings,tripDiscovery:Bool=false,tripBatch:VWTripDiscoveryBatch = .first) async throws {
+        guard !odometerProbeRunning,!isFinishing,!recording,!pendingGPS,canWrite,
+              let vehicle=activeVehicle,!vehicle.isSample else { throw AppFailure("Finish recording and select your real vehicle before probing.") }
+        odometerProbeRunning=true;odometerProbeStatus="Preparing probe…";odometerProbeReport=nil
+        defer { odometerProbeRunning=false }
+        // Explicit reconnect is required afterwards, preventing an accidental trip.
+        disconnectScanner()
+        let report=try await scanner.probeOdometer(settings:settings,vehicle:vehicle,tripDiscovery:tripDiscovery,tripBatch:tripBatch) { [weak self] message in
+            self?.odometerProbeStatus=message
+        }
+        odometerProbeReport=report;odometerProbeStatus=report.status
+        let directory=try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
+            .appendingPathComponent("CANConnect/OdometerProbes")
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        try Data(report.text.utf8).write(to:directory.appendingPathComponent(report.id.uuidString+".json"),options:.atomic)
+    }
     func connectScanner(host: String, port: UInt16) throws {
         try connectScanner(settings:ScannerSettings(host:host.trimmingCharacters(in:.whitespacesAndNewlines),port:port))
     }
     func connectScanner(settings: ScannerSettings) throws {
-        guard canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before changing scanner connections.") }
+        guard !odometerProbeRunning, canWrite, !recording, !pendingGPS else { throw AppFailure("Finish recording before changing scanner connections.") }
         guard let vehicle = activeVehicle, !vehicle.isSample else { throw AppFailure("Choose or add your real vehicle before connecting a scanner.") }
         if settings.kind == .wifi {
             guard ELMWiFiSession.isLocalHost(settings.host), settings.port > 0 else { throw AppFailure("Enter a private scanner address and valid TCP port.") }

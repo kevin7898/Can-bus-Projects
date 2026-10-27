@@ -21,7 +21,17 @@ struct CANConnectApp: App {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("can-connect-ui-tests/state.json")
             try? FileManager.default.removeItem(at:url.deletingLastPathComponent())
             let usesPhase3Fixture=arguments.contains("--phase3-active") || arguments.contains("--phase3-degraded")
-            let testStore = AppStore(disk:LocalStore(url:url),gps:usesPhase3Fixture ? Phase3FixtureGPS():nil)
+            let replay=arguments.contains("--obd-replay")
+            let testStore = AppStore(disk:LocalStore(url:url),scanner:replay ? ScannerRecorder(engine:.rebuilt,makeSession:{TelemetryReplayTransport(ignitionOnly:arguments.contains("--obd-ignition-only"))}):nil,
+                gps:usesPhase3Fixture || replay ? Phase3FixtureGPS():nil)
+            if replay {
+                var vehicle=VehicleProfile();vehicle.make="Synthetic";vehicle.model="Replay";vehicle.nickname="SYNTHETIC REPLAY"
+                testStore.state.vehicles=[vehicle];testStore.state.selectedVehicleID=vehicle.id
+                testStore.state.trips=[];testStore.state.fills=[];testStore.source = .scanner
+                testStore.state.onboardingCompleted=true;testStore.save()
+                try? testStore.connectScanner(settings:.init(host:"127.0.0.1"))
+                testStore.selectedTab = .record
+            }
             if !arguments.contains("--show-onboarding") { testStore.state.onboardingCompleted = true; testStore.save() }
             if arguments.contains("--record-tab") { testStore.selectedTab = .record }
             if arguments.contains("--phase4-fixture") || arguments.contains("--phase6-fixture") {
@@ -169,6 +179,6 @@ private final class Phase3FixtureGPS:GPSRecording {
 #endif
 typealias AppTab=DriveLinePhoneDestination
 extension DriveLinePhoneDestination {
-    var icon:String { switch self { case .today:"house.fill";case .drives:"chart.bar.xaxis";case .record:"record.circle";case .garage:"car";case .more:"ellipsis" } }
-    var eyebrow:String { switch self { case .today:"Your vehicle, connected";case .drives:"Every drive, kept";case .record:"Ready when you are";case .garage:"Vehicles in your DriveLine";case .more:"Connections, data, and preferences" } }
+    var icon:String { switch self { case .today:"house.fill";case .drives:"chart.bar.xaxis";case .fuel:"fuelpump.fill";case .record:"record.circle";case .garage:"car";case .more:"ellipsis" } }
+    var eyebrow:String { switch self { case .today:"Your vehicle, connected";case .drives:"Every drive, kept";case .fuel:"Fill-ups and fuel history";case .record:"Your current drive";case .garage:"Vehicles in your DriveLine";case .more:"Connections, data, and preferences" } }
 }

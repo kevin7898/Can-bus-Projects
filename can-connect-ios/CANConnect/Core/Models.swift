@@ -82,11 +82,21 @@ struct Trip: Codable, Identifiable, Equatable {
     var route: [RoutePoint] = []
     var samples: [OBDSample]? = nil
     var scannerTransport: ScannerConnectionKind? = nil
+    var matchedEconomy:DriveLineMatchedEconomy? = nil
     var durationText: String { "\(max(0, Int(duration / 60))) min" }
 }
 extension Trip {
+    // Source badges need only presence, not a conversion of every observation.
+    var historySourceIDs:[String] {
+        var ids:[String]=[]
+        if !route.isEmpty { ids.append("gps") }
+        if !(samples?.isEmpty ?? true) { ids.append("obd") }
+        if source == .imported { ids.append("imported") }
+        if isSample { ids.append("synthetic") }
+        return ids.sorted()
+    }
     var sharedRecording: DriveLineRecording {
-        let readings = (samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") }
+        let readings = (samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:$0.responseHeader ?? "obd") }
         var sourceIDs=Array(Set((route.isEmpty ? [] : ["gps"])+(readings.isEmpty ? [] : ["obd"]))).sorted()
         if source == .imported { sourceIDs.append("imported") }
         if isSample { sourceIDs.append("synthetic") }
@@ -160,6 +170,7 @@ struct RecordingDraft: Codable {
     // Derived, process-local state. Legacy drafts hydrate once on their next
     // observation; no cache is written into original archives or transfer data.
     var liveEvidence = LiveRecordingEvidence()
+    var rebuiltBuffer:RebuiltTripBuffer? = nil
     enum CodingKeys:String,CodingKey {
         case id,vehicleID,source,startedAt,updatedAt,distanceKM,route,samples,scannerTransport,scannerReconnectDeadline
         case acquisitionInterruptions
@@ -186,6 +197,13 @@ struct RecordingDraft: Codable {
         prepareLiveEvidence()
         route.append(point)
         liveEvidence.accept(point)
+        if rebuiltBuffer != nil,route.count > 4096 {
+            // Live map preview keeps only real observed points. Full raw GPS
+            // is appended separately and restored for analysis/export at Finish.
+            let last=route.last!
+            route=route.enumerated().compactMap { $0.offset % 2 == 0 ? $0.element:nil }
+            if route.last?.timestamp != last.timestamp { route.append(last) }
+        }
         updateLiveDistance(at:point.timestamp)
         updatedAt = max(updatedAt, point.timestamp)
     }
@@ -193,10 +211,10 @@ struct RecordingDraft: Codable {
         let duration = max(0,endedAt.timeIntervalSince(startedAt))
         let recording = DriveLineRecording(recordingID:id,vehicleID:vehicleID ?? UUID(uuidString:"00000000-0000-0000-0000-000000000000")!,name:"Recording",startedAt:startedAt,endedAt:endedAt,
             sourceIDs:Array(Set((route.isEmpty ? [] : ["gps"])+((samples?.isEmpty == false) ? ["obd"] : []))).sorted(),
-            gpsPoints:route.map(\.shared),signalSamples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:"obd") },isSample:source == .demo,acquisitionInterruptions:acquisitionInterruptions)
+            gpsPoints:route.map(\.shared),signalSamples:(samples ?? []).map { DriveLineSignalSample(timestamp:$0.timestamp,values:$0.signals,sourceID:$0.responseHeader ?? "obd") },isSample:source == .demo,acquisitionInterruptions:acquisitionInterruptions)
         let metrics = DriveLineMetricPolicy.metrics(for:recording)
         let km = metrics.distanceKm ?? 0
-        return Trip(acquisitionEvents:acquisitionEvents,acquisitionInterruptions:acquisitionInterruptions,id:id,vehicleID:vehicleID,name:recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"),startedAt:startedAt,duration:duration,distanceKM:km,source:source,isSample:source == .demo,economy:metrics.economyL100Km,fuelLitres:metrics.tripFuelLitres,route:route,samples:samples,scannerTransport:scannerTransport)
+        return Trip(acquisitionEvents:acquisitionEvents,acquisitionInterruptions:acquisitionInterruptions,id:id,vehicleID:vehicleID,name:recovered ? "Recovered recording" : (source == .demo ? "Sample drive" : source == .scanner ? "Scanner drive" : "iPhone GPS drive"),startedAt:startedAt,duration:duration,distanceKM:km,source:source,isSample:source == .demo,economy:metrics.economyL100Km,fuelLitres:metrics.tripFuelLitres,route:route,samples:samples,scannerTransport:scannerTransport,matchedEconomy:metrics.matchedEconomy)
     }
 }
 struct StoredState: Codable {

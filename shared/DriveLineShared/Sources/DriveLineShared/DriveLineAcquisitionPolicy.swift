@@ -13,7 +13,7 @@ public struct DriveLineAcquisitionPolicy: Equatable, Sendable {
     public var integrationGap:TimeInterval { DriveLineMetricPolicy.maximumSignalGap }
     public static func signal(_ key:String)->Self {
         let groups:[(String,Double,[String])]=[
-            ("0133",60,["barometricKpa"]),("0146",60,["outsideC"]),("012F",30,["fuelPercent"]),
+            ("0133",60,["barometricKpa"]),("0146",300,["outsideC"]),("012F",30,["fuelPercent"]),
             ("vw.engine",60,["dpfAshML","dpfSootG"]),("vw.dsg",5,["dsgFluidC"]),
             ("010C",0.5,["rpm"]),("010D",0.5,["speedKph"]),("015E",0.5,["fuelRateLph"]),
             ("0170",0.5,["boostAbsoluteKpa","boostCommandedKpa","boostBAbsoluteKpa","boostBCommandedKpa"]),

@@ -142,6 +142,7 @@ final class ELMAccessoryChannel {
     private var waiting: CheckedContinuation<String,Error>?
     private var deadline: Task<Void,Never>?
     private var ready = false
+    private var generation=UUID()
     private var buffer = Data()
     private var outgoing = Data()
     private var pendingCommand = ""
@@ -151,14 +152,18 @@ final class ELMAccessoryChannel {
     func open() async throws {
         try Task.checkCancellation()
         guard !ready, opening == nil else { throw AppFailure("MX+ session is already opening or open.") }
-        streams.onEvent = { [weak self] event in self?.receive(event) }
+        generation=UUID();let token=generation
+        streams.onEvent = { [weak self] event in
+            guard let self,self.generation == token else { return }
+            self.receive(event)
+        }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 opening = continuation; armTimeout(); streams.open()
                 if streams.isOpen { didOpen() }
             }
         } onCancel: { Task { @MainActor [weak self] in
-            guard let self, !self.drainOnCancellation else { return }
+            guard let self,self.generation == token,!self.drainOnCancellation else { return }
             self.disconnect()
         } }
         try Task.checkCancellation()
@@ -167,6 +172,7 @@ final class ELMAccessoryChannel {
         try Task.checkCancellation()
         guard ready, waiting == nil else { throw AppFailure("MX+ connection is unavailable or a command is already pending.") }
         guard !text.isEmpty, text.count <= 16, text.allSatisfy({$0.isASCII && ($0.isLetter || $0.isNumber)}) else { throw AppFailure("Invalid scanner command.") }
+        let token=generation
         buffer.removeAll(keepingCapacity:true); pendingCommand = text
         outgoing = Data((text+"\r").utf8)
         let reply: String = try await withTaskCancellationHandler {
@@ -175,7 +181,7 @@ final class ELMAccessoryChannel {
                 do { try flushOutput() } catch { fail(error) }
             }
         } onCancel: { Task { @MainActor [weak self] in
-            guard let self, !self.drainOnCancellation else { return }
+            guard let self,self.generation == token,!self.drainOnCancellation else { return }
             self.disconnect()
         } }
         // A canceled read drains through its prompt before a new request may start.
@@ -203,11 +209,9 @@ final class ELMAccessoryChannel {
                         let response = String(decoding:buffer[..<end],as:UTF8.self)
                         buffer.removeSubrange(...end)
                         guard let pending = waiting, outgoing.isEmpty else { continue }
-                        let normalized = response.uppercased().replacingOccurrences(of:pendingCommand,with:"").trimmingCharacters(in:.whitespacesAndNewlines)
-                        let configuration = pendingCommand.hasPrefix("AT") && !["ATI","ATDP","ATZ"].contains(pendingCommand)
-                        if !normalized.isEmpty && (!configuration || ["OK","?","ERROR"].contains(where:normalized.contains)) {
-                            waiting = nil; deadline?.cancel(); pending.resume(returning:response)
-                        }
+                        let content=response.uppercased().replacingOccurrences(of:pendingCommand,with:"").trimmingCharacters(in:.whitespacesAndNewlines)
+                        guard !content.isEmpty else { continue }
+                        waiting = nil; deadline?.cancel(); pending.resume(returning:response)
                     }
                 }
             }
@@ -232,7 +236,7 @@ final class ELMAccessoryChannel {
         }
     }
     private func fail(_ error: Error) {
-        ready = false; deadline?.cancel(); deadline = nil
+        generation=UUID();ready = false; deadline?.cancel(); deadline = nil
         let start = opening; opening = nil
         let request = waiting; waiting = nil
         outgoing.removeAll(); buffer.removeAll(); streams.close()
@@ -266,24 +270,30 @@ private enum MXPlusSharedSession {
 
 @MainActor
 final class ELMMXPlusSession: ScannerTransport {
+    private(set) var openingStage:ScannerOpeningStage = .transport
+    private let owner=UUID()
+    private var lease:String?
     private let serial: String?
     private var channel: ELMAccessoryChannel?
     private let journal: ScannerJournal?
-    private let restoreCANDefaults: Bool
-    init(serial: String?, journal: ScannerJournal? = nil, restoreCANDefaults: Bool = false) {
-        self.serial = serial; self.journal = journal; self.restoreCANDefaults = restoreCANDefaults
+    init(serial: String?, journal: ScannerJournal? = nil) {
+        self.serial = serial; self.journal = journal
     }
     static func closeForegroundSession() { MXPlusSharedSession.close() }
     func open(host: String, port: UInt16) async throws -> ScannerIdentity {
         disconnect()
         do {
+            openingStage = .selectingAccessory
             let accessory = try MXPlusAccessory.select(serial:serial)
+            let key="mfi:\(accessory.connectionID)"
+            try AdapterOwnership.acquire(key,owner:owner);lease=key
             let connection = try MXPlusSharedSession.acquire(accessory); channel = connection
             if !connection.reusable {
                 journal?.append(command:"SESSION",reply:"Opening Bluetooth streams")
+                openingStage = .openingBluetooth
                 try await connection.open()
             } else { journal?.append(command:"SESSION",reply:"Reusing Bluetooth session") }
-            return try await ELMIdentification.read(restoreCANDefaults:restoreCANDefaults,command:command)
+            return try await ELMIdentification.read(progress:{ self.openingStage=$0 },command:command)
         } catch {
             journal?.append(command:"ERROR",reply:error.localizedDescription)
             if !(error is CancellationError), let channel { MXPlusSharedSession.discard(channel) }
@@ -303,5 +313,8 @@ final class ELMMXPlusSession: ScannerTransport {
     }
     // Stop this acquisition while keeping the iAP channel reusable.
     // Transport errors close the underlying session; app switching preserves it.
-    func disconnect() { channel = nil }
+    func disconnect() {
+        channel = nil
+        if let lease { AdapterOwnership.release(lease,owner:owner);self.lease=nil }
+    }
 }

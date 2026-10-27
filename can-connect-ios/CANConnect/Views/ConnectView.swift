@@ -16,6 +16,7 @@ struct ConnectView: View {
     @State private var signals = false
     @State private var fuelLogbook = false
     @State private var appearance = false
+    @State private var units = false
     @State private var transfers = false
     var body: some View {
         GeometryReader { geometry in
@@ -64,6 +65,10 @@ struct ConnectView: View {
 
                     sectionLabel("Preferences")
                     VStack(spacing:0) {
+                        Button { units=true } label: {
+                            destinationRow("Units",detail:"Pressure, distance, temperature and fuel",icon:"ruler")
+                        }.buttonStyle(.plain).accessibilityIdentifier("more.units")
+                        rowDivider
                         Button { appearance=true } label: {
                             destinationRow("Appearance",detail:"Use the iPhone setting or keep DriveLine in Light or Dark",icon:"circle.lefthalf.filled",status:appearanceTitle)
                         }.buttonStyle(.plain).accessibilityIdentifier("more.appearance")
@@ -73,6 +78,7 @@ struct ConnectView: View {
                     .frame(maxWidth:.infinity,minHeight:geometry.size.height,alignment:.top)
             }.scrollBounceBehavior(.basedOnSize)
         }.onAppear { page=0 }
+        .sheet(isPresented:$units) { SheetShell(title:"Units") { UnitPreferencesPicker() } }
         .sheet(isPresented:$recorderInfo) { ScannerConnectionView() }
         .sheet(isPresented:$serverSetup) { ServerConnectionView() }
         .sheet(isPresented:$queue) { TransferQueueView() }
@@ -162,6 +168,7 @@ struct SettingsView: View {
         Text("The design is locked.").font(.title2)
         InfoNote(text:"Five tabs. Pages within each tab. Independent signal cards. Local recordings and fill-ups.")
         AppearancePreferencePicker()
+        UnitPreferencesPicker()
         AppButton(title:"Manage vehicles",icon:"car.2",secondary:true) { garage = true }
         DataRow(label:"GPS recording",value:"Available")
         DataRow(label:"Live vehicle data",value:store.scanner.connected ? store.scannerTitle : "GPS / sample / OBD")

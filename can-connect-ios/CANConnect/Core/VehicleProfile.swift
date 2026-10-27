@@ -26,6 +26,7 @@ struct VehicleProfile: Codable, Identifiable, Equatable {
     var vin: String?
     var odometerKM: Double?
     var tankLitres: Double?
+    var reserveLitres:Double = 5
     var scannerProtocol: String?
     var scannerConnection: ScannerSettings?
     var supportedPIDs: [Int] = []
@@ -58,11 +59,12 @@ struct VehicleProfile: Codable, Identifiable, Equatable {
         if let vin, !vin.isEmpty { value.vin = try VIN.normalized(vin) } else { value.vin = nil }
         if let odometerKM { guard odometerKM.isFinite && odometerKM >= 0 else { throw AppFailure("Check the odometer.") } }
         if let tankLitres { guard tankLitres.isFinite && tankLitres > 0 && tankLitres <= 2000 else { throw AppFailure("Check the tank capacity.") } }
+        guard reserveLitres.isFinite,(0...50).contains(reserveLitres) else { throw AppFailure("Reserve must be between 0 and 50 litres.") }
         return value
     }
 
     private enum CodingKeys:String,CodingKey {
-        case id,nickname,year,make,model,trim,engine,transmission,kind,fuel,vin,odometerKM,tankLitres
+        case id,nickname,year,make,model,trim,engine,transmission,kind,fuel,vin,odometerKM,tankLitres,reserveLitres
         case scannerProtocol,scannerConnection,supportedPIDs,identificationSource,identification,preferredUnits
         case preferredGPS,configuredSources,isArchived,archivedAt,isSample,dashboard
     }
@@ -81,6 +83,7 @@ struct VehicleProfile: Codable, Identifiable, Equatable {
         vin=try values.decodeIfPresent(String.self,forKey:.vin)
         odometerKM=try values.decodeIfPresent(Double.self,forKey:.odometerKM)
         tankLitres=try values.decodeIfPresent(Double.self,forKey:.tankLitres)
+        reserveLitres=try values.decodeIfPresent(Double.self,forKey:.reserveLitres) ?? 5
         scannerProtocol=try values.decodeIfPresent(String.self,forKey:.scannerProtocol)
         scannerConnection=try values.decodeIfPresent(ScannerSettings.self,forKey:.scannerConnection)
         supportedPIDs=try values.decodeIfPresent([Int].self,forKey:.supportedPIDs) ?? []

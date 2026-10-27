@@ -30,6 +30,13 @@ struct LocalStore:Sendable {
                checkpoint.updatedAt >= (state.draft?.updatedAt ?? .distantPast) {
                 state.draft=checkpoint
             }
+            let logs=url.deletingLastPathComponent().appendingPathComponent("TripLogs")
+            for file in (try? FileManager.default.contentsOfDirectory(at:logs,includingPropertiesForKeys:nil)) ?? [] where file.pathExtension == "dlt" {
+                guard !FileManager.default.fileExists(atPath:file.appendingPathExtension("indexed").path),
+                      let id=UUID(uuidString:file.deletingPathExtension().lastPathComponent),!state.trips.contains(where:{$0.id == id}),
+                      let recovered=try RebuiltTripBuffer.recover(url:file) else { continue }
+                if state.draft == nil || state.draft?.id == id { state.draft=recovered }
+            }
             return state
         } }
     }
@@ -60,6 +67,19 @@ struct LocalStore:Sendable {
             let handle=try FileHandle(forWritingTo:url);defer { try? handle.close() }
             try handle.synchronize()
             try markFinalizedCheckpoint(in:state)
+            // An index receipt is distinct from file finalization: a crash may
+            // occur between them. Once indexed, an intentional trip deletion
+            // must never be mistaken for an interrupted recording on relaunch.
+            let logs=url.deletingLastPathComponent().appendingPathComponent("TripLogs")
+            let indexed=Set(state.trips.map(\.id))
+            for file in (try? FileManager.default.contentsOfDirectory(at:logs,includingPropertiesForKeys:nil)) ?? [] where file.pathExtension == "dlt" {
+                guard let id=UUID(uuidString:file.deletingPathExtension().lastPathComponent),indexed.contains(id) else { continue }
+                let receipt=file.appendingPathExtension("indexed")
+                if !FileManager.default.fileExists(atPath:receipt.path) {
+                    try Data(id.uuidString.utf8).write(to:receipt,options:.atomic)
+                    let receiptHandle=try FileHandle(forWritingTo:receipt);try receiptHandle.synchronize();try receiptHandle.close()
+                }
+            }
         }
     }
     func validBackup() ->StoredState? {

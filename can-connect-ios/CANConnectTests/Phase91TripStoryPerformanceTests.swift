@@ -77,3 +77,49 @@ final class Phase91TripStoryPerformanceTests:XCTestCase {
             sourceIDs:["synthetic-obd","synthetic"],signalSamples:samples,isSample:true)
     }
 }
+
+extension Phase91TripStoryPerformanceTests {
+    private func historyTrip(samples:Int=5_000)->Trip {
+        let start=Date(timeIntervalSince1970:1_700_000_000)
+        return Trip(name:"Synthetic history performance",startedAt:start,duration:Double(samples-1),distanceKM:10,source:.scanner,isSample:false,
+                    samples:(0..<samples).map { i in OBDSample(timestamp:start.addingTimeInterval(Double(i)),signals:["rpm":1500,"speedKph":60,"fuelRateLph":6],command:"010C",reply:"fixture") })
+    }
+    func testHistoryCacheMatchesPoliciesAndInvalidatesSameIDEdits() async throws {
+        let cache=HistoryPresentationCache(capacity:2)
+        var trip=historyTrip(samples:100)
+        let first=try await cache.presentation(for:trip)
+        XCTAssertEqual(first.quality,DriveLineJourneyPolicy.summary(for:trip.sharedRecording).quality)
+        XCTAssertEqual(first.fuel,DriveLineJourneyPolicy.tripFuelSeries([trip.sharedRecording]).first)
+        _ = try await cache.presentation(for:trip)
+        let builds=await cache.buildCount;XCTAssertEqual(builds,1)
+        trip.samples?[0].signals["fuelRateLph"]=100
+        let changed=try await cache.presentation(for:trip)
+        XCTAssertEqual(changed.fuel,DriveLineJourneyPolicy.tripFuelSeries([trip.sharedRecording]).first)
+        let nextBuilds=await cache.buildCount;XCTAssertEqual(nextBuilds,2)
+        XCTAssertNotEqual(first.fuel?.litres,changed.fuel?.litres)
+        for _ in 0..<3 { _ = try await cache.presentation(for:historyTrip(samples:10)) }
+        let count=await cache.count;XCTAssertEqual(count,2)
+    }
+    @MainActor func testLargeHistoryPreparationDoesNotBlockMainActorAndWarmCacheIsReused() async throws {
+        let cache=HistoryPresentationCache(),trip=historyTrip(samples:30_000)
+        let work=Task { try await cache.presentation(for:trip) }
+        let start=ContinuousClock.now
+        try await Task.sleep(for:.milliseconds(20))
+        let delay=ContinuousClock.now-start
+        XCTAssertLessThan(delay,.seconds(1),"History analysis must not freeze the main actor")
+        _ = try await work.value
+        for _ in 0..<10 { _ = try await cache.presentation(for:trip) }
+        let count=await cache.buildCount;XCTAssertEqual(count,1)
+        XCTAssertEqual(trip.historySourceIDs,trip.sharedRecording.sourceIDs)
+    }
+    func testCancelledHistoryDoesNotEnterCache() async throws {
+        let cache=HistoryPresentationCache(),trip=historyTrip()
+        let work=Task { () throws ->HistoryTripPresentation in
+            try await Task.sleep(for:.seconds(1))
+            return try await cache.presentation(for:trip)
+        }
+        work.cancel()
+        do { _ = try await work.value;XCTFail("Expected cancellation") } catch is CancellationError { }
+        let count=await cache.count;XCTAssertEqual(count,0)
+    }
+}

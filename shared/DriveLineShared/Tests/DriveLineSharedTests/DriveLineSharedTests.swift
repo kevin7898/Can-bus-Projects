@@ -40,7 +40,11 @@ final class DriveLineSharedTests: XCTestCase {
         XCTAssertEqual(DriveLineMetricPolicy.metrics(for:recording).distanceKm,20)
         for i in recording.signalSamples.indices where i > 200 { recording.signalSamples[i].values.removeValue(forKey:"fuelRateLph") }
         XCTAssertNotNil(DriveLineMetricPolicy.metrics(for:recording).tripFuelLitres)
-        XCTAssertNil(DriveLineMetricPolicy.metrics(for:recording).economyL100Km,"Partial fuel must not be divided by whole-trip distance")
+        let partial=DriveLineMetricPolicy.metrics(for:recording)
+        XCTAssertEqual(try XCTUnwrap(partial.economyL100Km),10,accuracy:0.000001,"Matched fuel must be divided only by matching distance")
+        XCTAssertEqual(try XCTUnwrap(partial.matchedEconomy?.distanceKm),1000.0/60,accuracy:0.000001)
+        XCTAssertEqual(partial.matchedEconomy?.coveredSeconds,1000)
+        XCTAssertEqual(partial.matchedEconomy?.isPartial,true)
         recording.signalSamples=Array(recording.signalSamples.prefix(20))
         XCTAssertTrue(DriveLineMetricPolicy.metrics(for:recording).distanceIsPartial)
     }
@@ -138,7 +142,8 @@ final class DriveLineSharedTests: XCTestCase {
     }
 
     func testPhoneNavigationAndMoreCapabilitiesAreReachable() {
-        XCTAssertEqual(DriveLinePhoneDestination.allCases,[.today,.drives,.record,.garage,.more])
+        XCTAssertEqual(DriveLinePhoneDestination.primary,[.today,.drives,.fuel,.garage,.more])
+        XCTAssertTrue(DriveLinePhoneDestination.allCases.contains(.record))
         XCTAssertEqual(Set(DriveLineMoreCapability.allCases),Set([.connections,.transfers,.serverPairing,.settings]))
     }
 

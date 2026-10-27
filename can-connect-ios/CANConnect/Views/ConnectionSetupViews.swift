@@ -9,6 +9,8 @@ struct ScannerConnectionView: View {
     @State private var host = ""
     @State private var port = ""
     @State private var failure: String?
+    @State private var probeTask:Task<Void,Never>?
+    @State private var tripBatch:VWTripDiscoveryBatch = .second
     var body: some View { SheetShell(title:"OBD scanner") {
         Picker("Connection",selection:$kind) { ForEach(ScannerConnectionKind.allCases) { Text($0.title).tag($0) } }.accessibilityIdentifier("scanner.transport")
         if kind == .wifi {
@@ -42,19 +44,57 @@ struct ScannerConnectionView: View {
         }
         AppButton(title:"Connect selected vehicle",icon:"antenna.radiowaves.left.and.right") {
             do {
-                let settings: ScannerSettings
-                if kind == .wifi {
-                    guard let tcp = UInt16(port), tcp > 0 else { throw AppFailure("Enter a TCP port from 1 to 65535.") }
-                    settings = ScannerSettings(host:host.trimmingCharacters(in:.whitespacesAndNewlines),port:tcp)
-                } else {
-                    guard let item = accessories.items.first(where:{$0.id == selectedAccessoryID}) else { throw AppFailure("Pair and choose your OBDLink MX+, then connect.") }
-                    settings = ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:item.serial)
-                }
+                let settings = try selectedSettings()
                 try store.connectScanner(settings:settings); store.selectedTab = .record; dismiss()
             } catch { failure = error.localizedDescription }
-        }.disabled(store.recording || store.pendingGPS)
+        }.disabled(store.recording || store.pendingGPS || store.odometerProbeRunning)
         if store.scanner.connected || store.scanner.connecting {
-            AppButton(title:"Disconnect scanner",secondary:true) { store.disconnectScanner() }.disabled(store.recording)
+            AppButton(title:"Disconnect scanner",secondary:true) { store.disconnectScanner() }.disabled(store.recording || store.odometerProbeRunning)
+        }
+        if store.activeVehicle?.make.lowercased().contains("volkswagen") == true {
+            VStack(alignment:.leading,spacing:12) {
+                Text("VW reading discovery").font(.headline)
+                Text("Park with ignition on and finish recording first. This checks a short list of VW readings and saves a local report. Mileage and fuel candidates need comparison with your dashboard.").captionStyle()
+                AppButton(title:store.odometerProbeRunning ? "Checking VW readings…" : "Check VW odometer & fuel",secondary:true) {
+                    do {
+                        let settings=try selectedSettings()
+                        probeTask=Task {
+                            do { try await store.runOdometerProbe(settings:settings) }
+                            catch { failure=error.localizedDescription }
+                        }
+                    } catch { failure=error.localizedDescription }
+                }.disabled(store.recording || store.pendingGPS || store.isFinishing || store.odometerProbeRunning)
+                    .accessibilityIdentifier("scanner.odometer.probe")
+                Picker("Trip discovery batch",selection:$tripBatch) {
+                    ForEach(VWTripDiscoveryBatch.allCases) { Text($0.title).tag($0) }
+                }.pickerStyle(.segmented).disabled(store.odometerProbeRunning)
+                    .accessibilityIdentifier("scanner.trip.batch")
+                AppButton(title:"Scan trip counter · \(tripBatch.title)",secondary:true) {
+                    do {
+                        let settings=try selectedSettings()
+                        probeTask=Task {
+                            do { try await store.runOdometerProbe(settings:settings,tripDiscovery:true,tripBatch:tripBatch) }
+                            catch { failure=error.localizedDescription }
+                        }
+                    } catch { failure=error.localizedDescription }
+                }.disabled(store.recording || store.pendingGPS || store.isFinishing || store.odometerProbeRunning)
+                    .accessibilityIdentifier("scanner.trip.probe")
+                Text("\(tripBatch.title) checks 32 nearby identifiers (\(tripBatch.ranges)) in two sessions. Stay parked. Photograph the dashboard trip and total odometer with each report; repeat after a short drive without resetting trip. Raw responses are not verified distance readings.").captionStyle()
+                if store.odometerProbeRunning { Button("Cancel check") { probeTask?.cancel() } }
+                if !store.odometerProbeStatus.isEmpty { InfoNote(text:store.odometerProbeStatus) }
+                if let report=store.odometerProbeReport {
+                    ForEach(Array(report.entries.enumerated()).filter {$0.element.candidateKM != nil || $0.element.candidateLitres != nil},id:\.offset) { _,entry in
+                        if let km=entry.candidateKM {
+                            Text("\(entry.requestHeader) · \(entry.command): \(km.formatted(.number.precision(.fractionLength(3)))) km · unverified").captionStyle()
+                        }
+                        if let litres=entry.candidateLitres {
+                            Text("Cluster fuel: \(litres.formatted(.number.precision(.fractionLength(2)))) L · unverified").captionStyle()
+                        }
+                    }
+                    ShareLink("Share VW reading report",item:report.text)
+                        .accessibilityIdentifier("scanner.odometer.share")
+                }
+            }.card()
         }
         InfoNote(text:"Scanner recordings continue when you switch apps or lock the phone. Stay within adapter range. Location access adds the GPS route; Finish saves the recording.")
     }.onAppear {
@@ -62,7 +102,16 @@ struct ScannerConnectionView: View {
         kind = settings.kind; host = settings.host; port = String(settings.port)
         refresh()
         selectedAccessoryID = accessories.items.first(where:{$0.serial == settings.accessorySerial})?.id ?? selectedAccessoryID
-    }.onChange(of:accessories.items.map(\.id)) { _,_ in selectOnlyAccessory() } }
+    }.onChange(of:accessories.items.map(\.id)) { _,_ in selectOnlyAccessory() }
+        .onDisappear { probeTask?.cancel() } }
+    private func selectedSettings() throws -> ScannerSettings {
+        if kind == .wifi {
+            guard let tcp=UInt16(port),tcp > 0,ELMWiFiSession.isLocalHost(host.trimmingCharacters(in:.whitespacesAndNewlines)) else { throw AppFailure("Enter a private scanner address and valid TCP port.") }
+            return ScannerSettings(host:host.trimmingCharacters(in:.whitespacesAndNewlines),port:tcp)
+        }
+        guard let item=accessories.items.first(where:{$0.id == selectedAccessoryID}) else { throw AppFailure("Pair and choose your OBDLink MX+, then connect.") }
+        return ScannerSettings(transport:.obdLinkMXPlus,accessorySerial:item.serial)
+    }
     private func refresh() { accessories.refresh(); selectOnlyAccessory() }
     private func selectOnlyAccessory() {
         if !accessories.items.contains(where:{$0.id == selectedAccessoryID}) { selectedAccessoryID = accessories.items.count == 1 ? accessories.items.first?.id : nil }

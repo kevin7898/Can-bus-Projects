@@ -12,6 +12,7 @@ final class VWMeasuringBlocks {
     private var transmitSequence: UInt8 = 0
     private var assembler = VWMessageAssembler()
     private var channelOpen = false
+    private var probingDSGMileage = false
     private struct Retry {
         var failures: Int
         var after: ContinuousClock.Instant
@@ -51,7 +52,7 @@ final class VWMeasuringBlocks {
         return try await exchange(command)
     }
 
-    static let restoreCommands = ["ATSP6","ATCAF1","ATCFC1","ATAT1","ATST32","ATSH7E0","ATCRA7E8","ATH1","ATD0"]
+    static let restoreCommands = ["ATFCSM0","ATSP6","ATCAF1","ATCFC1","ATAT1","ATST32","ATSH7E0","ATCRA7E8","ATH1","ATD0"]
     private func configure(_ commands: [String]) async throws {
         for command in commands {
             let reply = try await exchange(command)
@@ -95,7 +96,7 @@ final class VWMeasuringBlocks {
     }
     private func request(_ payload: [UInt8]) async throws -> VWMeasurementReply {
         guard channelOpen, payload == [0x10,0x89] ||
-                (payload.count == 2 && payload[0] == 0x21 && [19,108,114].contains(Int(payload[1]))) else {
+                (payload.count == 2 && payload[0] == 0x21 && ([19,108,114].contains(Int(payload[1])) || (probingDSGMileage && payload[1] == 109))) else {
             throw AppFailure("VW request is outside the read-only measurement allowlist.")
         }
         func hex(_ bytes: [UInt8]) -> String { bytes.map {String(format:"%02X",$0)}.joined() }
@@ -150,6 +151,32 @@ final class VWMeasuringBlocks {
             try await self.configure(Self.restoreCommands)
         }
         try await cleanup.value
+    }
+    /// Group 109 is a documented 02E-family mileage lead, not a verified decoder.
+    /// Keep this out of periodic telemetry. Only the reviewed DSG fingerprint
+    /// may enter the existing TP2.0 session; preserve the complete typed payload.
+    func probeDSGMileage(calibrationReply:String) async throws -> VWMeasurementReply {
+        guard VWController.dsg.matchesCalibration(calibrationReply) else {
+            throw AppFailure("DSG software fingerprint differs from the reviewed controller. TP2.0 probe skipped.")
+        }
+        probingDSGMileage=true
+        defer { probingDSGMileage=false }
+        do {
+            try Task.checkCancellation()
+            try await configure(["ATFCSM0"])
+            try await open(.dsg)
+            let response=try await request([0x21,109])
+            guard response.payload.starts(with:[0x61,109]) ||
+                    (response.payload.count == 3 && response.payload.starts(with:[0x7F,0x21])) else {
+                throw AppFailure("DSG block 109 returned an unexpected response.")
+            }
+            try await closeChannel()
+            try await restore()
+            return response
+        } catch {
+            try await restore()
+            throw error
+        }
     }
     func read(controllers: Set<VWController>) async throws -> [OBDSample] {
         var samples: [OBDSample] = []

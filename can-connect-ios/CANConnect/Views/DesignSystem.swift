@@ -84,9 +84,15 @@ struct InfoNote: View {
     var body: some View { HStack(alignment:.top, spacing:8) { Image(systemName:icon); Text(text).fixedSize(horizontal:false, vertical:true) }.font(.system(size:11)).foregroundStyle(Palette.muted).frame(maxWidth:.infinity, alignment:.leading) }
 }
 struct SheetShell<Content: View>: View {
-    let title: String; @ViewBuilder var content: Content
+    let title: String; var embedded=false; @ViewBuilder var content: Content
     @Environment(\.dismiss) private var dismiss
-    var body: some View { NavigationStack { ScrollView { VStack(alignment:.leading, spacing:18) { content }.padding(20) }.background(Palette.background).navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement:.topBarTrailing) { Button("Done") { dismiss() } } }.toolbarBackground(Palette.surface, for:.navigationBar).toolbarBackground(.visible, for:.navigationBar) }.tint(Palette.blue) }
+    @ViewBuilder var body: some View {
+        if embedded {
+            ScrollView { VStack(alignment:.leading,spacing:18) { content }.padding(.vertical,8) }
+                .background(Palette.background).tint(Palette.blue)
+        } else { sheet }
+    }
+    private var sheet: some View { NavigationStack { ScrollView { VStack(alignment:.leading, spacing:18) { content }.padding(20) }.background(Palette.background).navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement:.topBarTrailing) { Button("Done") { dismiss() } } }.toolbarBackground(Palette.surface, for:.navigationBar).toolbarBackground(.visible, for:.navigationBar) }.tint(Palette.blue) }
 }
 struct EconomyChart: View {
     var body: some View { GeometryReader { g in
@@ -94,4 +100,45 @@ struct EconomyChart: View {
             for (i,v) in values.enumerated() { let point = CGPoint(x:Double(i) / Double(values.count - 1) * g.size.width, y:(6.5-v)/1.6*g.size.height); if i == 0 { p.move(to:point) } else { p.addLine(to:point) } }
         }.stroke(Palette.blue, style:StrokeStyle(lineWidth:2, lineCap:.round, lineJoin:.round))
     }.frame(height:65).accessibilityLabel("Sample fuel economy trend from 6.2 to 5.4 litres per 100 kilometres") }
+}
+
+struct BoostUnitPicker:View {
+    @AppStorage(BoostPressureUnit.storageKey) private var unit=BoostPressureUnit.psi.rawValue
+    var body:some View {
+        Picker("Boost units",selection:$unit) {
+            ForEach(BoostPressureUnit.allCases) { Text($0.rawValue).tag($0.rawValue) }
+        }.pickerStyle(.segmented).accessibilityIdentifier("boost.units")
+    }
+}
+
+@propertyWrapper struct UnitPreferences:DynamicProperty {
+    @AppStorage(BoostPressureUnit.storageKey) private var pressure="psi"
+    @AppStorage("driveline.units.distance") private var distance="km"
+    @AppStorage("driveline.units.temperature") private var temperature="°C"
+    @AppStorage("driveline.units.volume") private var volume="L"
+    @AppStorage("driveline.units.economy") private var economy="L/100 km"
+    var wrappedValue:DisplayUnits { DisplayUnits(pressure:pressure,distance:distance,temperature:temperature,volume:volume,economy:economy) }
+}
+struct UnitPreferencesPicker:View {
+    @AppStorage(BoostPressureUnit.storageKey) private var pressure="psi"
+    @AppStorage("driveline.units.distance") private var distance="km"
+    @AppStorage("driveline.units.temperature") private var temperature="°C"
+    @AppStorage("driveline.units.volume") private var volume="L"
+    @AppStorage("driveline.units.economy") private var economy="L/100 km"
+    var body:some View {
+        VStack(alignment:.leading,spacing:12) {
+            picker("Pressure",$pressure,["psi","kPa","bar"])
+            picker("Distance & speed",$distance,["km","mi"])
+            picker("Temperature",$temperature,["°C","°F"])
+            picker("Fuel volume",$volume,["L","US gal","Imp gal"])
+            picker("Fuel economy",$economy,["L/100 km","mpg (US)","mpg (Imp)"])
+        }
+    }
+    private func picker(_ title:String,_ selection:Binding<String>,_ options:[String])->some View {
+        VStack(alignment:.leading,spacing:6) {
+            Text(title).font(.caption).foregroundStyle(Palette.secondaryText)
+            Picker(title,selection:selection) { ForEach(options,id:\.self) { Text($0).tag($0) } }
+                .pickerStyle(.segmented).accessibilityIdentifier("units."+title)
+        }
+    }
 }

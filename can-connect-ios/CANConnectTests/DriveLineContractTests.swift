@@ -3,6 +3,53 @@ import CryptoKit
 @testable import CANConnect
 
 final class DriveLineContractTests:XCTestCase {
+    func testGaugeBoostSubtractsAmbientBeforeDisplayConversion() throws {
+        let now=Date(),id=UUID()
+        func observation(_ key:String,_ value:Double)->DriveLineObservation {
+            .init(key:key,value:value,timestamp:now,sourceID:"7E8",recordingID:id)
+        }
+        var observations=["boostAbsoluteKpa":observation("boostAbsoluteKpa",109.8),
+                          "barometricKpa":observation("barometricKpa",100)]
+        let gauge=try XCTUnwrap(DriveLineMetricPolicy.boostGaugeKpa(observations:observations,at:now))
+        XCTAssertEqual(BoostPressureUnit.kPa.value(fromKPa:gauge.value),9.8,accuracy:0.000001)
+        XCTAssertEqual(BoostPressureUnit.psi.value(fromKPa:gauge.value),1.42137,accuracy:0.00001)
+        XCTAssertEqual(BoostPressureUnit.bar.value(fromKPa:gauge.value),0.098,accuracy:0.000001)
+        observations["boostAbsoluteKpa"]=observation("boostAbsoluteKpa",100)
+        XCTAssertEqual(DriveLineMetricPolicy.boostGaugeKpa(observations:observations,at:now)?.value,0)
+        observations["boostAbsoluteKpa"]=observation("boostAbsoluteKpa",90)
+        XCTAssertEqual(DriveLineMetricPolicy.boostGaugeKpa(observations:observations,at:now)?.value,-10)
+        observations.removeValue(forKey:"barometricKpa")
+        XCTAssertNil(DriveLineMetricPolicy.boostGaugeKpa(observations:observations,at:now))
+    }
+
+    func testDisplayUnitsConvertWithoutChangingCanonicalInputs() {
+        let units=DisplayUnits(pressure:"psi",distance:"mi",temperature:"°F",volume:"US gal",economy:"mpg (US)")
+        XCTAssertEqual(units.value(100,from:"kPa"),14.5037738,accuracy:0.00001)
+        XCTAssertEqual(units.value(100,from:"km"),62.1371192,accuracy:0.00001)
+        XCTAssertEqual(units.label("km/h"),"mph")
+        XCTAssertEqual(units.value(-40,from:"°C"),-40)
+        XCTAssertEqual(units.value(100,from:"°C"),212)
+        XCTAssertEqual(units.value(3.785411784,from:"L"),1,accuracy:0.000001)
+        XCTAssertEqual(units.value(10,from:"L/100 km"),23.5214583,accuracy:0.000001)
+        XCTAssertEqual(units.canonical(units.value(263680,from:"km"),from:"km"),263680,accuracy:0.000001)
+        XCTAssertEqual(units.canonical(units.value(24.38,from:"L"),from:"L"),24.38,accuracy:0.000001)
+        XCTAssertEqual(units.number(nil,"°C"),"—")
+        XCTAssertEqual(units.number(0,"L/100 km"),"—")
+        let imperial=DisplayUnits(volume:"Imp gal",economy:"mpg (Imp)")
+        XCTAssertEqual(imperial.value(4.54609,from:"L"),1,accuracy:0.000001)
+        XCTAssertEqual(imperial.value(10,from:"L/100 km"),28.2480936,accuracy:0.000001)
+    }
+    func testDisplayUnitPreferencesPersistAndDefaultToPSI() throws {
+        let name="UnitTests."+UUID().uuidString,defaults=try XCTUnwrap(UserDefaults(suiteName:name))
+        defer { defaults.removePersistentDomain(forName:name) }
+        XCTAssertEqual(DisplayUnits.saved(in:defaults).pressure,"psi")
+        defaults.set("mi",forKey:"driveline.units.distance")
+        defaults.set("°F",forKey:"driveline.units.temperature")
+        defaults.set("Imp gal",forKey:"driveline.units.volume")
+        defaults.set("mpg (Imp)",forKey:"driveline.units.economy")
+        defaults.set("bar",forKey:BoostPressureUnit.storageKey)
+        XCTAssertEqual(DisplayUnits.saved(in:defaults),DisplayUnits(pressure:"bar",distance:"mi",temperature:"°F",volume:"Imp gal",economy:"mpg (Imp)"))
+    }
     private func fixture(_ name:String) throws -> Data {
         let root=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return try Data(contentsOf:root.appendingPathComponent("shared/DriveLineShared/Tests/DriveLineSharedTests/Fixtures/\(name).json"))

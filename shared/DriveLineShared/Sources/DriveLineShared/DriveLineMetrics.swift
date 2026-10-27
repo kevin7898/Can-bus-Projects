@@ -65,6 +65,7 @@ public struct DriveLineIntegralAccumulator:Sendable {
 public struct DriveLineMetrics: Equatable, Sendable {
     public var distanceCandidates: [DriveLineDistanceCandidate] = []
     public var distanceIsPartial = false
+    public var matchedEconomy: DriveLineMatchedEconomy?
     public var distanceKm: Double?
     public var durationSeconds: Double
     public var tripFuelLitres: Double?
@@ -84,7 +85,7 @@ public struct DriveLineMetrics: Equatable, Sendable {
 }
 
 public enum DriveLineMetricPolicy {
-    public static let version = "driveline.metrics.v2"
+    public static let version = "driveline.metrics.v3"
     public static let comparableDistanceCoverage = 0.05
     public static let adequateDistanceCoverage = 0.95
     public static let maximumGPSGap: TimeInterval = 30
@@ -105,18 +106,13 @@ public enum DriveLineMetricPolicy {
             let fuel = integral("fuelRateLph", samples: boundedSamples,interruptions:recording.acquisitionInterruptions ?? [])
             let measuredFuel = fuel.flatMap { duration > 0 && $0.coverage / duration >= requiredFuelCoverage ? $0.value / 3600 : nil }
             let tripFuel = measuredFuel ?? recording.tripFuelLitres
-            let economy: Double? = distance.flatMap { km -> Double? in
-                // Whole-trip economy requires matching complete intervals, not
-                // unrelated partial fuel and distance totals above a threshold.
-                guard km > 0.1, let tripFuel, let selected,
-                      let fuel, duration > 0, fuel.coverage >= duration - 0.001,
-                      selected.coveredSeconds >= duration - 0.001 else { return nil }
-                return tripFuel / km * 100
-            }
+            let matched = matchedEconomy(for: recording)
+            let economy = matched?.value
             var metrics = DriveLineMetrics(distanceKm: distance, durationSeconds: duration,
                 tripFuelLitres: tripFuel, economyL100Km: economy,
                 coverage: coverageSummaries(recording),
                 distanceSource:selected?.sourceID ?? (recording.recordedDistanceKm != nil ? "recorded" : nil))
+            metrics.matchedEconomy = matched
             metrics.distanceCandidates = candidates
             metrics.distanceIsPartial = selected.map { $0.coverageFraction < adequateDistanceCoverage } ?? (distance != nil)
             return metrics

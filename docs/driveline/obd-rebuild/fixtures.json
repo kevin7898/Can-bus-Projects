@@ -1,0 +1,35 @@
+[
+  {
+    "fixture_id": "TelemetryRebuildTests-1",
+    "source": "shared/DriveLineShared/Tests/DriveLineSharedTests/TelemetryRebuildTests.swift",
+    "capture_status": "synthetic",
+    "scenario": "Independent protocol/scaling/fault/coverage vectors or command-matched replay model",
+    "adapter_firmware": "none; simulated",
+    "addressing": "11-bit CAN; shared parser also has 29-bit vectors",
+    "redactions": "Fictional VINs; no private GPS, vehicle identifiers or credentials",
+    "sha256": "24b2d72f06b98c80360cd5258a159045b78617eb58caac323c7a7b400a360527",
+    "limitations": "Does not validate hardware latency, accessory behavior or physical vehicle signals"
+  },
+  {
+    "fixture_id": "TelemetryRebuildTests-2",
+    "source": "can-connect-ios/CANConnectTests/TelemetryRebuildTests.swift",
+    "capture_status": "synthetic",
+    "scenario": "Independent protocol/scaling/fault/coverage vectors or command-matched replay model",
+    "adapter_firmware": "none; simulated",
+    "addressing": "11-bit CAN; shared parser also has 29-bit vectors",
+    "redactions": "Fictional VINs; no private GPS, vehicle identifiers or credentials",
+    "sha256": "7a56f4d526db6e88f60a51b979ee2bd49a713ea24b3f69d1d501069b062aaaa6",
+    "limitations": "Does not validate hardware latency, accessory behavior or physical vehicle signals"
+  },
+  {
+    "fixture_id": "TelemetryReplayTransport-3",
+    "source": "can-connect-ios/CANConnect/Services/TelemetryReplayTransport.swift",
+    "capture_status": "synthetic",
+    "scenario": "Independent protocol/scaling/fault/coverage vectors or command-matched replay model",
+    "adapter_firmware": "none; simulated",
+    "addressing": "11-bit CAN; shared parser also has 29-bit vectors",
+    "redactions": "Fictional VINs; no private GPS, vehicle identifiers or credentials",
+    "sha256": "fbb5d80c1b2e26481ca4edd80798123a0067b710e83e29d22992ca9e90c4cf08",
+    "limitations": "Does not validate hardware latency, accessory behavior or physical vehicle signals"
+  }
+]

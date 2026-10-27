@@ -1,5 +1,16 @@
 import Foundation
 
+/// Display-only conversion; recordings retain the original pressures in kPa.
+enum BoostPressureUnit:String,CaseIterable,Identifiable {
+    case kPa, psi, bar
+    static let storageKey="driveline.boostPressureUnit"
+    var id:String { rawValue }
+    func value(fromKPa value:Double)->Double {
+        switch self { case .kPa:return value;case .psi:return value/6.894757293168;case .bar:return value/100 }
+    }
+    var decimalPlaces:Int { self == .bar ? 2:1 }
+}
+
 struct PhoneTodayPresentation: Equatable {
     enum Readiness: Equatable { case ready, needsVehicle, sampleVehicle }
 
@@ -115,7 +126,7 @@ struct PhoneRecordingPresentation: Equatable {
         var display=observations
         if let boost=DriveLineMetricPolicy.boostGaugeKpa(observations:observations,at:now) { display["boostGaugeKpa"]=boost }
         let definitions:[(String,String,String)]=[
-            ("rpm","Engine RPM","rpm"),("coolantC","Coolant","°C"),("boostGaugeKpa","Boost","kPa"),
+            ("rpm","Engine RPM","rpm"),("coolantC","Coolant","°C"),("boostGaugeKpa","Gauge boost","kPa"),
             ("dsgFluidC","DSG temp","°C"),("dpfSootG","DPF soot","g"),("dpfRegenTrigger","Regen trigger","%")
         ]
         let metrics=definitions.map { key,title,unit -> PhoneSignalPresentation in
@@ -134,8 +145,10 @@ struct PhoneRecordingPresentation: Equatable {
         else if gpsMissing { recovery=(gpsAcquiring ? "GPS acquiring":"GPS unavailable",gpsStatus+". The recording remains local while DriveLine waits for a fresh location.") }
         else { recovery=(nil,nil) }
         let source=draft?.source ?? selectedSource
-        return Self(phase:phase,sourceTitle:source.title,statusTitle:title(phase),
-                    statusMessage:message(phase,scannerStatus:scannerStatus,gpsStatus:gpsStatus),elapsed:elapsed,
+        let scannerPreflight=draft == nil && selectedSource == .scanner && !scannerConnected
+        return Self(phase:phase,sourceTitle:source.title,
+                    statusTitle:scannerPreflight ? (scannerConnecting ? "Connecting scanner":"Scanner not ready"):title(phase),
+                    statusMessage:scannerPreflight ? scannerStatus:message(phase,scannerStatus:scannerStatus,gpsStatus:gpsStatus),elapsed:elapsed,
                     distanceKM:draft?.distanceKM ?? 0,speed:speedObservation,metrics:metrics,route:draft?.route ?? [],
                     gpsState:(gpsFresh || gpsSessionActive) ? .ready:((pendingGPS || gpsAcquiring) ? .waiting:(draft == nil ? .stale:.unavailable)),
                     scannerState:scannerConnected ? .ready:(scannerConnecting ? .processing:.unavailable),
@@ -145,7 +158,7 @@ struct PhoneRecordingPresentation: Equatable {
 
     private static func latestObservations(draft:RecordingDraft?)->[String:DriveLineObservation] {
         guard let draft else { return [:] }
-        if draft.liveEvidence.sampleCount == (draft.samples?.count ?? 0) { return draft.liveEvidence.latest }
+        if draft.rebuiltBuffer != nil || draft.liveEvidence.sampleCount == (draft.samples?.count ?? 0) { return draft.liveEvidence.latest }
         var result:[String:DriveLineObservation]=[:]
         for sample in draft.samples ?? [] {
             for (key,value) in sample.signals where result[key].map({$0.timestamp < sample.timestamp}) ?? true {
@@ -183,4 +196,58 @@ struct PhoneRecordingPresentation: Equatable {
         case .recovered:return "The interrupted draft was restored once and saved locally."
         }
     }
+}
+
+/// Preferences affect presentation only. Canonical values remain metric in storage.
+struct DisplayUnits:Equatable {
+    static func saved(in defaults:UserDefaults = .standard)->Self {
+        Self(pressure:defaults.string(forKey:BoostPressureUnit.storageKey) ?? "psi",
+             distance:defaults.string(forKey:"driveline.units.distance") ?? "km",
+             temperature:defaults.string(forKey:"driveline.units.temperature") ?? "°C",
+             volume:defaults.string(forKey:"driveline.units.volume") ?? "L",
+             economy:defaults.string(forKey:"driveline.units.economy") ?? "L/100 km")
+    }
+    var pressure="psi",distance="km",temperature="°C",volume="L",economy="L/100 km"
+    func label(_ base:String)->String {
+        switch base {
+        case "kPa":return pressure
+        case "kPa gauge":return pressure+" gauge"
+        case "kPa absolute":return pressure+" absolute"
+        case "km":return distance
+        case "km/h":return distance == "mi" ? "mph":"km/h"
+        case "°C":return temperature
+        case "L":return volume
+        case "L/h":return volume+"/h"
+        case "L/100 km":return economy
+        default:return base
+        }
+    }
+    func value(_ value:Double,from base:String)->Double {
+        switch base {
+        case "kPa","kPa gauge","kPa absolute":return (BoostPressureUnit(rawValue:pressure) ?? .psi).value(fromKPa:value)
+        case "km","km/h":return distance == "mi" ? value/1.609344:value
+        case "°C":return temperature == "°F" ? value*1.8+32:value
+        case "L","L/h":return value/litresPerUnit
+        case "L/100 km":
+            guard economy != "L/100 km" else { return value }
+            guard value>0 else { return .nan }
+            return (economy == "mpg (US)" ? 235.214583:282.480936)/value
+        default:return value
+        }
+    }
+    var litresPerUnit:Double { volume == "US gal" ? 3.785411784:(volume == "Imp gal" ? 4.54609:1) }
+    func canonical(_ value:Double,from base:String)->Double {
+        switch base {
+        case "L":return value*litresPerUnit
+        case "km":return distance == "mi" ? value*1.609344:value
+        default:return value
+        }
+    }
+    func number(_ value:Double?,_ base:String,digits:Int=1)->String {
+        guard let value else { return "—" }
+        let converted=self.value(value,from:base)
+        guard converted.isFinite else { return "—" }
+        return converted.text(base.hasPrefix("kPa") && pressure == "bar" ? 2:digits)
+    }
+    func text(_ value:Double?,_ base:String,digits:Int=1)->String { number(value,base,digits:digits)+" "+label(base) }
 }

@@ -35,7 +35,7 @@ final class ScannerJournal {
         append(command:"SESSION",reply:"Preparing scanner connection")
     }
     func append(command: String, reply: String) {
-        let entry = Exchange(timestamp:Date(),command:command,reply:reply)
+        let entry = Exchange(timestamp:Date(),command:command,reply:TelemetryPrivacy.reply(command:command,reply:reply))
         entries.append(entry)
         if ["SESSION","VW","ERROR"].contains(command) {
             events.append(entry)

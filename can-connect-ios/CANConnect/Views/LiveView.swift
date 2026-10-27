@@ -3,12 +3,17 @@ import SwiftUI
 struct LiveView: View {
     @EnvironmentObject private var store: AppStore
     @Binding var page: Int
+    @UnitPreferences private var units
 
+
+    // Observation callbacks may arrive between the one-second display ticks.
+    // Compare freshness with the render time, not the previous timer tick.
+    private var displayNow:Date { max(store.now,Date()) }
     private var presentation:PhoneRecordingPresentation {
         .make(state:store.state,selectedSource:store.source,pendingGPS:store.pendingGPS,
               scannerConnected:store.scanner.connected,scannerConnecting:store.scanner.connecting,
               scannerStatus:store.scanner.status,gpsStatus:store.gps.status,gpsSpeedKMH:store.gps.speedKMH,
-              gpsLastFix:store.gps.lastFix,now:store.now,scannerSupportedKeys:store.scanner.supportedSignalKeys,
+              gpsLastFix:store.gps.lastFix,now:displayNow,scannerSupportedKeys:store.scanner.supportedSignalKeys,
               scannerUnsupportedKeys:store.scanner.unsupportedSignalKeys,isStopping:store.isFinishing,requestOutcomes:store.scanner.requestOutcomes)
     }
 
@@ -80,27 +85,25 @@ struct LiveView: View {
         VStack(alignment:.leading,spacing:12) {
             SectionCard(title:"Current drive",icon:"record.circle") {
                 VStack(spacing:4) {
-                    Text(presentation.speed.value.map { $0.text(0) } ?? "—").font(.system(size:68,weight:.semibold,design:.rounded)).monospacedDigit().minimumScaleFactor(0.65)
-                    Text("km/h").font(.caption).foregroundStyle(Palette.secondaryText)
-                    FreshnessLabel(observedAt:presentation.speed.observedAt,now:store.now,staleAfter:10,
+                    Text(units.number(presentation.speed.value,"km/h",digits:0)).font(.system(size:68,weight:.semibold,design:.rounded)).monospacedDigit().minimumScaleFactor(0.65)
+                    Text(units.label("km/h")).font(.caption).foregroundStyle(Palette.secondaryText)
+                    FreshnessLabel(observedAt:presentation.speed.observedAt,now:displayNow,staleAfter:10,
                         semanticState:presentation.speed.state,statusText:presentation.speed.statusText)
                 }.frame(maxWidth:.infinity).accessibilityElement(children:.combine)
-                HStack { metricSummary("Distance",value:presentation.distanceKM.text(1),unit:"km");Spacer();metricSummary("Elapsed",value:store.timerText,unit:"") }
-                if !presentation.route.isEmpty {
-                    NativeRouteMap(route:presentation.route,isLive:true).frame(height:150).clipShape(RoundedRectangle(cornerRadius:Palette.Radius.medium))
-                } else {
-                    HStack { Image(systemName:"location.slash");Text("No GPS route observed yet") }.font(.caption).foregroundStyle(Palette.secondaryText).frame(maxWidth:.infinity,minHeight:54)
-                }
+                HStack { metricSummary("Distance",value:units.number(presentation.distanceKM,"km"),unit:units.label("km"));Spacer();metricSummary("Elapsed",value:store.timerText,unit:"") }
+                Text("GPS route continues recording and is available in drive history.").font(.caption).foregroundStyle(Palette.secondaryText)
             }
+            FuelRangeCard(vehicleID:store.state.selectedVehicleID)
             SectionCard(title:"Observed telemetry",icon:"gauge.with.dots.needle.50percent") {
+                BoostUnitPicker()
                 LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:10) {
                     ForEach(presentation.metrics) { metric in
-                        MetricTile(title:metric.title,value:formatted(metric),unit:metric.unit,state:metric.state,source:metric.source,
-                            observedAt:metric.observedAt,statusText:metric.statusText,now:store.now)
+                        MetricTile(title:metric.title,value:formatted(metric),unit:units.label(metric.unit),state:metric.state,source:metric.source,
+                            observedAt:metric.observedAt,statusText:metric.statusText,now:displayNow)
                             .accessibilityIdentifier("record.metric.\(metric.key)")
                     }
                 }
-                Text("Regen trigger is a normalized ECU trigger indicator, never physical DPF fullness.").font(.caption).foregroundStyle(Palette.secondaryText)
+                Text("Gauge boost subtracts measured ambient pressure. Regen trigger is a normalized ECU trigger indicator, never physical DPF fullness.").font(.caption).foregroundStyle(Palette.secondaryText)
             }
         }
     }
@@ -110,7 +113,9 @@ struct LiveView: View {
             AppButton(title:store.isFinishing ? "Saving recording…":(store.pendingGPS ? "Cancel GPS request":(store.recording ? "Finish & save":"Start recording")),
                       icon:store.recording ? "stop.fill":"record.circle",destructive:store.recording) {
                 if store.pendingGPS { store.cancelGPS() } else if store.recording { store.finishRecording() } else { store.startRecording() }
-            }.accessibilityIdentifier(store.recording ? "record.finish":"record.start")
+            }.disabled(!store.recording && !store.pendingGPS && store.source == .scanner &&
+                       (!store.scanner.connected || store.scanner.vehicleID != store.state.selectedVehicleID))
+            .accessibilityIdentifier(store.recording ? "record.finish":"record.start")
             Text(store.recording ? "Finish saves exactly once and leaves queued transfer work intact.":"No connection is required to save locally.")
                 .font(.caption2).foregroundStyle(Palette.secondaryText).multilineTextAlignment(.center).frame(maxWidth:.infinity)
         }
@@ -123,7 +128,8 @@ struct LiveView: View {
     private func metricSummary(_ title:String,value:String,unit:String)->some View { VStack(alignment:.leading,spacing:3) { Text(title).font(.caption).foregroundStyle(Palette.secondaryText);Text(value+(unit.isEmpty ? "":" \(unit)")).font(.headline).monospacedDigit() } }
     private func formatted(_ metric:PhoneSignalPresentation)->String? {
         guard let value=metric.value else { return nil }
-        return value.text(metric.key == "rpm" || metric.key == "coolantC" || metric.key == "dsgFluidC" || metric.key == "dpfRegenTrigger" ? 0:1)
+
+        return units.number(value,metric.unit,digits:metric.key == "rpm" || metric.key == "coolantC" || metric.key == "dsgFluidC" || metric.key == "dpfRegenTrigger" ? 0:1)
     }
     private var sourceExplanation:String {
         switch store.source { case .phoneGPS:return "Records route, speed, distance and duration. Engine telemetry stays unavailable.";case .scanner:return "Records actual scanner observations while GPS independently records the route.";case .demo:return "Clearly labelled sample data for preview only.";case .imported:return "Imported recordings cannot be used as a live source." }
@@ -139,7 +145,10 @@ struct LiveView: View {
         case .available:return store.gps.status
         }
     }
-    private var phaseSemantic:DriveLineSemanticState { presentation.phase == .starting ? .waiting:(presentation.phase == .idle ? .ready:.processing) }
+    private var phaseSemantic:DriveLineSemanticState {
+        if presentation.phase == .idle && store.source == .scanner && !store.scanner.connected { return .unavailable }
+        return presentation.phase == .starting ? .waiting:(presentation.phase == .idle ? .ready:.processing)
+    }
     private var recoveryActionTitle:String? {
         switch presentation.recoveryTitle {
         case "GPS acquiring","GPS unavailable":return "Retry GPS"

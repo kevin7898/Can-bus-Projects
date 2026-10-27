@@ -17,7 +17,7 @@ struct RecordingActivitySnapshot: Equatable {
         }
         countUnit = draft.source == .phoneGPS ? "GPS points" : draft.source == .demo ? "" : "responses"
         state = .init(startedAt:draft.startedAt,updatedAt:draft.source == .scanner ? draft.updatedAt : Date(),
-                      responses:draft.source == .phoneGPS ? draft.route.count : draft.samples?.count ?? 0,
+                      responses:draft.source == .phoneGPS ? draft.route.count : max(draft.liveEvidence.sampleCount,draft.samples?.count ?? 0),
                       status:draft.source == .scanner && !scannerConnected ? "Scanner disconnected" : "Recording")
     }
 }

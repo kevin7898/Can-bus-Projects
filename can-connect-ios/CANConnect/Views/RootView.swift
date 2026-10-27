@@ -28,6 +28,7 @@ struct RootView: View {
             Group { switch store.selectedTab {
             case .today: OverviewView(page:$store.overviewPage)
             case .drives: TripsView(filter:$store.tripFilter, page:$store.tripPage)
+            case .fuel: FuelLedgerView(embedded:true)
             case .record: LiveView(page:$store.livePage)
             case .garage: GarageDestinationView()
             case .more: ConnectView(page:$store.connectPage)
@@ -42,11 +43,11 @@ struct RootView: View {
         .fileImporter(isPresented:$importFile, allowedContentTypes:[.json]) { result in importRecording(result, store:store) }
         .alert("DriveLine", isPresented:Binding(get:{ store.error != nil }, set:{ if !$0 { store.error = nil } })) {
             if store.libraryReadOnly && store.backupAvailable { Button("Restore validated backup") { store.restoreStateBackup() } }
-            Button("Keep read-only",role:.cancel) { store.error = nil }
+            Button(store.libraryReadOnly ? "Keep read-only":"OK",role:.cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
     }
     private var tabBar: some View {
-        HStack(spacing:0) { ForEach(AppTab.allCases) { tab in
+        HStack(spacing:0) { ForEach(AppTab.primary) { tab in
             Button { store.selectedTab = tab } label: { VStack(spacing:6) { Image(systemName:tab.icon).font(.system(size:17)); Text(tab.title).font(.system(size:10)) }.frame(maxWidth:.infinity).frame(height:57).contentShape(Rectangle()) }
                 .foregroundStyle(store.selectedTab == tab ? Palette.blue : Palette.muted)
                 .accessibilityLabel(tab.title).accessibilityAddTraits(store.selectedTab == tab ? .isSelected : [])

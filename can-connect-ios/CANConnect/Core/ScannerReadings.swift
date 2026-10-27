@@ -24,6 +24,9 @@ struct OBDSample: Codable, Equatable {
     var reply: String
     var requestHeader: String? = nil
     var responseHeader: String? = nil
+    var exchangeID:UUID? = nil
+    var clockEpoch:UUID? = nil
+    var monotonicTime:Double? = nil
     var isValid: Bool {
         timestamp.timeIntervalSince1970.isFinite && command.count <= 16 && reply.count <= 64_000 &&
         [requestHeader,responseHeader].allSatisfy { $0 == nil || ($0!.count == 3 && $0!.allSatisfy { $0.isASCII && $0.isHexDigit }) } &&
@@ -41,6 +44,8 @@ enum OBDDecoder {
         (0x7A,"dpfDifferentialKpa",7), (0x8B,"dpfRegenActive",7)
     ]
     static let labels: [String:(title:String,unit:String)] = [
+        "clusterFuelLitres":("Cluster fuel estimate","L"),
+        "clusterOdometerCoarseKM":("Experimental coarse odometer","km"),
         "speedKph":("Vehicle speed","km/h"), "rpm":("Engine speed","rpm"),
         "coolantC":("Coolant","°C"), "mapKpa":("Manifold pressure","kPa absolute"),
         "barometricKpa":("Barometric pressure","kPa absolute"), "fuelRateLph":("Fuel rate","L/h"),
@@ -65,7 +70,8 @@ enum OBDDecoder {
         return DriveLineAcquisitionPolicy.signal(key).expectedCadence ?? 3
     }
     static func freshness(for key: String) -> TimeInterval {
-        DriveLineAcquisitionPolicy.signal(key).displayValidity
+        if ["clusterFuelLitres","clusterOdometerCoarseKM"].contains(key) { return 90 }
+        return DriveLineAcquisitionPolicy.signal(key).displayValidity
     }
     static let keys = Set(labels.keys)
     static func signalKeys(pid: Int) -> Set<String> {
@@ -83,8 +89,15 @@ enum OBDDecoder {
         let decoded = replies.map { decodeData(Array($0.dropFirst(2)),pid:pid,key:definition.key) }
         // Ambiguous replies remain unavailable; never choose the first ECU value.
         guard let signals = decoded.first, !signals.isEmpty, decoded.allSatisfy({$0 == signals}) else { return nil }
-        return OBDSample(timestamp:timestamp,signals:signals,command:String(format:"01%02X",pid),reply:reply,
+        return OBDSample(timestamp:timestamp,signals:signals,command:String(format:"01%02X",pid),reply:TelemetryPrivacy.reply(command:String(format:"01%02X",pid),reply:reply),
                          requestHeader:ecu == "7E8" ? "7E0" : nil,responseHeader:ecu)
+    }
+    static func decodePayload(_ bytes:[UInt8],pid:Int,at timestamp:Date,ecu:String,command:String,reply:String)->OBDSample? {
+        guard let definition=definitions.first(where:{$0.pid == pid}),bytes.count == definition.bytes else { return nil }
+        let signals=decodeData(bytes,pid:pid,key:definition.key)
+        guard !signals.isEmpty else { return nil }
+        return OBDSample(timestamp:timestamp,signals:signals,command:command,reply:TelemetryPrivacy.reply(command:command,reply:reply),
+            requestHeader:Int(ecu,radix:16).map { String(format:"%03X",$0-8) },responseHeader:ecu)
     }
     private static func decodeData(_ d: [UInt8], pid: Int, key: String) -> [String:Double] {
         func u16(_ i: Int) -> Double { Double(d[i])*256+Double(d[i+1]) }
@@ -126,6 +139,7 @@ extension RecordingDraft {
         prepareLiveEvidence()
         if samples == nil { samples = [] }
         samples?.append(sample)
+        if rebuiltBuffer != nil,let count=samples?.count,count > 256 { samples?.removeFirst(count-256) }
         liveEvidence.accept(sample,recordingID:id,notBefore:startedAt)
         updateLiveDistance(at:max(updatedAt,sample.timestamp))
         updatedAt = max(updatedAt, sample.timestamp)
@@ -133,26 +147,36 @@ extension RecordingDraft {
 }
 
 struct LiveRecordingEvidence {
+    var streaming=false
+    private let epoch=UUID()
+    private var streamSpeed=TelemetryIntegral()
+    private var streamFuel=TelemetryIntegral()
     var sampleCount=0
     var pointCount=0
     var latest:[String:DriveLineObservation]=[:]
     private var speed=DriveLineIntegralAccumulator(maximumValue:DriveLineMetricPolicy.maximumPlausibleSpeedKph)
     private var fuel=DriveLineIntegralAccumulator()
-    var speedIntegral:Double { speed.value }
-    var speedSeconds:Double { speed.coveredSeconds }
-    var fuelIntegral:Double { fuel.value }
-    var fuelSeconds:Double { fuel.coveredSeconds }
+    var speedIntegral:Double { streaming ? streamSpeed.integral:speed.value }
+    var speedSeconds:Double { streaming ? streamSpeed.coveredSeconds:speed.coveredSeconds }
+    var fuelIntegral:Double { streaming ? streamFuel.integral:fuel.value }
+    var fuelSeconds:Double { streaming ? streamFuel.coveredSeconds:fuel.coveredSeconds }
     var gpsKm=0.0
     var gpsSeconds=0.0
     var lastPoint:RoutePoint?
     init() {}
-    mutating func interrupt(at date:Date) { speed.interrupt(at:date);fuel.interrupt(at:date) }
+    mutating func interrupt(at date:Date) { speed.interrupt(at:date);fuel.interrupt(at:date);streamSpeed.interrupt();streamFuel.interrupt() }
     mutating func accept(_ sample:OBDSample,recordingID:UUID,notBefore:Date) {
         sampleCount += 1
         guard sample.timestamp >= notBefore else { return }
         for (key,value) in sample.signals where value.isFinite {
-            if key == "speedKph" { speed.insert(timestamp:sample.timestamp,value:value) }
-            if key == "fuelRateLph" { fuel.insert(timestamp:sample.timestamp,value:value) }
+            if streaming {
+                let time=TelemetryTime(epoch:sample.clockEpoch ?? epoch,monotonic:sample.monotonicTime ?? ProcessInfo.processInfo.systemUptime,wall:sample.timestamp)
+                if key == "speedKph" { streamSpeed.accept(time:time,value:value,source:sample.responseHeader ?? "obd") }
+                if key == "fuelRateLph" { streamFuel.accept(time:time,value:value,source:sample.responseHeader ?? "obd") }
+            } else {
+                if key == "speedKph" { speed.insert(timestamp:sample.timestamp,value:value) }
+                if key == "fuelRateLph" { fuel.insert(timestamp:sample.timestamp,value:value) }
+            }
             if let previous=latest[key],previous.timestamp > sample.timestamp { continue }
             latest[key] = .init(key:key,value:value,timestamp:sample.timestamp,sourceID:"obd",recordingID:recordingID)
         }
@@ -177,6 +201,7 @@ extension RecordingDraft {
         liveEvidence.interrupt(at:date)
     }
     mutating func prepareLiveEvidence() {
+        guard rebuiltBuffer == nil else { return }
         guard liveEvidence.sampleCount != (samples?.count ?? 0) || liveEvidence.pointCount != route.count else { return }
         liveEvidence=LiveRecordingEvidence()
         for boundary in acquisitionInterruptions ?? [] { liveEvidence.interrupt(at:boundary) }
@@ -198,7 +223,7 @@ extension RecordingDraft {
 
 extension RecordingDraft {
     func integral(_ key: String) -> (value: Double, coverage: Double)? {
-        if liveEvidence.sampleCount == (samples?.count ?? 0) {
+        if rebuiltBuffer != nil || liveEvidence.sampleCount == (samples?.count ?? 0) {
             if key == "speedKph" { return liveEvidence.speedSeconds > 0 ? (liveEvidence.speedIntegral,liveEvidence.speedSeconds):nil }
             if key == "fuelRateLph" { return liveEvidence.fuelSeconds > 0 ? (liveEvidence.fuelIntegral,liveEvidence.fuelSeconds):nil }
         }
@@ -220,6 +245,11 @@ extension Trip {
 // GPS motion and accessory availability are never engine-off evidence.
 struct ScannerTripBoundary {
     static let reconnectGrace: TimeInterval = 120
+    static let bluetoothLossGrace:TimeInterval = 10
+    static func vehicleResponding(_ sample:OBDSample)->Bool {
+        sample.isValid && sample.command.hasPrefix("01")
+    }
+    private var observedRunning=false
     private var stoppedSince: Date?
     private var lastZero: Date?
     private var speed: (value: Double, date: Date)?
@@ -235,7 +265,10 @@ struct ScannerTripBoundary {
             if value > 0 { stoppedSince = nil; lastZero = nil }
         }
         guard let rpm = sample.signals["rpm"] else { return false }
-        guard rpm == 0, let speed, speed.value == 0,
+        // Ignition-only/manual recordings have no running-to-stopped transition.
+        // Do not auto-finish them just because the first readings are zero RPM.
+        if rpm >= 400 { observedRunning=true }
+        guard observedRunning, rpm == 0, let speed, speed.value == 0,
               (0...15).contains(sample.timestamp.timeIntervalSince(speed.date)) else {
             stoppedSince = nil; lastZero = nil; return false
         }

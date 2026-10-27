@@ -138,3 +138,41 @@ actor TripStorySnapshotCache {
         recency.removeAll { $0 == key }; recency.append(key)
     }
 }
+
+/// Small history-row results shared by Drives and Fuel. All raw observation
+/// conversion and metric work happens on this actor, never in a SwiftUI body.
+/// Immutable Trip snapshots share their copy-on-write arrays with the library.
+struct HistoryTripPresentation: Sendable {
+    let quality: DriveLineJourneyQuality
+    let fuel: DriveLineTripFuelPoint?
+}
+actor HistoryPresentationCache {
+    static let shared=HistoryPresentationCache()
+    private let capacity:Int
+    private var entries:[UUID:(trip:Trip,value:HistoryTripPresentation)]=[:]
+    private var order:[UUID]=[]
+    private(set) var buildCount=0
+    init(capacity:Int=128) { self.capacity=max(1,capacity) }
+    func presentation(for trip:Trip) throws -> HistoryTripPresentation {
+        try Task.checkCancellation()
+        if let entry=entries[trip.id],entry.trip == trip {
+            touch(trip.id);return entry.value
+        }
+        let recording=trip.sharedRecording
+        let summary=DriveLineJourneyPolicy.summary(for:recording)
+        try Task.checkCancellation()
+        let metrics=summary.metrics
+        let fuel:DriveLineTripFuelPoint?
+        if !trip.isSample,let litres=metrics.tripFuelLitres {
+            let measured=(metrics.coverage.first { $0.key == "fuelRateLph" }?.fraction ?? 0) >= DriveLineMetricPolicy.requiredFuelCoverage
+            fuel=DriveLineTripFuelPoint(recordingID:trip.id,date:recording.endedAt,litres:litres,
+                economyL100Km:metrics.economyL100Km,source:measured ? "Measured fuel rate":"Recorded trip summary")
+        } else { fuel=nil }
+        let value=HistoryTripPresentation(quality:summary.quality,fuel:fuel)
+        entries[trip.id]=(trip,value);touch(trip.id);buildCount += 1
+        while order.count > capacity { entries.removeValue(forKey:order.removeFirst()) }
+        return value
+    }
+    private func touch(_ id:UUID) { order.removeAll { $0 == id };order.append(id) }
+    var count:Int { entries.count }
+}

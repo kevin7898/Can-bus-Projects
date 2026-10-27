@@ -1,0 +1,13 @@
+# Today recording actions and Fuel navigation — build 29
+
+The Today Start recording button previously only opened the Record destination. It now starts a real recording action in place: use the saved scanner, connect and wait for validated engine-running evidence if necessary, or start GPS recording for a vehicle without a scanner. Sample vehicles remain explicitly sample-only. Repeated taps cannot create duplicate drafts. Today shows recording progress and Finish & save, with access to recording options/current-drive details. Manual Finish continues to suppress an immediate automatic duplicate trip; Today explains the paused state.
+
+Automatic MX+ connect/start was already implemented and remains the default for a bound adapter and validated engine-running sample. It is now explained on Today. App launch, accessory availability events and scheduled foreground/background execution can initiate this flow; force-quit or unavailable accessory execution cannot be bypassed. A configured adapter and running app are prerequisites.
+
+At the user's choice, the five primary destinations are Today, Drives, Fuel, Garage and More. Fuel embeds the existing fill-up/history ledger, including filters and add/edit actions, without a redundant modal Done button. Recording details remain reachable from Today and the active-recording header/Live Activity deep link. Existing More fuel access remains available.
+
+Validation: 25 app/scanner lifecycle tests passed, including direct Today GPS start, saved-scanner connect/start, automatic start, manual-stop suppression, identity guards, background continuity and reconnect behavior. Three native UI tests passed for Today direct start/finish, Fuel navigation and history, recording details, and More routes. The shared phone navigation contract test passed. The Fuel screenshot was exported and visually inspected. The final paused-state copy was compiled in the signed physical build, and the focused final UI rerun also passed.
+
+Build 29 uses DEBUG and DRIVELINE_OBD_REBUILD, preserving the rebuilt engine default. In-place installation succeeded and the phone's application inventory independently confirms build 29. Initial launch was blocked by iOS because the phone was locked. After the user unlocked it, launch succeeded; the exact returned PID and executable were independently verified in the process inventory, and app inventory reconfirmed build 29.
+
+Evidence: `/tmp/driveline-car29-tests.log`, `/tmp/driveline-car29-shared.log`, `/tmp/driveline-car29-final-ui.log`, `/tmp/driveline-car-build29.log`, and `/tmp/driveline29-ui-evidence/`. Physical automatic start for this revised Today flow still needs a subsequent car test; simulator lifecycle tests do not establish that acceptance.

@@ -1,0 +1,58 @@
+[
+  {
+    "screen": "More redesign \u2014 dark",
+    "changed_fraction_below_status_bar": 0.0,
+    "size": [
+      1320,
+      2868
+    ]
+  },
+  {
+    "screen": "Phase 7 iPhone archived vehicle \u2014 dark",
+    "changed_fraction_below_status_bar": 0.0,
+    "size": [
+      1320,
+      2868
+    ]
+  },
+  {
+    "screen": "Phase 7 iPhone vehicle detail \u2014 dark",
+    "changed_fraction_below_status_bar": 0.00468299062049062,
+    "size": [
+      1320,
+      2868
+    ]
+  },
+  {
+    "screen": "Phase 7 iPhone Garage \u2014 dark",
+    "changed_fraction_below_status_bar": 0.0,
+    "size": [
+      1320,
+      2868
+    ]
+  },
+  {
+    "screen": "Phase 7 iPhone archived vehicle \u2014 light",
+    "changed_fraction_below_status_bar": 0.0,
+    "size": [
+      1320,
+      2868
+    ]
+  },
+  {
+    "screen": "Phase 7 iPhone vehicle detail \u2014 light",
+    "changed_fraction_below_status_bar": 0.06891008297258297,
+    "size": [
+      1320,
+      2868
+    ]
+  },
+  {
+    "screen": "Phase 7 iPhone Garage \u2014 light",
+    "changed_fraction_below_status_bar": 0.0,
+    "size": [
+      1320,
+      2868
+    ]
+  }
+]

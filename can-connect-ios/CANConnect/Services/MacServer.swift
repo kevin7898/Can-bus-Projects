@@ -36,7 +36,11 @@ enum MacRecording {
         guard trip.scannerTransport == nil || trip.source == .scanner else { throw AppFailure("Scanner transport metadata requires a scanner recording.") }
         guard !trip.isSample else { throw AppFailure("Sample recordings cannot be uploaded as real vehicle data.") }
         guard !trip.route.isEmpty || trip.samples?.isEmpty == false else { throw AppFailure("This recording has no measured scanner samples or GPS points to transfer.") }
-        let bytes = try TripArchive(vehicles:nil,trips:[trip],fills:fills.filter { !$0.isSample && $0.vehicleID == trip.vehicleID },receiptFiles:receiptFiles).encoded()
+        var compatible=trip
+        // Old receivers cannot label matched partial economy. Preserve explicit
+        // metadata, but never place it in their unlabeled whole-trip field.
+        if compatible.matchedEconomy?.isPartial == true { compatible.economy=nil }
+        let bytes = try TripArchive(vehicles:nil,trips:[compatible],fills:fills.filter { !$0.isSample && $0.vehicleID == trip.vehicleID },receiptFiles:receiptFiles).encoded()
         guard bytes.count <= 100*1024*1024 else { throw AppFailure("This recording and its receipts exceed the Mac's 100 MB transfer limit. Export it for manual handling.") }
         return bytes
     }

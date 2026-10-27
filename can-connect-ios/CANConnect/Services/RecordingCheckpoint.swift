@@ -39,10 +39,19 @@ private final class CheckpointInbox:@unchecked Sendable {
 
 extension LocalStore {
     private static let checkpointInbox=CheckpointInbox()
-    func prepareFinalTrip(_ draft:RecordingDraft,endedAt:Date) async ->Trip {
+    func prepareFinalTrip(_ draft:RecordingDraft,endedAt:Date) async throws ->Trip {
         let snapshot=DraftCheckpointSnapshot(draft:draft)
-        return await withCheckedContinuation { continuation in
-            Self.persistenceQueue.async { continuation.resume(returning:snapshot.draft.trip(endedAt:endedAt)) }
+        return try await withCheckedThrowingContinuation { continuation in
+            Self.persistenceQueue.async {
+                do {
+                    var materialized=try snapshot.draft.rebuiltBuffer?.materialize(snapshot.draft) ?? snapshot.draft
+                    materialized.route.removeAll { $0.timestamp > endedAt }
+                    let trip=materialized.trip(endedAt:endedAt)
+                    materialized.updatedAt=endedAt
+                    try snapshot.draft.rebuiltBuffer?.finalize(materialized)
+                    continuation.resume(returning:trip)
+                } catch { continuation.resume(throwing:error) }
+            }
         }
     }
     static let persistenceQueue=DispatchQueue(label:"DriveLine.persistence",qos:.utility)

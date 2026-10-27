@@ -3,6 +3,108 @@ import Network
 import CoreLocation
 
 final class SmokeTests: XCTestCase {
+    @MainActor func testSelectableDisplayUnits() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--obd-replay"];app.launch()
+        XCTAssertTrue(app.buttons["record.finish"].waitForExistence(timeout:10))
+        app.buttons["More"].tap()
+        for _ in 0..<6 where !app.buttons["more.units"].isHittable { app.scrollViews.firstMatch.swipeUp() }
+        app.buttons["more.units"].tap()
+        XCTAssertTrue(app.segmentedControls["units.Pressure"].waitForExistence(timeout:5))
+        for (title,choice) in [("Pressure","psi"),("Distance & speed","mi"),("Temperature","°F"),("Fuel volume","US gal"),("Fuel economy","mpg (US)")] {
+            app.segmentedControls["units."+title].buttons[choice].tap()
+        }
+        app.buttons["Done"].tap()
+        app.buttons["Today"].tap();app.buttons["today.recording-details"].tap()
+        XCTAssertTrue(app.staticTexts["mph"].waitForExistence(timeout:5))
+        for _ in 0..<5 where !app.segmentedControls["boost.units"].isHittable { app.scrollViews.firstMatch.swipeUp() }
+        app.segmentedControls["boost.units"].buttons["bar"].tap()
+        XCTAssertTrue(app.staticTexts["Gauge boost"].exists)
+        let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Selectable units";shot.lifetime = .keepAlways;add(shot)
+        app.buttons["record.finish"].tap()
+        // Restore simulator preferences for tests that intentionally assert metric defaults.
+        app.buttons["More"].tap()
+        for _ in 0..<6 where !app.buttons["more.units"].isHittable { app.scrollViews.firstMatch.swipeUp() }
+        app.buttons["more.units"].tap()
+        for (title,choice) in [("Pressure","psi"),("Distance & speed","km"),("Temperature","°C"),("Fuel volume","L"),("Fuel economy","L/100 km")] {
+            app.segmentedControls["units."+title].buttons[choice].tap()
+        }
+    }
+
+    @MainActor func testInstalledHistoryTabResponsiveness() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Opt-in physical-device check against the installed private library")
+        #else
+        let app=XCUIApplication();app.launchArguments=[];app.launch()
+        XCTAssertTrue(app.buttons["Today"].waitForExistence(timeout:60))
+        for pass in 1...2 {
+            for title in ["Drives","Fuel","Garage","Today"] {
+                let start=ContinuousClock.now
+                app.buttons[title].tap()
+                XCTAssertTrue(app.buttons[title].isSelected)
+                let elapsed=ContinuousClock.now-start
+                print("HISTORY_TAB pass=\(pass) tab=\(title) duration=\(elapsed)")
+                XCTAssertLessThan(elapsed,.seconds(3),"Tab navigation stalled")
+            }
+        }
+        #endif
+    }
+
+    @MainActor func testTodayStartsRecordingDirectlyAndFuelIsMiddleDestination() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing"];app.launch()
+        let start=app.buttons["today.start-recording"]
+        XCTAssertTrue(start.waitForExistence(timeout:10));start.tap()
+        XCTAssertTrue(app.buttons["Today"].isSelected)
+        XCTAssertTrue(app.buttons["View current recording"].waitForExistence(timeout:5))
+        XCTAssertEqual(start.label,"Finish & save")
+        app.buttons["Fuel"].tap()
+        XCTAssertTrue(app.buttons["Fuel"].isSelected)
+        XCTAssertTrue(app.staticTexts["Purchased fuel"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["Done"].exists)
+        let scroll=app.scrollViews.firstMatch
+        XCTAssertTrue(app.buttons["fuel.add-fill"].isHittable,"Fill-up action must be visible without scrolling")
+        app.buttons["fuel.add-fill"].tap()
+        XCTAssertTrue(app.navigationBars["Add Fuel"].waitForExistence(timeout:5))
+        app.buttons["Done"].tap()
+        for _ in 0..<8 where !app.buttons["Show recent drives"].isHittable { scroll.swipeUp() }
+        XCTAssertTrue(app.buttons["Show recent drives"].isHittable)
+        app.buttons["Show recent drives"].tap()
+        XCTAssertTrue(app.staticTexts["No recorded trip fuel is available in this selection."].waitForExistence(timeout:5))
+        let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Fuel primary destination";shot.lifetime = .keepAlways;add(shot)
+        app.buttons["Today"].tap();app.buttons["today.start-recording"].tap()
+        XCTAssertTrue(app.staticTexts["Recording saved on this iPhone"].waitForExistence(timeout:10))
+    }
+
+    @MainActor func testRebuiltReplayUsesExistingRecordingScreenAndSaves() {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--obd-replay"];app.launch()
+        XCTAssertTrue(app.staticTexts["Recording"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.staticTexts["60"].waitForExistence(timeout:5))
+        for _ in 0..<5 where !app.staticTexts["1726"].exists { app.scrollViews.firstMatch.swipeUp() }
+        XCTAssertTrue(app.staticTexts["1726"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["Observation time unavailable"].exists)
+        XCTAssertEqual(app.maps.count,0,"Recording page must not create a live map")
+        let reserve=app.steppers["fuel.reserve"]
+        XCTAssertTrue(reserve.exists)
+        XCTAssertEqual(reserve.value as? String,"5")
+        reserve.buttons.element(boundBy:1).tap()
+        XCTAssertEqual(reserve.value as? String,"5.5")
+        let attachment=XCTAttachment(screenshot:app.screenshot());attachment.name="Rebuilt engine synthetic replay";attachment.lifetime = .keepAlways;add(attachment)
+        XCTAssertTrue(app.buttons["Finish & save"].exists);app.buttons["Finish & save"].tap()
+        XCTAssertTrue(app.staticTexts["Recording saved on this iPhone"].waitForExistence(timeout:10))
+    }
+
+    @MainActor func testIgnitionOnlyAutoRecordingSurvivesHomeAndReturn() async throws {
+        let app=XCUIApplication();app.launchArguments=["--ui-testing","--obd-replay","--obd-ignition-only"];app.launch()
+        XCTAssertTrue(app.buttons["record.finish"].waitForExistence(timeout:10),"Valid zero-RPM ECU data must start recording automatically")
+        XCUIDevice.shared.press(.home)
+        try await Task.sleep(for:.seconds(8))
+        app.activate()
+        XCTAssertTrue(app.buttons["record.finish"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["record.start"].exists)
+        let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Ignition-only recording after Home Screen return";shot.lifetime = .keepAlways;add(shot)
+        app.buttons["record.finish"].tap()
+        XCTAssertTrue(app.staticTexts["Recording saved on this iPhone"].waitForExistence(timeout:10))
+    }
+
     @MainActor func testStaleObservationRemainsStaleThroughNativeRedraws() {
         let app=XCUIApplication();app.launchArguments=["--ui-testing","--obd-freshness-fixture"];app.launch()
         let stale=app.staticTexts.containing(NSPredicate(format:"label CONTAINS[c] %@","Stale")).firstMatch
@@ -31,7 +133,7 @@ final class SmokeTests: XCTestCase {
     func testDriveLedgerPrimaryDestinationsAndMoreRoutesAreReachable() {
         let app=XCUIApplication();app.launchArguments=["--ui-testing"];app.launch()
         XCTAssertTrue(app.staticTexts["Sample vehicle selected"].waitForExistence(timeout:10))
-        for title in ["Today","Drives","Record","Garage","More"] {
+        for title in ["Today","Drives","Fuel","Garage","More"] {
             let tab=app.buttons[title]
             XCTAssertTrue(tab.waitForExistence(timeout:5),"Missing \(title) destination")
             tab.tap();XCTAssertTrue(tab.isSelected,"\(title) did not become selected")
@@ -100,7 +202,7 @@ final class SmokeTests: XCTestCase {
     func testTabsPagesAndSampleRecording() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.staticTexts["Sample vehicle selected"].waitForExistence(timeout:10))
-        app.buttons["Record"].tap()
+        app.buttons["Today"].tap();app.buttons["today.recording-details"].tap()
         XCTAssertTrue(app.buttons["Start recording"].waitForExistence(timeout:5))
         app.buttons["Start recording"].tap()
         XCTAssertTrue(app.buttons["Finish & save"].waitForExistence(timeout:3))
@@ -109,7 +211,7 @@ final class SmokeTests: XCTestCase {
         app.buttons["Finish & save"].tap()
         app.buttons["Drives"].tap()
         XCTAssertTrue(app.staticTexts["Sample drive"].waitForExistence(timeout:5))
-        app.buttons["Record"].tap()
+        app.buttons["Today"].tap();app.buttons["today.recording-details"].tap()
         XCTAssertTrue(app.buttons["Start recording"].waitForExistence(timeout:3))
         app.buttons["More"].tap(); app.buttons["more.vehicle-data"].tap(); app.buttons["Logbook"].tap()
         XCTAssertTrue(app.buttons["Log a fill-up"].waitForExistence(timeout:3))
@@ -306,7 +408,7 @@ final class SmokeTests: XCTestCase {
     func testSootCardExplainsRegenTriggerWithoutChangingCardSize() async {
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
         XCTAssertTrue(app.staticTexts["Sample vehicle selected"].waitForExistence(timeout:10))
-        app.buttons["Record"].tap()
+        app.buttons["Today"].tap();app.buttons["today.recording-details"].tap()
         app.buttons["Start recording"].tap()
         let scroll=app.scrollViews["record.content"]
         let explanation=app.staticTexts["Regen trigger is a normalized ECU trigger indicator, never physical DPF fullness."]
@@ -359,6 +461,11 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(app.textFields["connection.port"].exists)
         app.buttons["Connect selected vehicle"].tap()
         XCTAssertTrue(app.staticTexts["Pair and choose your OBDLink MX+, then connect."].waitForExistence(timeout:5))
+        let probe=app.buttons["scanner.odometer.probe"]
+        for _ in 0..<3 where !probe.isHittable { app.swipeUp() }
+        XCTAssertTrue(probe.isHittable,"VW discovery must be reachable in scanner settings")
+        probe.tap()
+        XCTAssertFalse(app.buttons["scanner.odometer.share"].exists,"Missing adapter must not manufacture results")
     }
 
     @MainActor

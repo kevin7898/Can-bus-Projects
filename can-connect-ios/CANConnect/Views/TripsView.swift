@@ -37,6 +37,7 @@ private enum JourneyQualityFilter:String,CaseIterable,Identifiable {
 }
 
 struct TripsView:View {
+    @UnitPreferences private var units
     @EnvironmentObject private var store:AppStore
     @Binding var filter:Int
     @Binding var page:Int
@@ -46,12 +47,15 @@ struct TripsView:View {
     @State private var sourceFilter:JourneySourceFilter = .all
     @State private var purpose:DriveLineJourneyPurpose?
     @State private var quality:JourneyQualityFilter = .all
+    @State private var qualities:[UUID:DriveLineJourneyQuality]=[:]
+    private struct QualityRequest:Equatable { var trips:[Trip];var enabled:Bool }
+    private var loadingQuality:Bool { quality != .all && store.state.trips.contains { qualities[$0.id] == nil } }
 
     private var filteredTrips:[Trip] {
         store.state.trips.sorted { $0.startedAt > $1.startedAt }.filter { trip in
             let annotation=store.journeyAnnotation(for:trip.id)
-            let sourceMatch=sourceFilter == .all || trip.sharedRecording.sourceIDs.contains(sourceFilter.rawValue)
-            let qualityMatch=quality == .all || DriveLineJourneyPolicy.summary(for:trip.sharedRecording).quality.rawValue == quality.rawValue
+            let sourceMatch=sourceFilter == .all || trip.historySourceIDs.contains(sourceFilter.rawValue)
+            let qualityMatch=quality == .all || qualities[trip.id]?.rawValue == quality.rawValue
             let vehicleMatch=vehicleID == nil || trip.vehicleID == vehicleID
             let dateMatch=dateFilter.interval.map { trip.startedAt >= Date().addingTimeInterval(-$0) } ?? true
             return sourceMatch && qualityMatch && vehicleMatch && dateMatch && (purpose == nil || annotation.purpose == purpose)
@@ -85,9 +89,10 @@ struct TripsView:View {
             HStack {
                 Text("\(trips.count) journeys").font(.system(size:14,weight:.medium))
                 Spacer()
-                Text("\(trips.filter{!$0.isSample}.reduce(0){$0+$1.distanceKM}.text()) km real history").captionStyle()
+                Text("\(units.text(trips.filter{!$0.isSample}.reduce(0){$0+$1.distanceKM},"km")) real history").captionStyle()
             }
-            if trips.isEmpty {
+            if loadingQuality { ProgressView("Checking journey quality…") }
+            else if trips.isEmpty {
                 EmptyStateCard(icon:"point.topleft.down.to.point.bottomright.curvepath",title:"No journeys match",message:"Change a filter or record a drive. Sample recordings remain labelled and never count toward real totals.")
             } else {
                 ScrollView {
@@ -100,6 +105,17 @@ struct TripsView:View {
                 }
             }
         }.onAppear { if vehicleID == nil { vehicleID=store.state.selectedVehicleID } }
+            .task(id:QualityRequest(trips:store.state.trips,enabled:quality != .all)) {
+                guard quality != .all else { return }
+                qualities=[:]
+                do {
+                    var result:[UUID:DriveLineJourneyQuality]=[:]
+                    for trip in store.state.trips {
+                        result[trip.id]=try await HistoryPresentationCache.shared.presentation(for:trip).quality
+                    }
+                    try Task.checkCancellation();qualities=result
+                } catch { /* A changed filter cancels the obsolete request. */ }
+            }
             .sheet(item:$selected) { TripStoryView(trip:$0) }
     }
 
@@ -110,11 +126,12 @@ struct TripsView:View {
 }
 
 private struct JourneyRow:View {
+    @UnitPreferences private var units
     let trip:Trip
     let annotation:DriveLineJourneyAnnotation
     let transfer:TransferItem?
     let action:()->Void
-    private var summary:DriveLineJourneySummary { DriveLineJourneyPolicy.summary(for:trip.sharedRecording) }
+    @State private var quality:DriveLineJourneyQuality?
     var body:some View {
         Button(action:action) {
             VStack(alignment:.leading,spacing:10) {
@@ -128,7 +145,7 @@ private struct JourneyRow:View {
                     Image(systemName:"chevron.right").font(.caption).foregroundStyle(Palette.tertiaryText)
                 }
                 HStack(spacing:12) {
-                    Label("\(trip.distanceKM.text()) km",systemImage:"road.lanes")
+                    Label("\(units.text(trip.distanceKM,"km",digits:1))",systemImage:"road.lanes")
                     Label(trip.durationText,systemImage:"clock")
                     if let purpose=annotation.purpose { Label(purpose.title,systemImage:"tag") }
                 }.font(.system(size:11)).foregroundStyle(Palette.secondaryText)
@@ -147,11 +164,18 @@ private struct JourneyRow:View {
         }.buttonStyle(.plain).accessibilityIdentifier("journey.row.\(trip.id.uuidString)")
     }
     private var sourceTitles:[String] {
-        trip.sharedRecording.sourceIDs.map { id in switch id { case "gps":"GPS";case "obd":"OBD";case "synthetic":"Synthetic";default:"Imported" } }
+        trip.historySourceIDs.map { id in switch id { case "gps":"GPS";case "obd":"OBD";case "synthetic":"Synthetic";default:"Imported" } }
     }
     private var qualityBadge:some View {
-        let state:DriveLineSemanticState=summary.quality == .complete ? .ready:(summary.quality == .unavailable ? .unavailable:.stale)
-        return StatusPill(state:state,text:summary.quality.title)
+        let state:DriveLineSemanticState=quality == .complete ? .ready:(quality == nil ? .processing:(quality == .unavailable ? .unavailable:.stale))
+        return StatusPill(state:state,text:quality?.title ?? "Checking…")
+            .task(id:trip) {
+                quality=nil
+                do {
+                    let result=try await HistoryPresentationCache.shared.presentation(for:trip)
+                    try Task.checkCancellation();quality=result.quality
+                } catch { }
+            }
     }
 }
 
@@ -164,6 +188,7 @@ struct JSONDocument:FileDocument {
 }
 
 struct TripStoryView:View {
+    @UnitPreferences private var units
     let trip:Trip
     @EnvironmentObject private var store:AppStore
     @Environment(\.dismiss) private var dismiss
@@ -198,8 +223,8 @@ struct TripStoryView:View {
                 Slider(value:$playbackSeconds,in:0...max(0.001,trip.duration)).accessibilityLabel("Shared trip playback position")
                 HStack { Text(selectedDate.formatted(date:.omitted,time:.standard)).monospacedDigit();Spacer();Text("\(Int(playbackSeconds))s of \(Int(trip.duration))s").captionStyle() }
             }.padding(12).background(Palette.fieldSurface,in:RoundedRectangle(cornerRadius:12))
-            HStack { Metric(title:summary.metrics.distanceIsPartial ? "Partial observed distance":"Measured distance",value:summary.metrics.distanceKm?.text() ?? "—",unit:"km");Metric(title:"Duration",value:trip.durationText) }
-            HStack { Metric(title:"Trip economy",value:summary.metrics.economyL100Km?.text() ?? "—",unit:"L/100 km");Metric(title:"Measured trip fuel",value:summary.metrics.tripFuelLitres?.text(2) ?? "—",unit:"L") }
+            HStack { Metric(title:summary.metrics.distanceIsPartial ? "Partial observed distance":"Measured distance",value:units.number(summary.metrics.distanceKm,"km",digits:1),unit:units.label("km"));Metric(title:"Duration",value:trip.durationText) }
+            HStack { Metric(title:summary.metrics.matchedEconomy?.isPartial == true ? "Partial trip economy":"Trip economy",value:units.number(summary.metrics.economyL100Km,"L/100 km",digits:1),unit:units.label("L/100 km"));Metric(title:"Measured trip fuel",value:units.number(summary.metrics.tripFuelLitres,"L",digits:2),unit:units.label("L")) }
             InfoNote(text:summary.statement,icon:"checkmark.shield")
             SectionCard(title:"Start and finish",icon:"mappin.and.ellipse") {
                 DataRow(label:"Start",value:annotation.startPlace ?? "Place unavailable")
@@ -309,11 +334,12 @@ struct TripStoryView:View {
     }
     private func valueText(_ key:String,_ value:Double)->String {
         let normalized=key == "dpfRegenTrigger" ? DriveLineMetricPolicy.normalizedDPFRegenTrigger(value) ?? value:value
-        return "\(normalized.text()) \(OBDDecoder.labels[key]?.unit ?? "")"
+        return units.text(normalized,OBDDecoder.labels[key]?.unit ?? "")
     }
 }
 
 private struct PhoneSignalChart:View {
+    @UnitPreferences private var units
     let trip:Trip
     let choice:HistoricalSignalChoice
     let events:[DriveLineTripEvent]
@@ -327,13 +353,13 @@ private struct PhoneSignalChart:View {
                 HStack {
                     SourceBadge(source:series.provenance == .derived ? "Derived · \(series.algorithmIdentifier ?? "policy")":(series.coverage?.sourceIDs.joined(separator:", ").uppercased() ?? "Measured"),verified:true)
                     if let coverage=series.coverage { Text("\(Int((coverage.fraction*100).rounded()))% coverage").captionStyle() }
-                    Spacer();Text(choice.unit).captionStyle()
+                    Spacer();Text(units.label(choice.unit)).captionStyle()
                 }
                 if series.segments.flatMap({$0}).isEmpty { Text("No recorded \(choice.title.lowercased()) observations").captionStyle().frame(maxWidth:.infinity,minHeight:80) }
                 else {
                     Chart {
                         ForEach(Array(chartData.renderedSegments.enumerated()),id:\.offset) { segment,points in
-                            ForEach(points) { point in LineMark(x:.value("Time",point.timestamp),y:.value(choice.unit,point.value),series:.value("Observed segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt) }
+                            ForEach(points) { point in LineMark(x:.value("Time",point.timestamp),y:.value(units.label(choice.unit),units.value(point.value,from:choice.unit)),series:.value("Observed segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt) }
                         }
                         ForEach(events.filter{$0.severity == .attention}) { event in RuleMark(x:.value("Evidence event",event.timestamp)).foregroundStyle(Palette.recordingFault.opacity(0.55)).lineStyle(StrokeStyle(lineWidth:1,dash:[2,3])) }
                         RuleMark(x:.value("Shared cursor",trip.startedAt.addingTimeInterval(playbackSeconds))).foregroundStyle(Palette.tertiaryText).lineStyle(StrokeStyle(lineWidth:1,dash:[3]))
@@ -447,6 +473,7 @@ struct SignalsOverviewView:View {
 }
 
 private struct PhoneSignalOverviewRow:View {
+    @UnitPreferences private var units
     let trip:Trip
     let descriptor:DriveLineSignalDescriptor
     let action:()->Void
@@ -484,8 +511,8 @@ private struct PhoneSignalOverviewRow:View {
     private var valueSummary:some View {
         VStack(alignment:.leading,spacing:5) {
             HStack(alignment:.firstTextBaseline,spacing:4) {
-                Text(latestPoint?.value.text(2) ?? "—").font(.title3.monospacedDigit())
-                Text(descriptor.unit ?? "unit unavailable").captionStyle()
+                Text(units.number(latestPoint?.value,descriptor.unit ?? "",digits:2)).font(.title3.monospacedDigit())
+                Text(units.label(descriptor.unit ?? "unit unavailable")).captionStyle()
             }
             SourceBadge(source:stats.sourceIDs.isEmpty ? "Source unavailable":stats.sourceIDs.joined(separator:", "),verified:!stats.sourceIDs.isEmpty)
             Text(series.coverage.map{"\(Int(($0.fraction*100).rounded()))% coverage · \(stats.observationCount) observations"} ?? "Coverage unavailable")
@@ -516,6 +543,7 @@ private struct SignalSparkline:View {
 }
 
 private struct PhoneSignalDetailView:View {
+    @UnitPreferences private var units
     let trip:Trip
     let descriptor:DriveLineSignalDescriptor
     @Environment(\.dismiss) private var dismiss
@@ -602,8 +630,8 @@ private struct PhoneSignalDetailView:View {
                 Chart {
                     ForEach(Array(renderedSegments.enumerated()),id:\.offset) { segment,points in
                         ForEach(points) { point in
-                            LineMark(x:.value("Elapsed seconds",point.timestamp.timeIntervalSince(trip.startedAt)),y:.value(descriptor.unit ?? "Recorded value",point.value),series:.value("Recorded segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt)
-                            PointMark(x:.value("Elapsed seconds",point.timestamp.timeIntervalSince(trip.startedAt)),y:.value(descriptor.unit ?? "Recorded value",point.value)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt).symbolSize(8)
+                            LineMark(x:.value("Elapsed seconds",point.timestamp.timeIntervalSince(trip.startedAt)),y:.value(units.label(descriptor.unit ?? "Recorded value"),units.value(point.value,from:descriptor.unit ?? "")),series:.value("Recorded segment",segment)).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt)
+                            PointMark(x:.value("Elapsed seconds",point.timestamp.timeIntervalSince(trip.startedAt)),y:.value(units.label(descriptor.unit ?? "Recorded value"),units.value(point.value,from:descriptor.unit ?? ""))).foregroundStyle(series.provenance == .derived ? Palette.fuelAttention:Palette.cobalt).symbolSize(8)
                         }
                     }
                     RuleMark(x:.value("Shared cursor",cursorSeconds)).foregroundStyle(Palette.primaryText).lineStyle(StrokeStyle(lineWidth:1,dash:[3]))
@@ -633,7 +661,7 @@ private struct PhoneSignalDetailView:View {
         guard let point=cursor.gpsPoint else { return nil }
         return RoutePoint(latitude:point.latitude,longitude:point.longitude,timestamp:point.timestamp,accuracy:point.horizontalAccuracyM ?? 0,speed:point.speedMps)
     }
-    private func detailMetric(_ title:String,_ value:Double?)->some View { Metric(title:title,value:value?.text(2) ?? "—",unit:descriptor.unit ?? "") }
+    private func detailMetric(_ title:String,_ value:Double?)->some View { Metric(title:title,value:units.number(value,descriptor.unit ?? "",digits:2),unit:units.label(descriptor.unit ?? "")) }
     private func detailText(_ title:String,_ value:String)->some View { Metric(title:title,value:value) }
     private func zoom(_ factor:Double) {
         let duration=max(0.001,trip.duration),span=max(0.001,visibleEnd-visibleStart),half=min(duration/2,span*factor/2),centre=min(max(cursorSeconds,half),duration-half)

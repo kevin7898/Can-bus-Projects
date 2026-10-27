@@ -150,6 +150,7 @@ private struct LegacyVehicleSetupView: View {
     private func cancel() { focusedField = nil; work?.cancel(); work = nil; scanner.disconnect(); busy = false }
 }
 struct VehicleSetupView: View {
+    private let inputUnits:DisplayUnits
     @EnvironmentObject private var store:AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var profile:VehicleProfile
@@ -180,11 +181,12 @@ struct VehicleSetupView: View {
         }
         #endif
         let vehicle=existing ?? fixture
+        let units=DisplayUnits.saved();inputUnits=units
         _profile=State(initialValue:vehicle);originalID=vehicle.id
         _year=State(initialValue:vehicle.year.map(String.init) ?? "")
         _vin=State(initialValue:vehicle.vin ?? "")
-        _odometer=State(initialValue:vehicle.odometerKM.map{$0.text(0)} ?? "")
-        _tank=State(initialValue:vehicle.tankLitres.map{$0.text()} ?? "")
+        _odometer=State(initialValue:vehicle.odometerKM.map{String(units.value($0,from:"km"))} ?? "")
+        _tank=State(initialValue:vehicle.tankLitres.map{String(units.value($0,from:"L"))} ?? "")
         let settings=vehicle.scannerConnection
         _scannerKind=State(initialValue:settings?.kind ?? .wifi)
         _host=State(initialValue:settings?.host ?? "")
@@ -245,7 +247,7 @@ struct VehicleSetupView: View {
         field("Transmission · optional","Unknown",$profile.transmission,"vehicle.transmission")
         Picker("Fuel / power",selection:$profile.fuel) { ForEach(FuelKind.allCases) { Text($0.title).tag($0) } }.pickerStyle(.menu)
         Picker("Preferred units",selection:$profile.preferredUnits) { Text("Metric").tag(DriveLineUnitSystem.metric);Text("US customary").tag(DriveLineUnitSystem.usCustomary);Text("Imperial").tag(DriveLineUnitSystem.imperial) }.pickerStyle(.menu)
-        HStack(alignment:.top,spacing:12) { field("Odometer · km","Optional",$odometer,"vehicle.odometer",.decimalPad);field("Tank · L","Optional",$tank,"vehicle.tank",.decimalPad) }
+        HStack(alignment:.top,spacing:12) { field("Odometer · \(inputUnits.label("km"))","Optional",$odometer,"vehicle.odometer",.decimalPad);field("Tank · \(inputUnits.label("L"))","Optional",$tank,"vehicle.tank",.decimalPad) }
     } }
     private var scannerStage:some View { VStack(alignment:.leading,spacing:14) {
         Toggle("iPhone GPS",isOn:$gpsSource).accessibilityIdentifier("onboarding.source.gps")
@@ -321,7 +323,7 @@ struct VehicleSetupView: View {
         if !year.isEmpty,Int(year)==nil { throw AppFailure("Check the model year.") }
         profile.year=Int(year)
         func number(_ text:String)throws->Double? { if text.isEmpty{return nil};guard let value=Double(text.replacingOccurrences(of:",",with:".")) else { throw AppFailure("Check odometer and tank size.") };return value }
-        profile.odometerKM=try number(odometer);profile.tankLitres=try number(tank)
+        profile.odometerKM=try number(odometer).map { inputUnits.canonical($0,from:"km") };profile.tankLitres=try number(tank).map { inputUnits.canonical($0,from:"L") }
         _=try profile.validated(requireIdentity:requireIdentity)
     }
     private func prepareScannerSettings() throws {

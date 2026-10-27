@@ -18,10 +18,12 @@ public enum DriveLineMacDestination: String, CaseIterable, Identifiable, Sendabl
 public enum DriveLinePhoneDestination: String, CaseIterable, Identifiable, Sendable {
     case today
     case drives
+    case fuel
     case record
     case garage
     case more
 
+    public static let primary:[Self] = [.today,.drives,.fuel,.garage,.more]
     public var id:String { rawValue }
     public var title:String { rawValue.capitalized }
 }

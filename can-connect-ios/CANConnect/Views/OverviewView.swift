@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct OverviewView: View {
+    @UnitPreferences private var units
     @EnvironmentObject private var store: AppStore
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Binding var page: Int
@@ -59,11 +60,18 @@ struct OverviewView: View {
         let actions=Group {
             AppButton(title:"Add fill-up",icon:"fuelpump.fill") { addingFill=true }
                 .disabled(!canLogFill).accessibilityIdentifier("today.add-fill")
-            AppButton(title:"Start a recording",icon:"record.circle",secondary:true) { store.selectedTab = .record }
+            AppButton(title:store.isFinishing ? "Saving…":(store.pendingGPS ? "Cancel GPS request":(store.recording ? "Finish & save":(store.scanner.connecting ? "Connecting scanner…":"Start recording"))),
+                      icon:store.recording ? "stop.fill":"record.circle",secondary:true) {
+                if store.pendingGPS { store.cancelGPS() }
+                else if store.recording { store.finishRecording() }
+                else { store.startRecordingFromToday() }
+            }.disabled(store.isFinishing || (!store.recording && store.scanner.connecting))
                 .accessibilityIdentifier("today.start-recording")
         }
         if dynamicTypeSize.isAccessibilitySize { VStack(spacing:10) { actions } }
         else { HStack(spacing:10) { actions } }
+        Button(store.recording ? "View current recording":"Recording options",systemImage:"waveform.path.ecg") { store.selectedTab = .record }
+            .accessibilityIdentifier("today.recording-details")
         if !canLogFill {
             Text(store.activeVehicle == nil ? "Choose a vehicle before logging fuel.":"Select a real vehicle before logging fuel.")
                 .font(.caption).foregroundStyle(Palette.secondaryText)
@@ -82,10 +90,10 @@ struct OverviewView: View {
                 }
             } else {
                 LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:10) {
-                    MetricTile(title:"Distance",value:presentation.todayDistanceKM.text(1),unit:"km",source:"Recorded",showsFreshness:false)
+                    MetricTile(title:"Distance",value:units.number(presentation.todayDistanceKM,"km",digits:1),unit:units.label("km"),source:"Recorded",showsFreshness:false)
                     MetricTile(title:"Duration",value:duration(presentation.todayDuration),source:"Recorded",showsFreshness:false)
                     MetricTile(title:"Drives",value:String(presentation.todayDriveCount),source:"Saved locally",showsFreshness:false)
-                    MetricTile(title:"Trip fuel",value:presentation.todayFuelLitres?.text(2),unit:"L",
+                    MetricTile(title:"Trip fuel",value:units.number(presentation.todayFuelLitres,"L",digits:2),unit:units.label("L"),
                                state:presentation.todayFuelLitres == nil ? .unavailable:.ready,source:"Measured",showsFreshness:false)
                 }
                 if presentation.todayFuelDriveCount < presentation.todayDriveCount {
@@ -104,7 +112,7 @@ struct OverviewView: View {
                         HStack { Text(trip.name).font(.headline);Spacer();Image(systemName:"chevron.right") }
                         Text(trip.startedAt.formatted(date:.abbreviated,time:.shortened)).font(.caption).foregroundStyle(Palette.secondaryText)
                         if !trip.route.isEmpty { NativeRouteMap(route:trip.route).frame(height:150).clipShape(RoundedRectangle(cornerRadius:Palette.Radius.medium)) }
-                        HStack { Text("\(trip.distanceKM.text(1)) km");Spacer();Text(duration(trip.duration)) }.font(.subheadline).monospacedDigit()
+                        HStack { Text("\(units.text(trip.distanceKM,"km",digits:1))");Spacer();Text(duration(trip.duration)) }.font(.subheadline).monospacedDigit()
                         SourceBadge(source:trip.source.title,verified:true)
                     }.foregroundStyle(Palette.primaryText).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityIdentifier("today.latest-drive")
@@ -124,7 +132,7 @@ struct OverviewView: View {
                         Text(fill.stationName ?? "Fuel fill").font(.subheadline.weight(.semibold))
                         Text(fill.date.formatted(date:.abbreviated,time:.shortened)).font(.caption).foregroundStyle(Palette.secondaryText)
                     }
-                    Spacer();Text("\(fill.litres.text(1)) L").font(.headline).monospacedDigit()
+                    Spacer();Text("\(units.text(fill.litres,"L",digits:1))").font(.headline).monospacedDigit()
                 }
                 Text("Purchased fill quantity; it is never counted as trip fuel consumed.").font(.caption).foregroundStyle(Palette.secondaryText)
                 Button("Open fuel logbook") { fuelLogbook=true }.font(.subheadline.weight(.semibold)).accessibilityIdentifier("today.fuel-logbook")
@@ -140,9 +148,19 @@ struct OverviewView: View {
     private var canLogFill:Bool { store.activeVehicle != nil && store.activeVehicle?.isSample != true && !store.libraryReadOnly }
 
     private var readinessTitle:String {
+        if store.isFinishing { return "Saving recording" }
+        if store.recording { return "Recording · \(store.timerText)" }
+        if store.pendingGPS { return "Starting GPS recording" }
+        if store.scanner.connecting { return "Connecting scanner" }
+        if store.activeVehicle?.scannerConnection != nil { return store.automaticScannerRecordingEnabled ? "Automatic recording ready":"Recording paused" }
         switch presentation.readiness { case .ready:return "Ready to record";case .needsVehicle:return "Choose a vehicle";case .sampleVehicle:return "Sample vehicle selected" }
     }
     private var readinessMessage:String {
+        if store.recording { return "Your drive is recording locally. You can lock your phone; Finish saves the drive." }
+        if store.activeVehicle?.scannerConnection != nil {
+            if !store.automaticScannerRecordingEnabled { return "This drive has finished. Start recording begins another drive; automatic recording resumes when the scanner reconnects." }
+            return "With your configured MX+ connected, recording starts when the selected vehicle returns valid vehicle data. Open DriveLine before driving; Start recording also connects your saved scanner."
+        }
         switch presentation.readiness {
         case .ready:return "Recordings save locally first. Scanner telemetry is optional."
         case .needsVehicle:return "Add or select a real vehicle before recording."
