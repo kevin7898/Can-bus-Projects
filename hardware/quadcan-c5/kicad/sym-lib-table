@@ -1,0 +1,3 @@
+(sym_lib_table
+  (lib (name "QuadCAN")(type "KiCad")(uri "${KIPRJMOD}/QuadCAN.kicad_sym")(options "")(descr "QuadCAN-C5 parts"))
+)

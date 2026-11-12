@@ -1,0 +1,3 @@
+(fp_lib_table
+  (lib (name "QuadCAN")(type "KiCad")(uri "${KIPRJMOD}/QuadCAN.pretty")(options "")(descr "QuadCAN-C5 footprints"))
+)

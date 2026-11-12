@@ -8,10 +8,8 @@ for m in re.finditer(r'\(net \(code "?\d+"?\) \(name "([^"]+)"\)(.*?)\)\s*(?=\(n
     name = m.group(1).lstrip("/")
     nodes = set(re.findall(r'\(node \(ref "([^"]+)"\) \(pin "([^"]+)"\)', m.group(2)))
     nodes = {n for n in nodes if not n[0].startswith("#")}
-    if name.startswith("unconnected-") or name.startswith("Net-("):
-        if nodes:
-            got.setdefault(name, set()).update(nodes)
-        continue
+    if name.startswith("unconnected-"):
+        continue  # pins the design deliberately leaves open
     got.setdefault(name, set()).update(nodes)
 want = {k: set(v) for k, v in nets().items()}
 bad = 0
