@@ -23,9 +23,11 @@ from collections import defaultdict
 TICK_US = 0.5
 
 
-def _varint(b, j):
+def _varint(b, j, end):
     v = s = 0
     while True:
+        if j >= end:
+            raise ValueError(f"truncated varint at {j}")
         c = b[j]
         j += 1
         v |= (c & 0x7F) << s
@@ -43,16 +45,29 @@ def frames(path, tick_us=TICK_US):
     while i < len(b):
         if b[i:i + 4] != b"CHNK":
             raise ValueError(f"bad chunk magic at {i}")
+        if i + 28 > len(b):
+            raise ValueError(f"truncated chunk header at {i}")
         ln, cnt, _crc, ts = struct.unpack_from("<IIIQ", b, i + 4)
         j, end, off, n = i + 28, i + 28 + ln, 0, 0
+        if end > len(b):
+            raise ValueError(
+                f"chunk at {i}: payload needs {ln} bytes, file has {len(b) - j}")
         while j < end:
-            dt, j = _varint(b, j)
+            dt, j = _varint(b, j, end)
             off += dt
+            if j >= end:
+                raise ValueError(f"chunk at {i}: truncated record at {j}")
             fl = b[j]
             j += 1
-            cid, j = _varint(b, j)
+            cid, j = _varint(b, j, end)
+            if j >= end:
+                raise ValueError(f"chunk at {i}: truncated record at {j}")
             dlc = b[j]
             j += 1
+            if j + dlc > end:
+                raise ValueError(
+                    f"chunk at {i}: frame 0x{cid:x} declares {dlc} bytes, "
+                    f"{end - j} left")
             yield (ts + off * tick_us) / 1e6, fl, cid, b[j:j + dlc]
             j += dlc
             n += 1
