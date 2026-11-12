@@ -7,7 +7,7 @@ import sys
 
 import pcbnew
 
-LAYER = {"F": pcbnew.F_Cu, "In2": pcbnew.In2_Cu, "B": pcbnew.B_Cu}
+LAYER = {"F": pcbnew.F_Cu, "In1": pcbnew.In1_Cu, "In2": pcbnew.In2_Cu, "B": pcbnew.B_Cu}
 mm = pcbnew.FromMM
 
 

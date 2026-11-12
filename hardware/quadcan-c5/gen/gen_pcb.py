@@ -164,6 +164,7 @@ def build(out):
     ds.m_HoleToHoleMin = mm(0.25)
     ds.m_MinClearance = mm(0.12)
     ds.m_SolderMaskMinWidth = mm(0)
+    ds.m_MinResolvedSpokes = 1
     nset = ds.m_NetSettings
     dflt = nset.m_DefaultNetClass
     dflt.SetClearance(mm(0.15)); dflt.SetTrackWidth(mm(0.2))

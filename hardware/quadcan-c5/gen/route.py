@@ -30,12 +30,12 @@ from scipy.ndimage import binary_erosion, distance_transform_edt
 
 GRID = 0.1
 HW = float(os.environ.get("ROUTE_HW", "2.5"))  # heuristic weight (greedy A*)
-LAYERS = ["F", "In2", "B"]
-CLR = 0.16            # copper clearance enforced (board netclass is 0.15 mm)
+LAYERS = ["F", "In2", "B", "In1"]     # In1 = GND plane: last-resort only
+CLR = 0.17            # copper clearance enforced (board netclass is 0.15 mm)
 EDGE_CLR = 0.35
 VIA_D, VIA_DRILL = 0.6, 0.3
 VIA_COST = 12.0
-LAYER_COST = [1.0, 1.15, 1.05]
+LAYER_COST = [1.0, 1.15, 1.05, 4.0]
 SIG_W = 0.2
 WIDE = {"VIN_RAW": 1.0, "VIN_F": 1.0, "VIN": 0.8, "BUCK_SW": 1.0, "+5V": 0.6, "+5V_SYS": 0.5,
         "SCAP": 0.5, "+3V3": 0.4, "VBUS": 0.5, "GPS_3V3": 0.4, "GND": 0.4,
@@ -177,7 +177,11 @@ class Grid:
             dist = distance_transform_edt(~foreign) * GRID
             f = (dist > need) & (self.edge_dist > w / 2 + EDGE_CLR)
             f |= (nm == nid)
-            f |= (cor == nid) & ~((nm != 0) & (nm != nid))
+            # own escape lane: may hug foreign *pads*, but keeps full clearance to foreign tracks
+            if (cor == nid).any():
+                trk = foreign & (self.padmap[li] == 0) & (cor == 0)
+                lane_ok = distance_transform_edt(~trk) * GRID > need
+                f |= (cor == nid) & ~((nm != 0) & (nm != nid)) & lane_ok
             free.append(f)
             vfree &= (dist > vneed) & (self.edge_dist > VIA_D / 2 + EDGE_CLR)
         if not ghost:
@@ -333,10 +337,11 @@ class Router:
         self.geom = {}            # net -> {"tracks": [...], "vias": [...], "raster": [(li, sl, mask)]}
         self.failed = {}          # net -> [(ref, pad)]
         self._cells = {}
+        self.allow_plane = False
 
     # -- pad helpers
     def pad_cells(self, p, li):
-        key = (p["ref"], p["pad"], li)
+        key = (p["ref"], p["pad"], round(p["x"], 3), round(p["y"], 3), li)
         if key not in self._cells:
             G = self.G
             nid = G.netid[p["net"]]
@@ -368,7 +373,7 @@ class Router:
         nid = G.netid[net]
         rec = self.geom.setdefault(net, {"tracks": [], "vias": [], "raster": []})
         runs, vcells = split_runs(path)
-        runs = [(li, los_smooth(pts, binary_erosion(free[li], iterations=1) | (G.netmap[li] == nid))) for li, pts in runs]
+        runs = [(li, los_smooth(pts, binary_erosion(free[li], iterations=2))) for li, pts in runs]
         for li, pts in runs:
             mmpts = [G.mm(x, y) for x, y in pts]
             if len(mmpts) >= 2:
@@ -407,7 +412,7 @@ class Router:
         w = self.width(net)
         xs = [p["x"] for p in pads]; ys = [p["y"] for p in pads]
         long_net = (max(xs) - min(xs)) + (max(ys) - min(ys)) > 35 and net not in WIDE
-        lcost = [1.6, 1.0, 1.3] if long_net else None
+        lcost = [1.6, 1.0, 1.3, 4.0] if long_net else None
         free, vfree = G.free_maps(nid, w)
         cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
         pads = sorted(pads, key=lambda p: (p["x"] - cx) ** 2 + (p["y"] - cy) ** 2)
@@ -425,7 +430,7 @@ class Router:
             if any(tree[li][y, x] for li, y, x in srcs):
                 tree_pads.append(p)
                 continue
-            anyt = tree[0] | tree[1] | tree[2]
+            anyt = np.logical_or.reduce(tree)
             heur = distance_transform_edt(~anyt)
             path, wc = None, w
             for wc in sorted({w, min(w, 0.5), min(w, 0.25)}, reverse=True):
@@ -434,6 +439,10 @@ class Router:
                 path = astar(G, free, vfree, srcs, tree, heur, max_exp=600000, lcost=lcost)
                 if path is not None:
                     break
+            if path is None and self.allow_plane:
+                free, vfree = G.free_maps(nid, min(w, 0.25))
+                wc = min(w, 0.25)
+                path = astar(G, free, vfree, srcs, tree, heur, max_exp=600000, layers_ok=(0, 1, 2, 3), lcost=lcost)
             if path is None:
                 failed.append((p["ref"], p["pad"]))
                 free, vfree = G.free_maps(nid, w)
@@ -464,7 +473,7 @@ class Router:
                     tree[li][y, x] = True
         for p in pads[1:]:
             srcs = [c for lyr in p["layers"] if lyr in LAYERS for c in self.pad_cells(p, LAYERS.index(lyr))]
-            heur = distance_transform_edt(~(tree[0] | tree[1] | tree[2]))
+            heur = distance_transform_edt(~np.logical_or.reduce(tree))
             path = astar(G, free, vfree, srcs, tree, heur, max_exp=600000)
             if path is None:
                 continue
@@ -506,7 +515,7 @@ class Router:
             srcs = self.pad_cells(p, li)
             tgt = [np.zeros((G.H, G.W), bool) for _ in LAYERS]
             tgt[li] = vfree & (G.netmap[li] == 0)
-            path = astar(G, free, vfree, srcs, tgt, None, max_exp=8000, layers_ok=(li,)) if srcs else None
+            path = astar(G, free, vfree, srcs, tgt, None, max_exp=40000, layers_ok=(li,)) if srcs else None
             if path is None:
                 bad.append(("GND", p["ref"], p["pad"]))
                 continue
@@ -516,10 +525,11 @@ class Router:
             free, vfree = G.free_maps(gid, w)
         return bad
 
-    def run(self, t0, repair_rounds=6):
+    def run(self, t0, repair_rounds=8):
         for net in self.order:
             self.route_net(net)
         print(f"initial: {self.nfail()} failed connections in {len(self.failed)} nets  ({time.time() - t0:.0f}s)", flush=True)
+        stale = 0
         for rnd in range(repair_rounds):
             if not self.failed:
                 break
@@ -546,8 +556,16 @@ class Router:
                     improved = improved or after < before
                     print(f"  repair {net}: ripped {blockers} -> {after} failed", flush=True)
             print(f"round {rnd + 1}: {self.nfail()} failed  ({time.time() - t0:.0f}s)", flush=True)
-            if not improved:
+            stale = 0 if improved else stale + 1
+            if stale >= 2:
                 break
+        if self.failed:
+            # last resort: let the remaining connections borrow the In1 ground plane
+            self.allow_plane = True
+            for net in list(self.failed):
+                self.rip(net)
+                self.route_net(net)
+            print(f"plane fallback: {self.nfail()} failed  ({time.time() - t0:.0f}s)", flush=True)
         gnd_bad = self.gnd_stubs()
         tracks = [t for r in self.geom.values() for t in r["tracks"]]
         vias = [v for r in self.geom.values() for v in r["vias"]]
