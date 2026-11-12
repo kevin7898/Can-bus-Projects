@@ -1,0 +1,3 @@
+(fp_lib_table
+  (lib (name "DuoCAN")(type "KiCad")(uri "${KIPRJMOD}/DuoCAN.pretty")(options "")(descr "DuoCAN-C6 project footprints"))
+)
