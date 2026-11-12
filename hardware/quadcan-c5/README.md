@@ -57,6 +57,12 @@ A custom, from-scratch take on the MrDIY DuoCAN idea, grown into a set-and-forge
 
 ## Ordering the board
 
+> **Current status: draft.** About 97 % of connections are auto-routed and DRC-clean. 10 short
+> connections and 4 small clearance nits remain to finish by hand in KiCad. See
+> [fab/STATUS.md](fab/STATUS.md).
+
+![Top copper](docs/board-top.png)
+
 1. Upload `fab/quadcan-c5-gerbers.zip` to JLCPCB/PCBWay: **4 layers, 1.6 mm, 1 oz outer / 0.5 oz inner**, any colour.
    Minimum features used: 0.15 mm clearance, 0.2 mm track, 0.3/0.6 mm vias.
 2. For assembly, use `fab/quadcan-c5-bom.csv` + `fab/quadcan-c5-cpl.csv`. Through-hole parts
