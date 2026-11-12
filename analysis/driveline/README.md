@@ -10,6 +10,29 @@ the root README.
 
 Requires Python 3 with numpy and pandas.
 
+## Captures analysed
+
+All on the drivetrain bus via USB GVRET unless noted. Start times are UTC; the logger
+clock may be off (see the timestamp note below). "Trigger" is the DPF regen trigger
+(PID 8B), first → last value polled.
+
+| Start (UTC) | Drive | Min | Frames | Odometer (km) | Km | Trigger % | Notes |
+|---|---|---|---|---|---|---|---|
+| 2026-11-06 00:05 | Around Nanoose Bay | 4.7 | 595,365 | 265,378 | 0 | 37.6 | idle |
+| 2026-11-06 00:11 | Nanoose Bay → Nanaimo | 49.9 | 5,104,066 | 265,378 | 23 | 37.6 → 43.9 | |
+| 2026-11-06 09:35 | Nanaimo → Port Alberni | 94.4 | 11,524,224 | 265,401 | 92 | 43.9 → 62.4 | main analysis drive; MX+ session near the end |
+| 2026-11-06 11:10 | Port Alberni → Parksville | 42.3 | 5,522,507 | 265,493 | 58 | — | no polling |
+| 2026-11-06 11:59 | Around Parksville | 1.7 | 207,815 | 265,551 | 0 | 77.3 → 77.6 | |
+| 2026-11-06 12:07–13:00 | Around Parksville (6 logs) | 0.3–14.8 | 29k–729k | 265,551 | 0 | — | board error passive while listening; no polling |
+| 2026-11-06 13:28 | Around Parksville | 10.4 | 1,352,241 | 265,551 | 5 | 78.0 | |
+| 2026-11-06 13:40 | Around Parksville | 18.9 | 2,417,435 | 265,556 | 13 | 79.2 → 82.4 | latest; regen due soon |
+| 2026-11-09 14:17, 22:25 | (2 logs) | <1 | 0 | — | — | — | PCAN UDP transport; empty |
+
+Also present: a 1-second fragment (2026-11-06 00:11) and a 0.7-minute log at 13:39.
+
+The trigger rose about 15 points over the 58 km Port Alberni → Parksville leg, against
+about 18 points over 92 km on the previous leg.
+
 ## Findings
 
 ### DPF and EGT data is not broadcast
