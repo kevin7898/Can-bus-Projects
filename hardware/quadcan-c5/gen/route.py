@@ -168,7 +168,7 @@ class Grid:
     def free_maps(self, nid, w, ghost=False):
         """ghost=True: only pads/keep-outs/lanes block (used to find who is in the way)."""
         need = w / 2 + CLR + GRID * 0.6
-        vneed = VIA_D / 2 + CLR + GRID * 0.6
+        vneed = VIA_D / 2 + CLR + GRID * 0.6 + 0.04
         free, vfree = [], np.ones((self.H, self.W), bool)
         for li in range(len(LAYERS)):
             nm = self.padmap[li] if ghost else self.netmap[li]
@@ -386,7 +386,9 @@ class Router:
         if LAYERS[li] in pad_from["layers"]:
             a = (pad_from["x"], pad_from["y"]); b = G.mm(path[0][2], path[0][1])
             if math.hypot(a[0] - b[0], a[1] - b[1]) > 1e-3:
-                rec["tracks"].append({"net": net, "layer": LAYERS[li], "w": min(w, pad_minor(pad_from)), "pts": [a, b]})
+                ws = min(w, pad_minor(pad_from))
+                rec["tracks"].append({"net": net, "layer": LAYERS[li], "w": ws, "pts": [a, b]})
+                self._draw(net, li, a, b, ws + 0.1)
 
     def add_via(self, net, x, y):
         rec = self.geom.setdefault(net, {"tracks": [], "vias": [], "raster": []})
@@ -525,6 +527,31 @@ class Router:
             free, vfree = G.free_maps(gid, w)
         return bad
 
+    def stitch(self, pitch=3.0):
+        """GND stitching vias on a grid wherever a via fits clear of everything, so every
+        F.Cu / B.Cu / In2.Cu GND pour fragment is tied to the In1 plane."""
+        G = self.G
+        gid = G.netid["GND"]
+        _, vfree = G.free_maps(gid, 0.3)
+        empty = np.logical_and.reduce([(nm == 0) | (nm == gid) for nm in G.netmap])
+        step = int(pitch / GRID)
+        n = 0
+        for y in range(step // 2, G.H, step):
+            for x in range(step // 2, G.W, step):
+                # search a small neighbourhood for a legal spot
+                done = False
+                for dy in range(-6, 7, 2):
+                    for dx in range(-6, 7, 2):
+                        yy, xx = y + dy, x + dx
+                        if 0 <= yy < G.H and 0 <= xx < G.W and vfree[yy, xx] and empty[yy, xx]:
+                            self.add_via("GND", *G.mm(xx, yy))
+                            n += 1
+                            done = True
+                            break
+                    if done:
+                        break
+        return n
+
     def run(self, t0, repair_rounds=8):
         for net in self.order:
             self.route_net(net)
@@ -541,7 +568,7 @@ class Router:
                 snap = self.snapshot()
                 blockers = self.ghost_blockers(net)
                 random.shuffle(blockers)
-                blockers = blockers[:4]
+                blockers = blockers[:6]
                 for b in blockers:
                     self.rip(b)
                     self.failed.pop(b, None)
@@ -567,6 +594,8 @@ class Router:
                 self.route_net(net)
             print(f"plane fallback: {self.nfail()} failed  ({time.time() - t0:.0f}s)", flush=True)
         gnd_bad = self.gnd_stubs()
+        n_stitch = self.stitch()
+        print(f"stitching vias: {n_stitch}", flush=True)
         tracks = [t for r in self.geom.values() for t in r["tracks"]]
         vias = [v for r in self.geom.values() for v in r["vias"]]
         failed = [(n, *rp) for n, lst in self.failed.items() for rp in lst] + gnd_bad
