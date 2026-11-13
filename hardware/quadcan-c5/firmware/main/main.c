@@ -17,6 +17,7 @@ static const char *TAG = "quadcan";
 
 void app_main(void)
 {
+    power_early_wake_check();          // timer wake with the vehicle still asleep -> back to sleep
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();

@@ -2,3 +2,4 @@ gen/__pycache__/
 kicad/*-backups/
 kicad/*.kicad_prl
 kicad/fp-info-cache
+gen/route_core.so

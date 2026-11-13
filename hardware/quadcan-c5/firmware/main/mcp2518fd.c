@@ -60,6 +60,7 @@ enum { MODE_MIXED = 0, MODE_SLEEP = 1, MODE_LISTEN = 3, MODE_CONFIG = 4, MODE_CA
 #define OSC_OSCRDY (1u << 10)
 #define IOCON_XSTBYEN (1u << 6)
 #define IOCON_TRIS0   (1u << 0)
+#define IOCON_INTOD   (1u << 30)   /* INT pins open-drain: both controllers share one line */
 
 #define RX_FIFO 1
 #define TX_FIFO 2
@@ -132,7 +133,7 @@ esp_err_t mcp2518fd_init(mcp2518fd_t *d, spi_host_device_t host, int cs, uint32_
     for (int a = RAM_START; a < RAM_START + RAM_SIZE; a += sizeof(zero)) xfer(d, INS_WRITE, a, zero, NULL, sizeof(zero));
     // INT0/GPIO0 drives the transceiver STB pin: high in sleep, low otherwise
     uint32_t io = rd32(d, REG_IOCON);
-    io = (io | IOCON_XSTBYEN) & ~IOCON_TRIS0;
+    io = (io | IOCON_XSTBYEN | IOCON_INTOD) & ~IOCON_TRIS0;
     wr32(d, REG_IOCON, io);
     return ESP_OK;
 }

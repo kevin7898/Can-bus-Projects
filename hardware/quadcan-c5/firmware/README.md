@@ -29,7 +29,7 @@ If auto-reset into the bootloader ever fails: hold **BOOT**, tap **RESET**, rele
 | Time | PCF8523 RTC (CR1220 backup) at boot, then disciplined from GPS. Files are named `N000001.qcl` until the clock is valid. |
 | GPS | u-blox NEO-M9N, UBX-NAV-PVT at `gps_rate_hz` (default 20, max 25), automotive dynamic model, raw PVT logged |
 | Power fail | VIN is watched every 5 ms. When it falls below 6 V the log is flushed and closed on supercap energy (~4 s budget). The board restarts when power returns. |
-| Sleep | No frames for `idle_sleep_min` with ignition off → everything to standby, ESP32 deep sleep. Wakes on CAN1 bus activity or every 15 min. |
+| Sleep | Key off (buses idle, no ignition, engine not charging) for `idle_sleep_min` → SD card and GPS powered off, transceivers in standby, ESP32 deep sleep (est. ~0.5 mA at 12 V). Wakes on activity on **any** of the four buses, the ignition wire, or battery voltage rising above `wake_vin_mv`. See [../docs/LOW_POWER.md](../docs/LOW_POWER.md). |
 | MARK button | Writes an event marker record (for "that noise just happened") |
 | Phone link | Wi-Fi Aware service **`quadcan`** (+ optional WPA2 soft-AP), TCP port 7777: `LIVE`, `LIST`, `GET <file>`, `MARK [text]`, `SEND <ch> <id> <hex>` |
 | LEDs | STAT heartbeat (fast = no SD card), SD = write activity, LINK = phone data path up, GPS = 1 pps with a fix, RX1–4 = bus activity (hardware) |
@@ -48,6 +48,8 @@ can2_fd=2000000        # e.g. a CAN-FD bus at 500k / 2M
 can3=500000
 can4=0                 # off
 idle_sleep_min=10      # 0 = never sleep
+wake_vin_mv=13200      # engine-running voltage; 0 = CAN/ignition wake only
+sleep_check_s=30       # how often a parked logger samples the battery
 file_max_mb=256
 gps=1
 gps_rate_hz=20

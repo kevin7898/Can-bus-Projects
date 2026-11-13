@@ -38,6 +38,12 @@ Software can't judge everything below. Open `kicad/quadcan-c5.kicad_pro` in KiCa
 - [ ] GPS RF trace **L2 → J4 → U13 pin 11** is short and has ground on both sides.
       It isn't impedance-controlled; keep it under ~10 mm.
 
+## Low-power path (new in this revision)
+
+- [ ] D40/D41 are **BAT54A** (common *anode*). BAT54C or BAT54S will not work.
+- [ ] Q3 (SD card power) and Q2 (GPS power): source on +3V3, drain on the switched rail.
+- [ ] Measure sleep current on the first board (target about 0.5 mA at 12 V, see LOW_POWER.md).
+
 ## Assembly notes
 
 - [ ] U13 (GPS), its bias-T (R83, C47, L2), Q2/R80/C45/C46 and J4 are optional.

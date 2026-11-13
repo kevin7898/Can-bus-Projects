@@ -15,3 +15,7 @@ CONFIG_FATFS_USE_FASTSEEK=y
 CONFIG_FATFS_IMMEDIATE_FSYNC=n
 # Higher tick for responsive CAN/GPS tasks
 CONFIG_FREERTOS_HZ=1000
+# Fast, quiet wake-ups: a parked logger wakes briefly every sleep_check_s to sample battery voltage
+CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_SPIRAM_MEMTEST=n

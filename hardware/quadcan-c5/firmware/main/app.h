@@ -11,7 +11,9 @@ typedef struct {
     uint32_t bitrate[NUM_CAN];       // 0 = channel off
     uint32_t data_bitrate[NUM_CAN];  // 0 = classic CAN
     bool listen_only[NUM_CAN];       // true = never ACK or transmit (default)
-    uint32_t idle_sleep_min;         // sleep after this long with no frames and IGN off (0 = never)
+    uint32_t idle_sleep_min;         // sleep after this long with no frames, IGN off, engine off (0 = never)
+    uint32_t wake_vin_mv;            // wake / stay awake while VIN is above this (0 = no voltage wake)
+    uint32_t sleep_check_s;          // how often a sleeping logger samples VIN
     uint32_t file_max_mb;            // rotate log files at this size
     bool gps_enable;
     uint32_t gps_rate_hz;
@@ -50,4 +52,7 @@ esp_err_t can_send(int ch, uint32_t id, uint8_t flags, const uint8_t *data, uint
 esp_err_t gps_start(void);
 void gps_stop(void);
 void power_task_start(void);         // VIN monitor, power-fail, sleep, MARK button, status LED
+// Call first thing in app_main: after a periodic timer wake-up this samples VIN and the wake
+// lines, and goes straight back to deep sleep (never returns) unless the vehicle has woken up.
+void power_early_wake_check(void);
 esp_err_t net_start(void);

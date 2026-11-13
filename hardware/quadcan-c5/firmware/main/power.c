@@ -6,7 +6,10 @@
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
+#include "driver/gpio.h"
+#include "esp_attr.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "io.h"
@@ -31,18 +34,62 @@ static float vin_read(void)
     return raw * 3.3f / 4095.0f * VIN_DIVIDER + VIN_DIODE_DROP_V;
 }
 
-static void enter_sleep(void)
+// ---------------------------------------------------------------- key-off sleep
+// What stays powered in sleep: the 5 V buck, the 3.3 V LDO, four transceivers in standby
+// (each still watches its bus), the IO expander holding its outputs, the RTC, and the ESP32 in
+// deep sleep. Switched off: SD card, GPS, 40 MHz oscillator, MCP2518FD (sleep mode), LEDs, radio.
+//
+// Wake sources:
+//   1. activity on any of the four CAN buses  (PIN_CAN1_RX, PIN_CAN2_RX, PIN_WAKE_N)
+//   2. the ignition wire, if the cable has one (PIN_WAKE_N)
+//   3. battery voltage above wake_vin_mv = engine running (sampled every sleep_check_s)
+// Source 3 needs nothing but the two power pins of the OBD plug, which matters on cars whose
+// diagnostic CAN is silent until a tester talks (VW MQB and others).
+static RTC_DATA_ATTR uint32_t s_rtc_wake_mv;      // survives deep sleep
+static RTC_DATA_ATTR uint32_t s_rtc_check_s;
+
+static void arm_and_sleep(void)
 {
-    ESP_LOGW(TAG, "bus idle and ignition off -> sleeping");
-    logger_shutdown();
-    can_stop();               // transceivers to standby (CAN1 still reports wake-up on RXD)
-    gps_stop();
+    esp_sleep_enable_ext1_wakeup_io(WAKE_PIN_MASK, ESP_EXT1_WAKEUP_ANY_LOW);
+    if (s_rtc_wake_mv) esp_sleep_enable_timer_wakeup((uint64_t)(s_rtc_check_s ? s_rtc_check_s : 30) * 1000000ULL);
+    esp_deep_sleep_start();
+}
+
+static void enter_sleep(float vin)
+{
+    ESP_LOGW(TAG, "key off (buses idle, no ignition, %.1f V) -> sleeping", vin);
+    logger_shutdown();        // flush, close, unmount, SD card power off
+    can_stop();               // controllers off, all four transceivers to standby
+    gps_stop();               // GPS rail off
+    esp_wifi_stop();
     xp_write(XP_OSC_EN, false);
     for (int b = XP_LED_STAT_N; b <= XP_LED_LINK_N; b++) xp_write(b, true);
-    // wake on CAN1 bus activity (TCAN1044 pulls RXD low on a wake-up pattern) or every 15 min
-    esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_CAN1_RX, ESP_EXT1_WAKEUP_ANY_LOW);
-    esp_sleep_enable_timer_wakeup(15ULL * 60 * 1000000);
-    esp_deep_sleep_start();
+    // 24 V vehicles charge at ~27-28 V: scale the engine-running threshold
+    s_rtc_wake_mv = g_cfg.wake_vin_mv * (vin > 18.0f ? 2 : 1);
+    s_rtc_check_s = g_cfg.sleep_check_s;
+    arm_and_sleep();
+}
+
+void power_early_wake_check(void)
+{
+    if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) return;   // power-on, CAN or ignition: boot
+    gpio_config_t io = {.pin_bit_mask = WAKE_PIN_MASK, .mode = GPIO_MODE_INPUT};
+    gpio_config(&io);
+    bool line_low = !gpio_get_level(PIN_CAN1_RX) || !gpio_get_level(PIN_CAN2_RX) || !gpio_get_level(PIN_WAKE_N);
+    adc_unit_t unit;
+    adc_channel_t ch;
+    adc_oneshot_unit_handle_t adc;
+    adc_oneshot_io_to_channel(PIN_VIN_SENSE, &unit, &ch);
+    adc_oneshot_unit_init_cfg_t ucfg = {.unit_id = unit};
+    adc_oneshot_new_unit(&ucfg, &adc);
+    adc_oneshot_chan_cfg_t ccfg = {.atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT};
+    adc_oneshot_config_channel(adc, ch, &ccfg);
+    int sum = 0, raw = 0;
+    for (int i = 0; i < 8; i++) { adc_oneshot_read(adc, ch, &raw); sum += raw; }
+    adc_oneshot_del_unit(adc);
+    uint32_t vin_mv = (uint32_t)((sum / 8.0f) * 3300.0f / 4095.0f * VIN_DIVIDER + VIN_DIODE_DROP_V * 1000.0f);
+    if (line_low || (s_rtc_wake_mv && vin_mv >= s_rtc_wake_mv)) return;   // vehicle is awake: boot
+    arm_and_sleep();                                                       // still parked
 }
 
 static void power_task(void *arg)
@@ -85,9 +132,10 @@ static void power_task(void *arg)
             log_push(QCL_REC_STATUS, 0, 0, 0, now, &st, sizeof(st));
             // idle sleep: no frames for idle_sleep_min, ignition off, on vehicle power
             int64_t idle = now - (can_last_rx_us() ? can_last_rx_us() : boot);
-            if (g_cfg.idle_sleep_min && armed && !io_ignition_on() &&
+            bool engine = g_cfg.wake_vin_mv && vin * 1000.0f >= g_cfg.wake_vin_mv * (vin > 18.0f ? 2 : 1);
+            if (g_cfg.idle_sleep_min && armed && !io_ignition_on() && !engine &&
                 idle > (int64_t)g_cfg.idle_sleep_min * 60 * 1000000) {
-                enter_sleep();
+                enter_sleep(vin);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(5));

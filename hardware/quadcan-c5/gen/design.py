@@ -118,10 +118,16 @@ add(R("R11", "10k", "IGN_B", "GND", "sense"))
 add(P("Q1", "Transistor_BJT:MMBT3904", SOT23, "MMBT3904", "MMBT3904",
       {"1": "IGN_B", "2": "GND", "3": "IGN_N"}, "sense", "IGN > ~6.5V pulls IGN_N low (6-60V safe)"))
 add(R("R12", "100k", "+3V3", "IGN_N", "sense"))
+add(P("D40", "Diode:BAT54A", SOT23, "BAT54A", "BAT54A dual Schottky, common anode",
+      {"1": "CAN3_RXD", "2": "CAN4_RXD", "3": "WAKE_N"}, "sense",
+      "WAKE_N goes low on CAN3/CAN4 bus activity (transceiver in standby) or ignition on"))
+add(P("D41", "Diode:BAT54A", SOT23, "BAT54A", "BAT54A dual Schottky, common anode",
+      {"1": "IGN_N", "2": "IGN_N", "3": "WAKE_N"}, "sense"))
+add(R("R67", "100k", "+3V3", "WAKE_N", "sense", note="Deep-sleep wake sources: GPIO3 CAN1_RXD, GPIO1 CAN2_RXD, GPIO5 WAKE_N"))
 add(R("R13", "1k", "CABLE_ID0_RAW", "CABLE_ID0", "sense"))
-add(R("R14", "100k", "+3V3", "CABLE_ID0", "sense"))
+add(R("R14", "1M", "+3V3", "CABLE_ID0", "sense"))
 add(R("R15", "1k", "CABLE_ID1_RAW", "CABLE_ID1", "sense"))
-add(R("R16", "100k", "+3V3", "CABLE_ID1", "sense", note="Cable grounds ID0/ID1 to identify itself"))
+add(R("R16", "1M", "+3V3", "CABLE_ID1", "sense", note="Cable grounds ID0/ID1 to identify itself (1M: 3 uA in sleep)"))
 
 # ------------------------------------------------------------------ MCU
 add(P("U3", "QuadCAN:ESP32-C5-WROOM-1", "QuadCAN:ESP32-C5-WROOM-1",
@@ -132,12 +138,12 @@ add(P("U3", "QuadCAN:ESP32-C5-WROOM-1", "QuadCAN:ESP32-C5-WROOM-1",
        "9": "SPI_MOSI", "10": "CAN2_TXD_MCU", "11": "CAN3_CS", "12": "CAN4_CS",
        "13": "USB_DN", "14": "USB_DP",
        # right edge (faces I2C / GPS / LTE / SD)
-       "15": "I2C_SCL", "16": "I2C_SDA", "17": "VIN_SENSE", "18": "ESP_GPS_RX", "21": "ESP_GPS_TX",
-       "23": "SD_CS", "24": "ESP_LTE_RX", "25": "ESP_LTE_TX", "26": "CAN4_INT", "27": "CAN3_INT",
+       "15": "I2C_SCL", "16": "WAKE_N", "17": "VIN_SENSE", "18": "ESP_GPS_RX", "21": "ESP_GPS_TX",
+       "23": "SD_CS", "24": "ESP_LTE_RX", "25": "ESP_LTE_TX", "26": "I2C_SDA", "27": "CAN34_INT",
        "28": "GND", "29": "GND"},
       "mcu", "GPIO map: 2 MISO, 3 CAN1_RX (LP wake), 0 CAN1_TX, 1 CAN2_RX, 6 SCK, 7 MOSI, 8 CAN2_TX, "
-             "9 CS3, 10 CS4, 28 SCL+BOOT, 5 SDA, 4 VIN_SENSE (ADC), 27 GPS_RX, 23 GPS_TX, 24 SD_CS, "
-             "12/11 LTE, 25 INT4, 26 INT3"))
+             "9 CS3, 10 CS4, 28 SCL+BOOT, 5 WAKE_N (LP wake), 4 VIN_SENSE (ADC), 27 GPS_RX, 23 GPS_TX, "
+             "24 SD_CS, 12/11 LTE, 25 SDA, 26 MCP INT (shared, open-drain)"))
 add(C("C13", "22uF", "+3V3", "GND", "mcu", C0805))
 add(C("C14", "100nF", "+3V3", "GND", "mcu"))
 add(R("R17", "10k", "+3V3", "EN", "mcu"))
@@ -148,7 +154,7 @@ add(P("SW2", "Switch:SW_Push", "Button_Switch_SMD:SW_SPST_PTS810", "BOOT", "C&K 
       {"1": "I2C_SCL", "2": "GND"}, "mcu", "Hold BOOT while tapping RESET for download mode"))
 add(R("R18", "4.7k", "+3V3", "I2C_SDA", "mcu"))
 add(R("R19", "4.7k", "+3V3", "I2C_SCL", "mcu"))
-add(R("R20", "10k", "+3V3", "SD_CS", "mcu"))
+add(R("R20", "10k", "SD_3V3", "SD_CS", "mcu"))
 add(R("R21", "10k", "+3V3", "CAN3_CS", "mcu"))
 add(R("R22", "10k", "+3V3", "CAN4_CS", "mcu"))
 
@@ -188,12 +194,13 @@ for n, u in ((3, 9), (4, 10)):
     blk = f"can{n}"
     add(P(f"U{u}", "Interface_CAN_LIN:MCP2517FD-xSL", "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm",
           "MCP2518FD", "Microchip MCP2518FDT-E/SL",
-          {"1": f"CAN{n}_TXD_MCU", "2": f"CAN{n}_RXD", "4": f"CAN{n}_INT", "6": "CLK40",
+          {"1": f"CAN{n}_TXD_MCU", "2": f"CAN{n}_RXD", "4": "CAN34_INT", "6": "CLK40",
            "7": "GND", "9": STB_SRC[n], "10": "SPI_SCK", "11": "SPI_MOSI",
            "12": "SPI_MISO", "13": f"CAN{n}_CS", "14": "+3V3"}, blk,
-          "INT0/XSTBY drives transceiver STB"))
+          "INT0/XSTBY drives transceiver STB; INT is open-drain, shared by both controllers"))
     add(C(f"C{30 + n}", "100nF", "+3V3", "GND", blk))
-    add(R(f"R{50 + n}", "10k", "+3V3", f"CAN{n}_INT", blk))
+    if n == 3:
+        add(R("R53", "10k", "+3V3", "CAN34_INT", blk))
 
 add(P("Y1", "Oscillator:ASE-xxxMHz", "Oscillator:Oscillator_SMD_Abracon_ASE-4Pin_3.2x2.5mm",
       "40MHz", "Abracon ASE-40.000MHZ-LC-T (3.3V CMOS)",
@@ -213,15 +220,21 @@ for n in range(1, 5):
 # ------------------------------------------------------------------ microSD
 add(P("J3", "Connector:Micro_SD_Card_Det2", "Connector_Card:microSD_HC_Hirose_DM3AT-SF-PEJM5",
       "microSD", "Hirose DM3AT-SF-PEJM5",
-      {"1": "SD_DAT2", "2": "SD_CS", "3": "SPI_MOSI", "4": "+3V3", "5": "SPI_SCK",
+      {"1": "SD_DAT2", "2": "SD_CS", "3": "SPI_MOSI", "4": "SD_3V3", "5": "SPI_SCK",
        "6": "GND", "7": "SPI_MISO", "8": "SD_DAT1", "9": "GND", "10": "SD_DET", "11": "GND"},
       "sd", "SPI mode, shares the bus with the MCP2518FDs"))
-add(R("R60", "10k", "+3V3", "SD_DAT1", "sd"))
-add(R("R61", "10k", "+3V3", "SD_DAT2", "sd"))
-add(R("R62", "10k", "+3V3", "SPI_MISO", "sd"))
-add(R("R63", "100k", "+3V3", "SD_DET", "sd"))
-add(C("C41", "10uF", "+3V3", "GND", "sd", C0805))
-add(C("C42", "100nF", "+3V3", "GND", "sd"))
+add(R("R60", "10k", "SD_3V3", "SD_DAT1", "sd"))
+add(R("R61", "10k", "SD_3V3", "SD_DAT2", "sd"))
+add(R("R62", "10k", "SD_3V3", "SPI_MISO", "sd"))
+add(R("R63", "1M", "+3V3", "SD_DET", "sd"))
+add(C("C41", "4.7uF", "SD_3V3", "GND", "sd", C0805))
+add(C("C42", "100nF", "SD_3V3", "GND", "sd"))
+add(P("Q3", "Transistor_FET:AO3401A", SOT23, "AO3401A", "AOS AO3401A P-MOSFET",
+      {"1": "SD_PWR_N", "2": "+3V3", "3": "SD_3V3"}, "sd",
+      "SD card power switch: card is unpowered in sleep (idle cards can draw ~1 mA)"))
+add(R("R64", "100k", "+3V3", "SD_PWR_N", "sd"))
+add(R("R65", "100k", "SPI_SCK", "GND", "sd", note="Keep the SPI bus defined while the MCU sleeps"))
+add(R("R66", "100k", "SPI_MOSI", "GND", "sd"))
 
 # ------------------------------------------------------------------ IO expander, LEDs, button
 add(P("U11", "Interface_Expansion:TCA9535PWR", "Package_SO:TSSOP-24_4.4x7.8mm_P0.65mm",
@@ -230,7 +243,7 @@ add(P("U11", "Interface_Expansion:TCA9535PWR", "Package_SO:TSSOP-24_4.4x7.8mm_P0
        "12": "GND", "4": "CAN1_STB", "5": "CAN2_STB", "6": "LED_STAT_N", "7": "LED_SD_N",
        "8": "LED_LINK_N", "9": "OSC_EN", "10": "GPS_PWR_N", "11": "LTE_PWRKEY",
        "13": "IGN_N", "14": "CABLE_ID0", "15": "CABLE_ID1", "16": "SD_DET",
-       "17": "GPS_RESET_N", "18": "LTE_STATUS", "19": "BTN_MARK_N"}, "io",
+       "17": "GPS_RESET_N", "18": "LTE_STATUS", "19": "BTN_MARK_N", "20": "SD_PWR_N"}, "io",
       "Powers up as inputs: STB lines float high = transceivers in standby"))
 add(C("C43", "100nF", "+3V3", "GND", "io"))
 for i, (nm, col) in enumerate((("STAT", "green"), ("SD", "blue"), ("LINK", "blue"))):
@@ -289,7 +302,7 @@ for i in range(1, 5):
     add(P(f"H{i}", "Mechanical:MountingHole", "MountingHole:MountingHole_3.2mm_M3", "M3", "", {}, "mech"))
 
 # PWR_FLAG nets (driven from off-sheet sources)
-PWR_FLAGS = ["VIN_RAW", "GND", "VIN", "+5V", "+5V_SYS", "+3V3", "VBUS", "GPS_3V3", "VBAT_RTC", "SCAP"]
+PWR_FLAGS = ["VIN_RAW", "GND", "VIN", "+5V", "+5V_SYS", "+3V3", "VBUS", "GPS_3V3", "VBAT_RTC", "SCAP", "SD_3V3"]
 
 BLOCK_TITLES = {
     "power": "POWER: 9-36V -> fuse -> TVS -> reverse diode -> TPS54360 5V buck -> hold-up -> 3.3V LDO",

@@ -14,15 +14,20 @@
 #define PIN_SPI_MOSI       GPIO_NUM_7    // IOMUX FSPID
 #define PIN_CAN3_CS        GPIO_NUM_9
 #define PIN_CAN4_CS        GPIO_NUM_10
-#define PIN_CAN3_INT       GPIO_NUM_26
-#define PIN_CAN4_INT       GPIO_NUM_25
+#define PIN_MCP_INT        GPIO_NUM_26   // both MCP2518FD INT pins, open-drain, active low
 #define PIN_SD_CS          GPIO_NUM_24
 
 // ---- I2C: TCA9535 expander (0x20), PCF8523 RTC (0x68), Qwiic ------------
-#define PIN_I2C_SDA        GPIO_NUM_5
+#define PIN_I2C_SDA        GPIO_NUM_25
 #define PIN_I2C_SCL        GPIO_NUM_28   // also the BOOT strap / BOOT button
 #define I2C_ADDR_EXPANDER  0x20
 #define I2C_ADDR_RTC       0x68
+
+// ---- deep-sleep wake inputs (all LP GPIOs, all active low) ----------------
+// CAN1/CAN2: the transceiver in standby pulls RXD low on bus activity (PIN_CAN1_RX / PIN_CAN2_RX).
+// WAKE_N:    diode-OR of CAN3_RXD, CAN4_RXD and the ignition input.
+#define PIN_WAKE_N         GPIO_NUM_5
+#define WAKE_PIN_MASK      ((1ULL << PIN_CAN1_RX) | (1ULL << PIN_CAN2_RX) | (1ULL << PIN_WAKE_N))
 
 // ---- analog --------------------------------------------------------------
 #define PIN_VIN_SENSE      GPIO_NUM_4    // ADC1_CH3, VIN / 11
@@ -40,13 +45,13 @@ enum {
     XP_CAN1_STB = 0, XP_CAN2_STB, XP_LED_STAT_N, XP_LED_SD_N, XP_LED_LINK_N, XP_OSC_EN,
     XP_GPS_PWR_N, XP_LTE_PWRKEY,
     XP_IGN_N = 8, XP_CABLE_ID0, XP_CABLE_ID1, XP_SD_DET, XP_GPS_RESET_N, XP_LTE_STATUS,
-    XP_BTN_MARK_N, XP_SPARE,
+    XP_BTN_MARK_N, XP_SD_PWR_N,
 };
 // Pins the firmware drives. Everything else stays an input, which is also the reset state:
-// STB lines float high (transceivers in standby), GPS power off, oscillator enabled.
+// STB lines float high (transceivers in standby), GPS and SD card power off, oscillator enabled.
 #define XP_OUTPUT_MASK  ((1u << XP_CAN1_STB) | (1u << XP_CAN2_STB) | (1u << XP_LED_STAT_N) | \
                          (1u << XP_LED_SD_N) | (1u << XP_LED_LINK_N) | (1u << XP_OSC_EN) |   \
-                         (1u << XP_GPS_PWR_N) | (1u << XP_LTE_PWRKEY))
+                         (1u << XP_GPS_PWR_N) | (1u << XP_LTE_PWRKEY) | (1u << XP_SD_PWR_N))
 
 // Cable identification (cable grounds ID0/ID1; open = 1)
 typedef enum {

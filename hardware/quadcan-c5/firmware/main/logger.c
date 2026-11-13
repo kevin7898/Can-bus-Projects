@@ -54,6 +54,8 @@ esp_err_t logger_init(void)
         ESP_LOGW(TAG, "no microSD card detected");
         return ESP_ERR_NOT_FOUND;
     }
+    xp_write(XP_SD_PWR_N, false);              // switch the card's 3.3 V rail on
+    vTaskDelay(pdMS_TO_TICKS(100));
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI2_HOST;
     host.max_freq_khz = 20000;
@@ -210,6 +212,7 @@ void logger_shutdown(void)
     xSemaphoreTake(s_closed, pdMS_TO_TICKS(1500));
     if (s_card_ok) esp_vfs_fat_sdcard_unmount(MOUNT, s_card);
     s_card_ok = false;
+    xp_write(XP_SD_PWR_N, true);               // card off: an idle card can draw ~1 mA
 }
 
 // ---------------------------------------------------------------- config file
@@ -227,6 +230,8 @@ void cfg_defaults(cable_id_t cable)
         g_cfg.bitrate[1] = 250000;
     }
     g_cfg.idle_sleep_min = 10;
+    g_cfg.wake_vin_mv = 13200;            // engine running (alternator charging); doubled on 24 V systems
+    g_cfg.sleep_check_s = 30;
     g_cfg.file_max_mb = 256;
     g_cfg.gps_enable = true;
     g_cfg.gps_rate_hz = 20;
@@ -251,6 +256,8 @@ void cfg_load(const char *path)
         else if (sscanf(key, "can%d_listen", &ch) == 1 && ch >= 1 && ch <= NUM_CAN) g_cfg.listen_only[ch - 1] = v != 0;
         else if (sscanf(key, "can%d", &ch) == 1 && ch >= 1 && ch <= NUM_CAN) g_cfg.bitrate[ch - 1] = v;
         else if (!strcmp(key, "idle_sleep_min")) g_cfg.idle_sleep_min = v;
+        else if (!strcmp(key, "wake_vin_mv")) g_cfg.wake_vin_mv = v;
+        else if (!strcmp(key, "sleep_check_s")) g_cfg.sleep_check_s = v < 5 ? 5 : v;
         else if (!strcmp(key, "file_max_mb")) g_cfg.file_max_mb = v ? v : 256;
         else if (!strcmp(key, "gps")) g_cfg.gps_enable = v != 0;
         else if (!strcmp(key, "gps_rate_hz")) g_cfg.gps_rate_hz = v ? v : 1;

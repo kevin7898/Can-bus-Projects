@@ -1,53 +1,91 @@
-"""Grid A* autorouter with rip-up-and-reroute, for the QuadCAN-C5 board.
+"""Autorouter for the QuadCAN-C5 board: direction-aware A* (C core) + rip-up-and-reroute.
 
 Reads geom.json (export_geom.py) and writes routes.json (apply_routes.py adds it to the board).
-Routing layers are F.Cu, In2.Cu and B.Cu. In1.Cu is a solid GND plane: every SMD GND pad gets a
-short stub to a via, and through-hole GND pads reach the plane directly.
+Layers: F.Cu, In2.Cu and B.Cu carry signals. In1.Cu is a solid GND plane, used for a signal only
+as a last resort. Every SMD GND pad gets a short stub to a via into the plane.
 
-Algorithm
-  1. Route every net sequentially (critical/wide nets first, then short-to-long). Each connection
-     is a greedy A* search on a 0.1 mm grid with clearance-inflated obstacles. Fine-pitch pads get
-     reserved escape lanes.
-  2. Repair loop: for every connection that failed, route it again ignoring other signal tracks
-     (pads still block) to find its ideal path. Rip up the nets in the way, route the failed net,
-     then re-route the ripped nets. Keep the result only if the total failure count does not grow.
+How it works
+  1. Every connection is an A* search on a 0.1 mm grid (route_core.c). The search state includes
+     the direction of travel, so bends cost extra: tracks come out as long straight runs joined by
+     45-degree corners. Obstacles are inflated by track half-width + clearance, so anything the
+     search finds is DRC-clean by construction.
+  2. Nets are routed critical-first, then short-to-long.
+  3. Repair: a connection that failed is routed "through" other nets' tracks to find where it
+     wants to go. The nets in its way are ripped up, it is routed, and they are routed again.
+     The change is kept only if the number of open connections does not grow.
 
 usage: python3 route.py geom.json routes.json
 """
 import copy
-import heapq
+import ctypes
 import json
 import math
 import os
 import random
+import subprocess
 import sys
 import time
-from array import array
 
 import numpy as np
 from PIL import Image, ImageDraw
-from scipy.ndimage import binary_erosion, distance_transform_edt
+from scipy.ndimage import distance_transform_edt
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 GRID = 0.1
-HW = float(os.environ.get("ROUTE_HW", "2.5"))  # heuristic weight (greedy A*)
-LAYERS = ["F", "In2", "B", "In1"]     # In1 = GND plane: last-resort only
-CLR = 0.17            # copper clearance enforced (board netclass is 0.15 mm)
-EDGE_CLR = 0.35
+LAYERS = ["F", "In2", "B", "In1"]     # In1 = GND plane: last resort only
+SIGNAL_LAYERS = (1, 1, 1, 0)
+CLR = 0.17            # clearance enforced (board rule is 0.15 mm)
+EDGE_CLR = 0.45
 VIA_D, VIA_DRILL = 0.6, 0.3
-VIA_COST = 12.0
-LAYER_COST = [1.0, 1.15, 1.05, 4.0]
+VIA_COST = 14.0
+TURN45, TURN90 = 0.6, 2.5
+HW = float(os.environ.get("ROUTE_HW", "1.4"))
+LAYER_COST = [1.0, 1.1, 1.05, 3.0]
+LONG_COST = [1.5, 1.0, 1.25, 3.0]     # long signal nets prefer the inner layer
+MAX_EXP = 60_000_000
+GND_FIRST = os.environ.get("ROUTE_GND_FIRST", "1") == "1"
 SIG_W = 0.2
 WIDE = {"VIN_RAW": 1.0, "VIN_F": 1.0, "VIN": 0.8, "BUCK_SW": 1.0, "+5V": 0.6, "+5V_SYS": 0.5,
-        "SCAP": 0.5, "+3V3": 0.4, "VBUS": 0.5, "GPS_3V3": 0.4, "GND": 0.4,
+        "SCAP": 0.5, "+3V3": 0.4, "VBUS": 0.5, "GPS_3V3": 0.4, "SD_3V3": 0.4, "GND": 0.4,
         "CAN1_H": 0.3, "CAN1_L": 0.3, "CAN2_H": 0.3, "CAN2_L": 0.3,
         "CAN3_H": 0.3, "CAN3_L": 0.3, "CAN4_H": 0.3, "CAN4_L": 0.3, "GPS_RF": 0.3}
 FIRST = ["BUCK_SW", "BUCK_BOOT", "BUCK_FB", "BUCK_COMP", "BUCK_CZ", "BUCK_EN", "BUCK_RT",
          "VIN_RAW", "VIN_F", "VIN", "+5V", "+5V_SYS", "SCAP", "VBUS", "USB_DP", "USB_DN",
-         "GPS_RF", "GPS_BIAS", "GPS_VCC_RF", "CLK40", "RTC_XI", "RTC_XO", "SPI_SCK", "SPI_MOSI", "SPI_MISO"]
-STATS = {"limit": 0, "exhausted": 0}
+         "GPS_RF", "GPS_BIAS", "GPS_VCC_RF", "CLK40", "RTC_XI", "RTC_XO",
+         "CAN1_H", "CAN1_L", "CAN2_H", "CAN2_L", "CAN3_H", "CAN3_L", "CAN4_H", "CAN4_L",
+         "SPI_SCK", "SPI_MOSI", "SPI_MISO"]
+STATS = {"searches": 0, "blocked": 0, "budget": 0}
+
+# ---------------------------------------------------------------------------------- C core
+_so = os.path.join(HERE, "route_core.so")
+_src = os.path.join(HERE, "route_core.c")
+if not os.path.exists(_so) or os.path.getmtime(_so) < os.path.getmtime(_src):
+    subprocess.check_call(["gcc", "-O2", "-shared", "-fPIC", "-o", _so, _src, "-lm"])
+_lib = ctypes.CDLL(_so)
+_u8 = np.ctypeslib.ndpointer(np.uint8, flags="C_CONTIGUOUS")
+_f32 = np.ctypeslib.ndpointer(np.float32, flags="C_CONTIGUOUS")
+_i32 = np.ctypeslib.ndpointer(np.int32, flags="C_CONTIGUOUS")
+_lib.route_astar.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, _u8, _u8, _u8, _f32, _i32, ctypes.c_int,
+                             _f32, _u8, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
+                             ctypes.c_long, _i32, ctypes.c_int]
+_lib.route_astar.restype = ctypes.c_int
+_out = np.zeros(3 * 60000, np.int32)
 
 
-# ======================================================================================= grid
+def astar(G, free, vfree, sources, target, heur, layers_ok=SIGNAL_LAYERS, lcost=None, max_exp=MAX_EXP):
+    """free/target: (L, H, W) uint8. Returns [(layer, y, x), ...] from a source cell to the tree, or None."""
+    STATS["searches"] += 1
+    src = np.ascontiguousarray(np.array(sources, np.int32).reshape(-1, 3))
+    n = _lib.route_astar(G.W, G.H, len(LAYERS), free, vfree, target, heur, src, len(src),
+                         np.array(lcost or LAYER_COST, np.float32), np.array(layers_ok, np.uint8),
+                         VIA_COST, TURN45, TURN90, HW, max_exp, _out, len(_out) // 3)
+    if n < 0:
+        STATS["blocked" if n == -1 else "budget"] += 1
+        return None
+    return [tuple(int(v) for v in _out[3 * i:3 * i + 3]) for i in range(n)]
+
+
+# ---------------------------------------------------------------------------------- grid
 class Grid:
     def __init__(self, g, pads_by_net):
         x0, y0, x1, y1 = g["bbox"]
@@ -69,7 +107,7 @@ class Grid:
             self.drill(h["x"], h["y"], h["d"] / 2, +1)
             if h["npth"]:
                 for li in range(len(LAYERS)):
-                    self.circle(li, h["x"], h["y"], h["d"] / 2, -1)
+                    self.circle(li, h["x"], h["y"], h["d"] / 2 + 0.15, -1)
         for ko in g["keepouts"]:
             for li in range(len(LAYERS)):
                 self.poly(li, ko, -1)
@@ -86,9 +124,8 @@ class Grid:
         return (x - self.x0) / GRID, (y - self.y0) / GRID
 
     def mm(self, cx, cy):
-        return self.x0 + cx * GRID, self.y0 + cy * GRID
+        return round(self.x0 + cx * GRID, 4), round(self.y0 + cy * GRID, 4)
 
-    # -- rasterising on a local patch (fast)
     def _mask(self, pts_cells, pad, draw_fn):
         xs = [p[0] for p in pts_cells]; ys = [p[1] for p in pts_cells]
         bx0 = max(0, int(math.floor(min(xs) - pad)) - 1); by0 = max(0, int(math.floor(min(ys) - pad)) - 1)
@@ -106,23 +143,27 @@ class Grid:
             if sl is not None:
                 self.netmap[li][sl][m] = val
 
-    def circle(self, li, x, y, r, val, target=None):
+    def circle(self, li, x, y, r, val):
         cx, cy = self.c(x, y)
         rr = r / GRID
         sl, m = self._mask([(cx, cy)], rr, lambda d, ox, oy: d.ellipse([cx - rr - ox, cy - rr - oy, cx + rr - ox, cy + rr - oy], fill=1))
-        if sl is None:
-            return
-        tgt = self.netmap[li] if target is None else target
-        tgt[sl][m] = val
+        if sl is not None:
+            self.netmap[li][sl][m] = val
 
     def segment_mask(self, a, b, w):
+        """Cells covered by a round-ended segment. Drawn as an exact polygon + end caps (PIL's wide
+        lines are lopsided for even pixel widths, which would eat into the clearance on one side)."""
         (ax, ay), (bx, by) = self.c(*a), self.c(*b)
         rr = w / 2 / GRID
+        ln = math.hypot(bx - ax, by - ay)
 
         def f(d, ox, oy):
-            d.line([ax - ox, ay - oy, bx - ox, by - oy], fill=1, width=max(1, int(round(w / GRID))))
+            if ln > 1e-6:
+                nx, ny = -(by - ay) / ln * rr, (bx - ax) / ln * rr
+                d.polygon([(ax + nx - ox, ay + ny - oy), (bx + nx - ox, by + ny - oy),
+                           (bx - nx - ox, by - ny - oy), (ax - nx - ox, ay - ny - oy)], fill=1, outline=1)
             for cx, cy in ((ax, ay), (bx, by)):
-                d.ellipse([cx - rr - ox, cy - rr - oy, cx + rr - ox, cy + rr - oy], fill=1)
+                d.ellipse([cx - rr - ox, cy - rr - oy, cx + rr - ox, cy + rr - oy], fill=1, outline=1)
         return self._mask([(ax, ay), (bx, by)], rr, f)
 
     def drill(self, x, y, r, delta):
@@ -142,7 +183,7 @@ class Grid:
 
     def _corridors(self, pads_by_net):
         """Escape lanes for fine-pitch pads: the pad centre line extended 0.9 mm past both ends.
-        The lane is usable by its own net and treated as copper by everyone else."""
+        Usable by the pad's own net, treated as copper by every other net."""
         self.corridor = [np.zeros((self.H, self.W), np.int32) for _ in LAYERS]
         for net, pads in pads_by_net.items():
             nid = self.netid[net]
@@ -162,14 +203,14 @@ class Grid:
                         li = LAYERS.index(lyr)
                         cor = self.corridor[li][sl]
                         cor[m & (cor == 0) & (self.padmap[li][sl] == 0)] = nid
-                        cor[m & (self.padmap[li][sl] == nid)] = nid
 
-    # -- free space for one net
     def free_maps(self, nid, w, ghost=False):
-        """ghost=True: only pads/keep-outs/lanes block (used to find who is in the way)."""
+        """Cells where a track centre (free) / via centre (vfree) of this net may sit.
+        ghost=True ignores other nets' tracks (pads, keep-outs and lanes still block)."""
         need = w / 2 + CLR + GRID * 0.6
         vneed = VIA_D / 2 + CLR + GRID * 0.6 + 0.04
-        free, vfree = [], np.ones((self.H, self.W), bool)
+        free = np.zeros((len(LAYERS), self.H, self.W), np.uint8)
+        vfree = np.ones((self.H, self.W), bool)
         for li in range(len(LAYERS)):
             nm = self.padmap[li] if ghost else self.netmap[li]
             cor = self.corridor[li]
@@ -177,114 +218,19 @@ class Grid:
             dist = distance_transform_edt(~foreign) * GRID
             f = (dist > need) & (self.edge_dist > w / 2 + EDGE_CLR)
             f |= (nm == nid)
-            # own escape lane: may hug foreign *pads*, but keeps full clearance to foreign tracks
-            if (cor == nid).any():
+            own = cor == nid
+            if own.any():       # own lane may pass between neighbouring pads, but not next to foreign tracks
                 trk = foreign & (self.padmap[li] == 0) & (cor == 0)
-                lane_ok = distance_transform_edt(~trk) * GRID > need
-                f |= (cor == nid) & ~((nm != 0) & (nm != nid)) & lane_ok
-            free.append(f)
+                f |= own & ~((nm != 0) & (nm != nid)) & (distance_transform_edt(~trk) * GRID > need)
+            free[li] = f
             vfree &= (dist > vneed) & (self.edge_dist > VIA_D / 2 + EDGE_CLR)
         if not ghost:
             vfree &= distance_transform_edt(self.drillcnt == 0) * GRID > VIA_DRILL / 2 + 0.25 + GRID
-        return free, vfree
-
-
-# ======================================================================================= search
-def astar(G, free, vfree, sources, target_mask, heur, max_exp, layers_ok=(0, 1, 2), lcost=None):
-    W, H = G.W, G.H
-    N = W * H
-    nL = len(LAYERS)
-    fr = [bytearray(free[li].astype(np.uint8).tobytes()) if li in layers_ok else bytearray(N) for li in range(nL)]
-    vf = bytearray(vfree.astype(np.uint8).tobytes())
-    tg = [bytearray(target_mask[li].astype(np.uint8).tobytes()) for li in range(nL)]
-    hm = heur.ravel().tolist() if heur is not None else None
-    gsc = array("f", [1e30]) * (N * nL)
-    prev = array("i", [-1]) * (N * nL)
-    lc_all = lcost or LAYER_COST
-    pq = []
-    for li, cy, cx in sources:
-        s = li * N + cy * W + cx
-        gsc[s] = 0.0
-        heapq.heappush(pq, (0.0, s))
-    dirs = [(1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
-            (1, 1, 1.4142), (1, -1, 1.4142), (-1, 1, 1.4142), (-1, -1, 1.4142)]
-    exp = 0
-    while pq:
-        f, s = heapq.heappop(pq)
-        li, r = divmod(s, N)
-        g0 = gsc[s]
-        if f > g0 + (HW * hm[r] if hm else 0.0) + 1e-3:
-            continue                       # stale entry
-        if tg[li][r]:
-            path = []
-            while s != -1:
-                path.append(s)
-                s = prev[s]
-            path.reverse()
-            return [(p // N, (p % N) // W, (p % N) % W) for p in path]
-        exp += 1
-        if exp > max_exp:
-            STATS["limit"] += 1
-            return None
-        cy, cx = divmod(r, W)
-        lc = lc_all[li]
-        frl = fr[li]
-        for dx, dy, cst in dirs:
-            nx, ny = cx + dx, cy + dy
-            if nx < 0 or ny < 0 or nx >= W or ny >= H:
-                continue
-            nr = ny * W + nx
-            if not frl[nr]:
-                continue
-            if dx and dy and not (frl[cy * W + nx] and frl[ny * W + cx]):
-                continue
-            ns = li * N + nr
-            ng = g0 + cst * lc
-            if ng < gsc[ns]:
-                gsc[ns] = ng
-                prev[ns] = s
-                heapq.heappush(pq, (ng + (HW * hm[nr] if hm else 0.0), ns))
-        if vf[r]:
-            for l2 in layers_ok:
-                if l2 == li or not fr[l2][r]:
-                    continue
-                ns = l2 * N + r
-                ng = g0 + VIA_COST
-                if ng < gsc[ns]:
-                    gsc[ns] = ng
-                    prev[ns] = s
-                    heapq.heappush(pq, (ng + (HW * hm[r] if hm else 0.0), ns))
-    STATS["exhausted"] += 1
-    return None
-
-
-def los_smooth(pts, freel):
-    if len(pts) <= 2:
-        return pts
-    H, W = freel.shape
-
-    def clear(a, b):
-        n = int(max(abs(b[0] - a[0]), abs(b[1] - a[1])) * 2) + 1
-        for k in range(n + 1):
-            x = a[0] + (b[0] - a[0]) * k / n
-            y = a[1] + (b[1] - a[1]) * k / n
-            for xx, yy in ((math.floor(x), math.floor(y)), (math.ceil(x), math.ceil(y)),
-                           (math.floor(x), math.ceil(y)), (math.ceil(x), math.floor(y))):
-                if not (0 <= xx < W and 0 <= yy < H) or not freel[yy, xx]:
-                    return False
-        return True
-    out = [pts[0]]
-    i = 0
-    while i < len(pts) - 1:
-        j = len(pts) - 1
-        while j > i + 1 and not clear(pts[i], pts[j]):
-            j -= 1
-        out.append(pts[j])
-        i = j
-    return out
+        return free, np.ascontiguousarray(vfree.astype(np.uint8))
 
 
 def split_runs(path):
+    """cell path -> [(layer, [corner points])], [via cells]"""
     runs, vias = [], []
     cur = [path[0]]
     for a in path[1:]:
@@ -299,9 +245,8 @@ def split_runs(path):
     for run in runs:
         pts = [run[0]]
         for i in range(1, len(run) - 1):
-            p0, p1, p2 = pts[-1], run[i], run[i + 1]
-            d1 = (p1[1] - p0[1], p1[2] - p0[2]); d2 = (p2[1] - p1[1], p2[2] - p1[2])
-            if d1[0] * d2[1] - d1[1] * d2[0] != 0 or (d1[0] * d2[0] + d1[1] * d2[1]) < 0:
+            p0, p1, p2 = run[i - 1], run[i], run[i + 1]
+            if (p1[1] - p0[1], p1[2] - p0[2]) != (p2[1] - p1[1], p2[2] - p1[2]):
                 pts.append(p1)
         if len(run) > 1:
             pts.append(run[-1])
@@ -327,19 +272,17 @@ def pad_minor(p):
     return max(0.15, min(max(xs) - min(xs), max(ys) - min(ys)) * 0.9)
 
 
-# ======================================================================================= router
+# ---------------------------------------------------------------------------------- router
 class Router:
     def __init__(self, g, pads_by_net, order):
-        self.g = g
         self.pbn = pads_by_net
         self.order = order
         self.G = Grid(g, pads_by_net)
-        self.geom = {}            # net -> {"tracks": [...], "vias": [...], "raster": [(li, sl, mask)]}
+        self.geom = {}            # net -> {"tracks", "vias", "raster"}
         self.failed = {}          # net -> [(ref, pad)]
         self._cells = {}
         self.allow_plane = False
 
-    # -- pad helpers
     def pad_cells(self, p, li):
         key = (p["ref"], p["pad"], round(p["x"], 3), round(p["y"], 3), li)
         if key not in self._cells:
@@ -348,18 +291,20 @@ class Router:
             cx, cy = G.c(p["x"], p["y"])
             cx, cy = int(round(cx)), int(round(cy))
             cells = []
-            for dy in range(-12, 13):
-                for dx in range(-12, 13):
+            for dy in range(-14, 15):
+                for dx in range(-14, 15):
                     x, y = cx + dx, cy + dy
                     if 0 <= x < G.W and 0 <= y < G.H and G.padmap[li][y, x] == nid and point_in_pad(p, *G.mm(x, y)):
                         cells.append((li, y, x))
             self._cells[key] = cells
         return self._cells[key]
 
+    def sources(self, p):
+        return [c for lyr in p["layers"] if lyr in LAYERS for c in self.pad_cells(p, LAYERS.index(lyr))]
+
     def width(self, net):
         return min([WIDE.get(net, SIG_W)] + [max(0.2, pad_minor(p)) for p in self.pbn[net]])
 
-    # -- commit / rip-up
     def _draw(self, net, li, a, b, w):
         sl, m = self.G.segment_mask(a, b, w)
         if sl is not None:
@@ -368,12 +313,10 @@ class Router:
             nm[m] = self.G.netid[net]
             self.geom[net]["raster"].append((li, sl, m))
 
-    def commit(self, net, w, path, pad_from, free):
+    def commit(self, net, w, path, pad_from):
         G = self.G
-        nid = G.netid[net]
         rec = self.geom.setdefault(net, {"tracks": [], "vias": [], "raster": []})
         runs, vcells = split_runs(path)
-        runs = [(li, los_smooth(pts, binary_erosion(free[li], iterations=2))) for li, pts in runs]
         for li, pts in runs:
             mmpts = [G.mm(x, y) for x, y in pts]
             if len(mmpts) >= 2:
@@ -383,12 +326,11 @@ class Router:
         for cy, cx in vcells:
             self.add_via(net, *G.mm(cx, cy))
         li = path[0][0]
-        if LAYERS[li] in pad_from["layers"]:
+        if pad_from is not None and LAYERS[li] in pad_from["layers"]:
             a = (pad_from["x"], pad_from["y"]); b = G.mm(path[0][2], path[0][1])
             if math.hypot(a[0] - b[0], a[1] - b[1]) > 1e-3:
                 ws = min(w, pad_minor(pad_from))
                 rec["tracks"].append({"net": net, "layer": LAYERS[li], "w": ws, "pts": [a, b]})
-                self._draw(net, li, a, b, ws + 0.1)
 
     def add_via(self, net, x, y):
         rec = self.geom.setdefault(net, {"tracks": [], "vias": [], "raster": []})
@@ -406,7 +348,13 @@ class Router:
         for v in rec["vias"]:
             self.G.drill(v["x"], v["y"], VIA_DRILL / 2, -1)
 
-    # -- routing one net
+    def _tree(self, pad):
+        G = self.G
+        tree = np.zeros((len(LAYERS), G.H, G.W), np.uint8)
+        for li, y, x in self.sources(pad):
+            tree[li, y, x] = 1
+        return tree
+
     def route_net(self, net):
         G = self.G
         nid = G.netid[net]
@@ -414,44 +362,39 @@ class Router:
         w = self.width(net)
         xs = [p["x"] for p in pads]; ys = [p["y"] for p in pads]
         long_net = (max(xs) - min(xs)) + (max(ys) - min(ys)) > 35 and net not in WIDE
-        lcost = [1.6, 1.0, 1.3, 4.0] if long_net else None
-        free, vfree = G.free_maps(nid, w)
+        lcost = LONG_COST if long_net else LAYER_COST
         cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
         pads = sorted(pads, key=lambda p: (p["x"] - cx) ** 2 + (p["y"] - cy) ** 2)
-        tree = [np.zeros((G.H, G.W), bool) for _ in LAYERS]
+        tree = self._tree(pads[0])
         tree_pads = [pads[0]]
-        for lyr in pads[0]["layers"]:
-            if lyr in LAYERS:
-                for li, y, x in self.pad_cells(pads[0], LAYERS.index(lyr)):
-                    tree[li][y, x] = True
         todo, failed = pads[1:], []
+        free, vfree = G.free_maps(nid, w)
         while todo:
             todo.sort(key=lambda p: min((p["x"] - q["x"]) ** 2 + (p["y"] - q["y"]) ** 2 for q in tree_pads))
             p = todo.pop(0)
-            srcs = [c for lyr in p["layers"] if lyr in LAYERS for c in self.pad_cells(p, LAYERS.index(lyr))]
-            if any(tree[li][y, x] for li, y, x in srcs):
+            srcs = self.sources(p)
+            if any(tree[li, y, x] for li, y, x in srcs):
                 tree_pads.append(p)
                 continue
-            anyt = np.logical_or.reduce(tree)
-            heur = distance_transform_edt(~anyt)
-            path, wc = None, w
+            heur = distance_transform_edt(tree.max(axis=0) == 0).astype(np.float32)
+            path, wc, dirty = None, w, False
             for wc in sorted({w, min(w, 0.5), min(w, 0.25)}, reverse=True):
                 if wc != w:
                     free, vfree = G.free_maps(nid, wc)
-                path = astar(G, free, vfree, srcs, tree, heur, max_exp=600000, lcost=lcost)
+                    dirty = True
+                path = astar(G, free, vfree, srcs, tree, heur, lcost=lcost)
+                if path is None and self.allow_plane:
+                    path = astar(G, free, vfree, srcs, tree, heur, layers_ok=(1, 1, 1, 1), lcost=lcost)
                 if path is not None:
                     break
-            if path is None and self.allow_plane:
-                free, vfree = G.free_maps(nid, min(w, 0.25))
-                wc = min(w, 0.25)
-                path = astar(G, free, vfree, srcs, tree, heur, max_exp=600000, layers_ok=(0, 1, 2, 3), lcost=lcost)
             if path is None:
                 failed.append((p["ref"], p["pad"]))
-                free, vfree = G.free_maps(nid, w)
+                if dirty:
+                    free, vfree = G.free_maps(nid, w)
                 continue
-            self.commit(net, wc, path, p, free)
+            self.commit(net, wc, path, p)
             for li, y, x in path:
-                tree[li][y, x] = True
+                tree[li, y, x] = 1
             tree_pads.append(p)
             free, vfree = G.free_maps(nid, w)
         if failed:
@@ -461,34 +404,30 @@ class Router:
         return failed
 
     def ghost_blockers(self, net):
-        """Route the net ignoring other signal tracks; return the nets whose copper is in the way."""
+        """Nets whose tracks sit on this net's ideal (pads-only) path."""
         G = self.G
         nid = G.netid[net]
         w = self.width(net)
-        free, vfree = G.free_maps(nid, w, ghost=True)
+        free, vfree = G.free_maps(nid, min(w, 0.25), ghost=True)
         pads = self.pbn[net]
-        blockers = set()
-        tree = [np.zeros((G.H, G.W), bool) for _ in LAYERS]
-        for lyr in pads[0]["layers"]:
-            if lyr in LAYERS:
-                for li, y, x in self.pad_cells(pads[0], LAYERS.index(lyr)):
-                    tree[li][y, x] = True
+        blockers = {}
+        tree = self._tree(pads[0])
+        r = int(math.ceil((w / 2 + CLR + 0.3) / GRID))
         for p in pads[1:]:
-            srcs = [c for lyr in p["layers"] if lyr in LAYERS for c in self.pad_cells(p, LAYERS.index(lyr))]
-            heur = distance_transform_edt(~np.logical_or.reduce(tree))
-            path = astar(G, free, vfree, srcs, tree, heur, max_exp=600000)
+            heur = distance_transform_edt(tree.max(axis=0) == 0).astype(np.float32)
+            path = astar(G, free, vfree, self.sources(p), tree, heur)
             if path is None:
                 continue
             for li, y, x in path:
-                tree[li][y, x] = True
-            r = int(math.ceil((w / 2 + CLR + 0.5) / GRID))
-            for li, y, x in path[::3]:
+                tree[li, y, x] = 1
+            for li, y, x in path[::2]:
                 win = G.netmap[li][max(0, y - r):y + r + 1, max(0, x - r):x + r + 1]
                 pw = G.padmap[li][max(0, y - r):y + r + 1, max(0, x - r):x + r + 1]
-                ids = np.unique(win[(win > 0) & (win != nid) & (pw != win)])
-                blockers.update(int(i) for i in ids)
+                for i in np.unique(win[(win > 0) & (win != nid) & (pw != win)]):
+                    blockers[int(i)] = blockers.get(int(i), 0) + 1
         inv = {v: k for k, v in G.netid.items()}
-        return [inv[i] for i in blockers if inv.get(i) and inv[i] != "GND"]
+        names = [inv[i] for i, _ in sorted(blockers.items(), key=lambda kv: -kv[1]) if inv.get(i) and inv[i] != "GND"]
+        return names
 
     def nfail(self):
         return sum(len(v) for v in self.failed.values())
@@ -503,108 +442,133 @@ class Router:
         self.geom = copy.deepcopy(geom)
         self.failed = copy.deepcopy(failed)
 
-    # -- GND stubs
     def gnd_stubs(self):
+        """Short stub + via into the In1 plane for every SMD GND pad."""
         G = self.G
         gid = G.netid["GND"]
         w = WIDE["GND"]
-        free, vfree = G.free_maps(gid, w)
         bad = []
+        zero = np.zeros((G.H, G.W), np.float32)
         for p in self.pbn["GND"]:
             if not p["smd"] or p["layers"][0] not in LAYERS:
                 continue
             li = LAYERS.index(p["layers"][0])
             srcs = self.pad_cells(p, li)
-            tgt = [np.zeros((G.H, G.W), bool) for _ in LAYERS]
-            tgt[li] = vfree & (G.netmap[li] == 0)
-            path = astar(G, free, vfree, srcs, tgt, None, max_exp=40000, layers_ok=(li,)) if srcs else None
+            path = None
+            for wc in (min(w, max(0.2, pad_minor(p))), 0.25):
+                free, vfree = G.free_maps(gid, wc)
+                tgt = np.zeros((len(LAYERS), G.H, G.W), np.uint8)
+                tgt[li] = vfree & (G.netmap[li] == 0)
+                ok = [0, 0, 0, 0]; ok[li] = 1
+                path = astar(G, free, vfree, srcs, tgt, zero, layers_ok=tuple(ok), max_exp=3_000_000) if srcs else None
+                if path is not None:
+                    break
             if path is None:
                 bad.append(("GND", p["ref"], p["pad"]))
                 continue
-            self.commit("GND", min(w, pad_minor(p)), path, p, free)
-            vx, vy = G.mm(path[-1][2], path[-1][1])
-            self.add_via("GND", vx, vy)
-            free, vfree = G.free_maps(gid, w)
+            self.commit("GND", wc, path, p)
+            self.add_via("GND", *G.mm(path[-1][2], path[-1][1]))
         return bad
 
-    def stitch(self, pitch=3.0):
-        """GND stitching vias on a grid wherever a via fits clear of everything, so every
-        F.Cu / B.Cu / In2.Cu GND pour fragment is tied to the In1 plane."""
+    def stitch(self, pitch=4.0):
+        """GND stitching vias on a regular grid wherever one fits, tying the pours to the plane."""
         G = self.G
         gid = G.netid["GND"]
-        _, vfree = G.free_maps(gid, 0.3)
-        empty = np.logical_and.reduce([(nm == 0) | (nm == gid) for nm in G.netmap])
         step = int(pitch / GRID)
         n = 0
+        _, vfree = G.free_maps(gid, 0.3)
+        empty = np.logical_and.reduce([(nm == 0) for nm in G.netmap])
         for y in range(step // 2, G.H, step):
             for x in range(step // 2, G.W, step):
-                # search a small neighbourhood for a legal spot
-                done = False
-                for dy in range(-6, 7, 2):
-                    for dx in range(-6, 7, 2):
-                        yy, xx = y + dy, x + dx
-                        if 0 <= yy < G.H and 0 <= xx < G.W and vfree[yy, xx] and empty[yy, xx]:
-                            self.add_via("GND", *G.mm(xx, yy))
-                            n += 1
-                            done = True
-                            break
-                    if done:
-                        break
+                if vfree[y, x] and empty[max(0, y - 5):y + 6, max(0, x - 5):x + 6].all():
+                    self.add_via("GND", *G.mm(x, y))
+                    n += 1
         return n
 
-    def run(self, t0, repair_rounds=8):
-        for net in self.order:
-            self.route_net(net)
-        print(f"initial: {self.nfail()} failed connections in {len(self.failed)} nets  ({time.time() - t0:.0f}s)", flush=True)
+    def repair(self, t0, rounds, k):
         stale = 0
-        for rnd in range(repair_rounds):
+        for rnd in range(rounds):
             if not self.failed:
-                break
+                return
             improved = False
             for net in list(self.failed):
                 if net not in self.failed:
                     continue
                 before = self.nfail()
                 snap = self.snapshot()
-                blockers = self.ghost_blockers(net)
-                random.shuffle(blockers)
-                blockers = blockers[:6]
+                cand = self.ghost_blockers(net)
+                blockers = cand[:k] if rnd % 2 == 0 else random.sample(cand, min(k, len(cand)))
                 for b in blockers:
                     self.rip(b)
                     self.failed.pop(b, None)
                 self.rip(net)
                 self.route_net(net)
-                for b in blockers:
+                for b in sorted(blockers, key=lambda n: self.order.index(n) if n in self.order else 999):
                     self.route_net(b)
                 after = self.nfail()
                 if after > before or (after == before and net in self.failed):
                     self.restore(snap)
                 else:
                     improved = improved or after < before
-                    print(f"  repair {net}: ripped {blockers} -> {after} failed", flush=True)
-            print(f"round {rnd + 1}: {self.nfail()} failed  ({time.time() - t0:.0f}s)", flush=True)
+                    print(f"  repair {net}: ripped {len(blockers)} nets -> {after} open", flush=True)
+            print(f"round {rnd + 1}: {self.nfail()} open  ({time.time() - t0:.0f}s)", flush=True)
             stale = 0 if improved else stale + 1
-            if stale >= 2:
-                break
+            if stale >= 3:
+                return
+
+    def run(self, t0):
+        gnd_bad = []
+        if GND_FIRST:
+            gnd_bad = self.gnd_stubs()
+            print(f"GND stubs first: {len(gnd_bad)} failed  ({time.time() - t0:.0f}s)", flush=True)
+        for net in self.order:
+            self.route_net(net)
+        print(f"initial: {self.nfail()} open connections in {len(self.failed)} nets  ({time.time() - t0:.0f}s) {STATS}", flush=True)
+        self.repair(t0, rounds=12, k=5)
         if self.failed:
-            # last resort: let the remaining connections borrow the In1 ground plane
-            self.allow_plane = True
+            self.allow_plane = True      # last resort: borrow the In1 plane
             for net in list(self.failed):
                 self.rip(net)
                 self.route_net(net)
-            print(f"plane fallback: {self.nfail()} failed  ({time.time() - t0:.0f}s)", flush=True)
-        gnd_bad = self.gnd_stubs()
-        n_stitch = self.stitch()
-        print(f"stitching vias: {n_stitch}", flush=True)
+            print(f"plane fallback: {self.nfail()} open  ({time.time() - t0:.0f}s)", flush=True)
+            self.repair(t0, rounds=4, k=8)
+        if not GND_FIRST:
+            gnd_bad = self.gnd_stubs()
+        print(f"GND stubs: {len(gnd_bad)} failed; stitching vias: {self.stitch()}", flush=True)
         tracks = [t for r in self.geom.values() for t in r["tracks"]]
         vias = [v for r in self.geom.values() for v in r["vias"]]
         failed = [(n, *rp) for n, lst in self.failed.items() for rp in lst] + gnd_bad
         return tracks, vias, failed
 
 
+def seg_dist(p, a, b):
+    ax, ay = a; bx, by = b; px, py = p
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    u = 0 if L2 == 0 else max(0, min(1, ((px - ax) * dx + (py - ay) * dy) / L2))
+    return math.hypot(px - ax - u * dx, py - ay - u * dy)
+
+
+def via_clearance_check(tracks, vias):
+    """Exact via-to-foreign-track gaps on the outer and In2 layers (vias span every layer)."""
+    worst = []
+    for v in vias:
+        for t in tracks:
+            if t["net"] == v["net"]:
+                continue
+            for a, b in zip(t["pts"], t["pts"][1:]):
+                if min(a[0], b[0]) - 1.2 > v["x"] or max(a[0], b[0]) + 1.2 < v["x"] or \
+                   min(a[1], b[1]) - 1.2 > v["y"] or max(a[1], b[1]) + 1.2 < v["y"]:
+                    continue
+                gap = seg_dist((v["x"], v["y"]), a, b) - VIA_D / 2 - t["w"] / 2
+                if gap < 0.15:
+                    worst.append((round(gap, 3), v["net"], t["net"], round(v["x"], 2), round(v["y"], 2)))
+    return sorted(worst)
+
+
 def main(src, dst):
     t0 = time.time()
-    random.seed(1)
+    random.seed(int(os.environ.get("ROUTE_SEED", "1")))
     g = json.load(open(src))
     pads_by_net = {}
     for p in g["pads"]:
@@ -618,7 +582,11 @@ def main(src, dst):
     order = [n for n in FIRST if n in nets] + sorted([n for n in nets if n not in FIRST], key=span)
     tracks, vias, failed = Router(g, pads_by_net, order).run(t0)
     json.dump({"tracks": tracks, "vias": vias, "failed": failed}, open(dst, "w"))
-    print(f"done in {time.time() - t0:.0f}s: {len(tracks)} tracks, {len(vias)} vias, {len(failed)} failed {STATS}")
+    inner = sum(1 for t in tracks if t["layer"] == "In1")
+    print(f"done in {time.time() - t0:.0f}s: {len(tracks)} tracks, {len(vias)} vias, {len(failed)} failed, "
+          f"{inner} tracks on the In1 plane {STATS}")
+    bad = via_clearance_check(tracks, vias)
+    print(f"via clearance check: {len(bad)} below 0.15 mm", bad[:5])
     for f in failed:
         print("FAILED", f)
 

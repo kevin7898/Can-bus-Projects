@@ -69,9 +69,12 @@ static esp_err_t open_onchip(int ch)
 }
 
 // ---------------------------------------------------------------- MCP2518FD channels
+// Both MCP2518FD share one open-drain, level-triggered interrupt line: mask it in the ISR and
+// re-arm once both RX FIFOs are empty, so a frame arriving mid-drain can never be missed.
 static void IRAM_ATTR mcp_isr(void *arg)
 {
     BaseType_t woken = pdFALSE;
+    gpio_intr_disable(PIN_MCP_INT);
     vTaskNotifyGiveFromISR(s_mcp_task, &woken);
     portYIELD_FROM_ISR(woken);
 }
@@ -96,26 +99,26 @@ static void mcp_task(void *arg)
             }
         }
         if (now - last_sync > 500000) last_sync = now;
+        gpio_intr_enable(PIN_MCP_INT);
     }
 }
 
 static esp_err_t open_mcp(int i)
 {
-    static const int cs[2] = {PIN_CAN3_CS, PIN_CAN4_CS}, irq[2] = {PIN_CAN3_INT, PIN_CAN4_INT};
+    static const int cs[2] = {PIN_CAN3_CS, PIN_CAN4_CS};
     int ch = 2 + i;
     esp_err_t err = mcp2518fd_init(&s_mcp[i], SPI2_HOST, cs[i], 17 * 1000 * 1000);
     if (err == ESP_OK) err = mcp2518fd_start(&s_mcp[i], g_cfg.bitrate[ch], g_cfg.data_bitrate[ch], g_cfg.listen_only[ch]);
-    if (err != ESP_OK) return err;
-    gpio_config_t io = {.pin_bit_mask = 1ULL << irq[i], .mode = GPIO_MODE_INPUT, .intr_type = GPIO_INTR_NEGEDGE};
-    gpio_config(&io);
-    gpio_isr_handler_add(irq[i], mcp_isr, NULL);
-    return ESP_OK;
+    return err;
 }
 
 esp_err_t can_start(void)
 {
     gpio_install_isr_service(0);
     xTaskCreate(mcp_task, "mcp", 4096, NULL, 12, &s_mcp_task);
+    gpio_config_t io = {.pin_bit_mask = 1ULL << PIN_MCP_INT, .mode = GPIO_MODE_INPUT, .intr_type = GPIO_INTR_LOW_LEVEL};
+    gpio_config(&io);
+    gpio_isr_handler_add(PIN_MCP_INT, mcp_isr, NULL);
     for (int ch = 0; ch < NUM_CAN; ch++) {
         if (!g_cfg.bitrate[ch]) continue;
         esp_err_t err = ch < 2 ? open_onchip(ch) : open_mcp(ch - 2);

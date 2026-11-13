@@ -1,0 +1,247 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>QuadCAN-C5 3D</title>
+<style>html,body{margin:0;background:#16181c;overflow:hidden}</style>
+<script type="importmap">{"imports":{"three":"./node_modules/three/build/three.module.js","three/addons/":"./node_modules/three/examples/jsm/"}}</script>
+</head><body>
+<script type="module">
+import * as THREE from 'three';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+const q = new URLSearchParams(location.search);
+const view = q.get('view') || 'iso';
+const W = innerWidth, H = innerHeight;
+const renderer = new THREE.WebGLRenderer({antialias: true, preserveDrawingBuffer: true});
+renderer.setSize(W, H); renderer.setPixelRatio(1);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1b1d22);
+
+const BW = 110, BH = 85, BT = 1.6;
+const X = x => x - BW / 2, Z = y => y - BH / 2;          // board mm -> world
+const TOP = BT / 2, BOT = -BT / 2;
+
+// ---------- lights
+scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x2a2620, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(-60, 120, 70); sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, {left: -80, right: 80, top: 80, bottom: -80, near: 1, far: 400});
+sun.shadow.bias = -0.0004;
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0xbfd4ff, 0.6); fill.position.set(80, 40, -60); scene.add(fill);
+const under = new THREE.DirectionalLight(0xffffff, 1.2); under.position.set(30, -120, 40); scene.add(under);
+
+// ---------- helpers
+const tl = new THREE.TextureLoader();
+function tex(url) { const t = tl.load(url); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; }
+const M = (c, r = 0.6, m = 0.0) => new THREE.MeshStandardMaterial({color: c, roughness: r, metalness: m});
+const mat = {
+  black: M(0x1c1c1e, 0.55), plastic: M(0x141416, 0.7), metal: M(0xc9ccd1, 0.28, 0.9), tin: M(0xd8dade, 0.35, 0.85),
+  gold: M(0xd9b45a, 0.3, 0.9), tan: M(0xb08b55, 0.6), ceramic: M(0xe9e4d6, 0.5), grey: M(0x3a3c40, 0.6),
+  natural: M(0xe8e0c8, 0.6), al: M(0xc7cbd1, 0.35, 0.8), sleeve: M(0x18306b, 0.45), pcbBlue: M(0x1a2a4a, 0.6),
+};
+function labelMat(text, bg = '#1c1c1e', fg = '#cfd2d6', w = 512, h = 256, size = 64, base = null) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.fillStyle = bg; g.fillRect(0, 0, w, h);
+  g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const lines = text.split('\n');
+  lines.forEach((l, i) => { g.font = `${i ? 0.7 * size : size}px Helvetica, Arial, sans-serif`; g.fillText(l, w / 2, h / 2 + (i - (lines.length - 1) / 2) * size * 1.1); });
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  const m = (base || M(0xffffff, 0.55)).clone(); m.map = t; m.color = new THREE.Color(0xffffff); return m;
+}
+function add(mesh, cast = true) { mesh.castShadow = cast; mesh.receiveShadow = true; scene.add(mesh); return mesh; }
+// box with optional top label; (x,y) board centre, dims along board X (dx) / Y (dy), sitting on a side
+function box(x, y, dx, dy, h, material, side = 'F', topMat = null, z0 = 0) {
+  const g = new THREE.BoxGeometry(dx, h, dy);
+  const mats = topMat ? [material, material, side === 'F' ? topMat : material, side === 'F' ? material : topMat, material, material] : material;
+  const m = new THREE.Mesh(g, mats);
+  m.position.set(X(x), side === 'F' ? TOP + z0 + h / 2 : BOT - z0 - h / 2, Z(y));
+  if (side === 'B' && topMat) m.rotation.x = Math.PI;   // label faces down
+  return add(m);
+}
+function cyl(x, y, r, h, material, side = 'F', topMat = null, z0 = 0, seg = 48) {
+  const g = new THREE.CylinderGeometry(r, r, h, seg);
+  const m = new THREE.Mesh(g, topMat ? [material, topMat, material] : material);
+  m.position.set(X(x), side === 'F' ? TOP + z0 + h / 2 : BOT - z0 - h / 2, Z(y));
+  return add(m);
+}
+
+// ---------- board
+const sideMat = M(0xb7a26c, 0.8);
+const topM = new THREE.MeshStandardMaterial({map: tex('bare_F.png'), roughness: 0.45, metalness: 0.05});
+const botTex = tex('bare_B.png'); botTex.wrapS = botTex.wrapT = THREE.RepeatWrapping; botTex.repeat.set(-1, -1);
+const botM = new THREE.MeshStandardMaterial({map: botTex, roughness: 0.45, metalness: 0.05});
+const shape = new THREE.Shape();
+(function rr(s, w, h, r) { s.moveTo(-w / 2 + r, -h / 2); s.lineTo(w / 2 - r, -h / 2); s.quadraticCurveTo(w / 2, -h / 2, w / 2, -h / 2 + r);
+  s.lineTo(w / 2, h / 2 - r); s.quadraticCurveTo(w / 2, h / 2, w / 2 - r, h / 2); s.lineTo(-w / 2 + r, h / 2);
+  s.quadraticCurveTo(-w / 2, h / 2, -w / 2, h / 2 - r); s.lineTo(-w / 2, -h / 2 + r); s.quadraticCurveTo(-w / 2, -h / 2, -w / 2 + r, -h / 2); })(shape, BW, BH, 3);
+const edgeGeo = new THREE.ExtrudeGeometry(shape, {depth: BT - 0.06, bevelEnabled: false, curveSegments: 12});
+const edgeMesh = new THREE.Mesh(edgeGeo, sideMat); edgeMesh.rotation.x = -Math.PI / 2; edgeMesh.position.y = BOT + 0.03; add(edgeMesh);
+const faceGeo = new THREE.ShapeGeometry(shape, 12);
+{ // UVs from position
+  const p = faceGeo.attributes.position, uv = faceGeo.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + BW / 2) / BW, (p.getY(i) + BH / 2) / BH);
+}
+const topFace = new THREE.Mesh(faceGeo, topM); topFace.rotation.x = -Math.PI / 2; topFace.position.y = TOP; add(topFace, false);
+const botFace = new THREE.Mesh(faceGeo, botM); botFace.rotation.x = Math.PI / 2; botFace.position.y = BOT; add(botFace, false);
+
+// ---------- components
+const data = await (await fetch('board.json')).json();
+const fpByRef = Object.fromEntries(data.fps.map(f => [f.ref, f]));
+const rot90 = f => Math.round(f.rot / 90) % 2 !== 0;
+const sz = (f, a, b) => rot90(f) ? [b, a] : [a, b];        // local (x,y) dims -> board dims
+
+function passive(f, L, Wd, h, bodyMat) {
+  const [dx, dy] = sz(f, L, Wd);
+  const along = dx > dy;
+  box(f.x, f.y, along ? L * 0.62 : Wd, along ? Wd : L * 0.62, h, bodyMat);
+  for (const s of [-1, 1]) {
+    const ox = along ? s * L * 0.41 : 0, oy = along ? 0 : s * L * 0.41;
+    box(f.x + ox, f.y + oy, along ? L * 0.18 : Wd, along ? Wd : L * 0.18, h, mat.tin);
+  }
+}
+function ic(f, bw, bl, h, label, pins = true, pinPitch = 1.27, nSide = 4, lead = 1.0) {
+  const [dx, dy] = sz(f, bw, bl);
+  box(f.x, f.y, dx, dy, h, mat.black, f.side, label ? labelMat(label, '#161618', '#9a9da3', 512, 512, 70) : null, 0.1);
+  if (!pins) return;
+  const alongY = !rot90(f);  // pins on left/right sides, rows run along y in local coords
+  for (let i = 0; i < nSide; i++) for (const s of [-1, 1]) {
+    const t = (i - (nSide - 1) / 2) * pinPitch;
+    const px = alongY ? f.x + s * (bw / 2 + lead / 2) : f.x + t, py = alongY ? f.y + t : f.y + s * (bw / 2 + lead / 2);
+    box(px, py, alongY ? lead : 0.4, alongY ? 0.4 : lead, 0.25, mat.tin, f.side);
+  }
+  // pin-1 dot
+  const d = new THREE.Mesh(new THREE.CircleGeometry(0.35, 16), M(0x55585e, 0.4));
+  d.rotation.x = -Math.PI / 2; d.position.set(X(f.x - dx / 2 + 0.8), TOP + 0.1 + h + 0.01, Z(f.y - dy / 2 + 0.8)); scene.add(d);
+}
+function header(f, n) {
+  // pins along local +y from the footprint origin (KiCad PinHeader_1xN), rotated
+  const r = (f.rot % 360 + 360) % 360;
+  const dir = {0: [0, 1], 90: [1, 0], 180: [0, -1], 270: [-1, 0]}[Math.round(r / 90) * 90 % 360];
+  const cx = f.x + dir[0] * 2.54 * (n - 1) / 2, cy = f.y + dir[1] * 2.54 * (n - 1) / 2;
+  const L = 2.54 * n;
+  box(cx, cy, dir[0] ? L : 2.54, dir[0] ? 2.54 : L, 2.5, mat.plastic);
+  for (let i = 0; i < n; i++) {
+    const px = f.x + dir[0] * 2.54 * i, py = f.y + dir[1] * 2.54 * i;
+    box(px, py, 0.64, 0.64, 8.5, mat.gold, 'F', null, 0);
+    box(px, py, 0.64, 0.64, 3.0, mat.gold, 'B', null, 0);
+  }
+}
+
+const silkLed = {yellow: 0xffc21a, green: 0x31d158, blue: 0x2f7bff};
+for (const f of data.fps) {
+  const fp = f.fp, ref = f.ref;
+  if (fp.startsWith('MountingHole')) continue;
+  if (fp.startsWith('R_0603')) passive(f, 1.6, 0.8, 0.45, mat.black);
+  else if (fp.startsWith('R_1206')) passive(f, 3.2, 1.6, 0.55, mat.black);
+  else if (fp.startsWith('C_0603') || fp.startsWith('L_0603')) passive(f, 1.6, 0.8, 0.8, fp.startsWith('L_') ? mat.grey : mat.tan);
+  else if (fp.startsWith('C_0805')) passive(f, 2.0, 1.25, 1.1, mat.tan);
+  else if (fp.startsWith('C_1210')) passive(f, 3.2, 2.5, 2.0, mat.tan);
+  else if (fp.startsWith('LED_0603')) {
+    const col = /yellow/.test(f.value) ? 'yellow' : /green/.test(f.value) ? 'green' : 'blue';
+    passive(f, 1.6, 0.8, 0.55, M(0xf4f1e8, 0.3));
+    const [dx, dy] = sz(f, 0.7, 0.6);
+    box(f.x, f.y, dx, dy, 0.58, new THREE.MeshStandardMaterial({color: silkLed[col], emissive: silkLed[col], emissiveIntensity: ref === 'D30' || ref === 'D21' || ref === 'D33' ? 1.4 : 0.15, roughness: 0.3}));
+  }
+  else if (fp.startsWith('SOIC-8') || fp.startsWith('TI_SO-PowerPAD')) {
+    const lab = ref === 'U1' ? 'TPS54360' : ref === 'U12' ? 'PCF8523' : 'TCAN1044\nAV-Q1';
+    ic(f, 3.9, 4.9, 1.5, lab);
+  }
+  else if (fp.startsWith('SOIC-14')) ic(f, 3.9, 8.7, 1.5, 'MCP2518FD', true, 1.27, 7);
+  else if (fp.startsWith('TSSOP-24')) ic(f, 4.4, 7.8, 1.0, 'TCA9535', true, 0.65, 12, 0.8);
+  else if (fp === 'SOT-23' || fp === 'SOT-23-6') ic(f, 1.3, 2.9, 1.0, null, true, 0.95, fp === 'SOT-23' ? 2 : 3, 0.6);
+  else if (fp.startsWith('SOT-223')) { ic(f, 3.5, 6.5, 1.6, 'AP7361C', false); const [dx, dy] = sz(f, 1.5, 3.0); box(f.x + (rot90(f) ? 0 : 3.0), f.y + (rot90(f) ? 3.0 : 0), dx, dy, 0.25, mat.tin); }
+  else if (fp === 'D_SMA' || fp === 'D_SMB' || fp === 'D_SOD-123') {
+    const d = fp === 'D_SMA' ? [4.3, 2.6, 2.0] : fp === 'D_SMB' ? [4.6, 3.6, 2.3] : [2.7, 1.6, 1.1];
+    const [dx, dy] = sz(f, d[0], d[1]);
+    box(f.x, f.y, dx, dy, d[2], mat.black);
+    const [bx, by] = sz(f, d[0] * 0.12, d[1]);
+    const off = d[0] * 0.3 * (f.rot >= 135 && f.rot < 315 ? 1 : -1);
+    box(f.x + (rot90(f) ? 0 : off), f.y + (rot90(f) ? off : 0), bx, by, d[2] + 0.02, M(0x9a9da3, 0.5));
+  }
+  else if (fp.startsWith('Fuse_Littelfuse')) { const [dx, dy] = sz(f, 6.1, 2.7); box(f.x, f.y, dx, dy, 2.7, mat.ceramic, 'F', labelMat('2A', '#e9e4d6', '#c0392b', 256, 128, 70)); }
+  else if (fp.startsWith('L_Bourns')) { const [dx, dy] = sz(f, 7.3, 6.6); box(f.x, f.y, dx, dy, 2.8, mat.grey, 'F', labelMat('8R2', '#2c2e32', '#b8bcc2', 256, 256, 70)); }
+  else if (fp.startsWith('Oscillator')) { const [dx, dy] = sz(f, 3.2, 2.5); box(f.x, f.y, dx, dy, 1.0, mat.metal, 'F', labelMat('40.000', '#c9ccd1', '#55585e', 256, 200, 60, mat.metal)); }
+  else if (fp.startsWith('Crystal')) { const [dx, dy] = sz(f, 3.2, 1.5); box(f.x, f.y, dx, dy, 0.9, mat.metal); }
+  else if (fp.startsWith('SW_SPST_PTS810')) { const [dx, dy] = sz(f, 4.2, 3.2); box(f.x, f.y, dx, dy, 2.0, mat.metal); cyl(f.x, f.y, 0.9, 0.6, mat.plastic, 'F', null, 2.0); }
+  else if (fp.startsWith('PinHeader_1x02')) header(f, 2);
+  else if (fp.startsWith('PinHeader_1x08')) header(f, 8);
+  else if (fp.startsWith('U.FL')) { box(f.x, f.y, 2.6, 2.6, 0.6, mat.ceramic); cyl(f.x, f.y, 1.0, 1.25, mat.gold, 'F', null, 0); }
+  else if (fp.startsWith('JST_SH')) { const [dx, dy] = sz(f, 6.0, 4.25); box(f.x, f.y, dx, dy, 2.9, mat.natural); }
+  else if (fp.startsWith('CP_Radial_D8')) {
+    const cx = f.x + 1.75;
+    cyl(cx, f.y, 4.0, 11.5, mat.sleeve, 'F', labelMat('47µF\n63V', '#c7cbd1', '#30343a', 256, 256, 46, mat.al));
+  }
+  else if (fp.startsWith('CP_Radial_D13')) {
+    const cx = f.x + 2.5;
+    cyl(cx, f.y, 5.75, 6.5, mat.black, 'F', labelMat('0.47F\n5.5V', '#18191b', '#d9a441', 256, 256, 50));
+  }
+  else if (fp === 'ESP32-C5-WROOM-1') {
+    // module PCB 18 x 27.5, antenna end at board y = 0
+    box(f.x, f.y, 18, 27.5, 0.8, mat.pcbBlue, 'F', labelMat('', '#16233f', '#16233f', 64, 64, 10, mat.pcbBlue), 0.05);
+    const ant = new THREE.Mesh(new THREE.PlaneGeometry(14, 4.2), labelMat('⌇⌇⌇⌇⌇⌇⌇⌇⌇⌇', '#16233f', '#c9a24a', 512, 160, 120));
+    ant.rotation.x = -Math.PI / 2; ant.position.set(X(f.x), TOP + 0.87, Z(f.y - 13.75 + 3.4)); scene.add(ant);
+    box(f.x, f.y + 3.9, 16.6, 19.0, 2.35, mat.metal, 'F', labelMat('ESPRESSIF\nESP32-C5-WROOM-1\nN8R8   Wi-Fi 6', '#c9ccd1', '#3b3e44', 512, 600, 64, mat.metal), 0.85);
+  }
+  else if (fp.startsWith('USB_C')) { box(f.x, 3.6, 8.94, 7.35, 3.26, mat.metal); box(f.x, 0.2, 7.0, 0.6, 2.0, mat.plastic, 'F', null, 0.6); }
+  else if (fp.startsWith('microSD')) {
+    box(70, 70.2, 14.0, 15.4, 1.55, mat.metal);
+    box(70.4, 80.5, 11.0, 6.0, 0.8, M(0x1d3f8f, 0.4), 'F', labelMat('microSD 64GB', '#1d3f8f', '#e8edf5', 512, 256, 60), 0.35);
+  }
+  else if (fp === 'ublox_NEO') box(f.x, f.y, 12.2, 16.0, 2.4, mat.metal, 'F', labelMat('u-blox\nNEO-M9N', '#c9ccd1', '#3b3e44', 512, 640, 90, mat.metal));
+  else if (fp.startsWith('Molex_Micro-Fit')) {
+    // right-angle housing; mating face toward the left edge
+    const bb = f.bb; const x0 = bb[0] + 0.2, x1 = bb[2] - 3.4, y0 = bb[1] + 0.6, y1 = bb[3] - 0.6;
+    box((x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 9.6, mat.black);
+    for (let i = 0; i < 7; i++) for (let j = 0; j < 2; j++) {
+      const hole = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 2.6), M(0x050506, 0.9));
+      hole.rotation.y = -Math.PI / 2; hole.position.set(X(x0) - 0.01, TOP + 2.2 + j * 3.6, Z(f.y - 18 + 3 * i)); scene.add(hole);
+    }
+    for (let i = 0; i < 7; i++) for (const px of [f.x, f.x + 3]) box(px, f.y - 3 * i, 0.64, 0.64, 2.5, mat.tin, 'B');
+  }
+  else if (fp.startsWith('BatteryHolder')) {
+    cyl(f.x, f.y, 6.6, 2.6, mat.metal, 'B', labelMat('CR1220\n3V', '#c9ccd1', '#3b3e44', 256, 256, 54, mat.metal));
+    box(f.x - 8.2, f.y, 4.2, 6.5, 1.4, mat.tin, 'B'); box(f.x + 8.2, f.y, 4.2, 6.5, 1.4, mat.tin, 'B');
+  }
+}
+
+// ---------- enclosure (STL from enclosure/quadcan_enclosure.scad)
+// SCAD frame: x = 2.8 + board_x, y = 2.8 + 85 - board_y, z up; PCB top at z = 9.6
+const caseView = view === 'case' || view === 'closed';
+if (caseView) {
+  const loader = new STLLoader();
+  const load = url => new Promise(r => loader.load(url, r));
+  const petg = new THREE.MeshStandardMaterial({color: 0x2b2e33, roughness: 0.55, metalness: 0.0});
+  const base = new THREE.Mesh(await load('quadcan_base.stl'), petg);
+  base.rotation.x = -Math.PI / 2; base.position.set(-57.8, -8.8, 45.3); add(base);
+  const lidMat = view === 'case'
+    ? new THREE.MeshPhysicalMaterial({color: 0x9aa3ad, roughness: 0.15, transmission: 0.0, transparent: true, opacity: 0.38, metalness: 0.0})
+    : petg;
+  const lid = new THREE.Mesh(await load('quadcan_lid.stl'), lidMat);
+  lid.rotation.x = -Math.PI / 2; lid.position.set(-57.8, -8.8 + 24.6 + (view === 'case' ? 38 : 0), 45.3); add(lid, view !== 'case');
+}
+
+// ---------- camera views
+const cam = new THREE.PerspectiveCamera(view === 'top' ? 32 : 30, W / H, 1, 2000);
+const V = {
+  iso:     [[-100, 118, 138], [4, -4, 10]],
+  top:     [[0, 185, 0.01], [0, 0, 0]],
+  bottom:  [[80, -110, 95], [0, 0, 4]],
+  can:     [[-70, 55, 30], [-28, 2, -6]],
+  edge:    [[-120, 32, 34], [-10, 2, 0]],
+  logic:   [[95, 70, 80], [12, 0, 2]],
+  case:    [[-125, 120, 150], [2, 14, 8]],
+  closed:  [[-130, 70, 120], [0, 4, 4]],
+}[view];
+cam.position.set(...V[0]); cam.lookAt(new THREE.Vector3(...V[1]));
+if (view === 'top') cam.up.set(0, 0, -1), cam.lookAt(0, 0, 0);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(800, 800), new THREE.ShadowMaterial({opacity: 0.35}));
+ground.rotation.x = -Math.PI / 2; ground.position.y = caseView ? -8.9 : BOT - 4.2; ground.receiveShadow = true;
+if (view !== 'bottom') scene.add(ground);
+
+await new Promise(r => { if (THREE.DefaultLoadingManager.itemsLoaded >= THREE.DefaultLoadingManager.itemsTotal && THREE.DefaultLoadingManager.itemsTotal) setTimeout(r, 300); else THREE.DefaultLoadingManager.onLoad = () => setTimeout(r, 300); setTimeout(r, 8000); });
+renderer.render(scene, cam);
+window.__done = true;
+</script></body></html>

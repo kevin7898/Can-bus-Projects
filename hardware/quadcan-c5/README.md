@@ -11,7 +11,9 @@ A custom, from-scratch take on the MrDIY DuoCAN idea, grown into a set-and-forge
 * **Optional u-blox NEO-M9N GPS** at 20 Hz (25 Hz max) with an active-antenna u.FL. Leave it
   unpopulated to rely on the phone's location.
 * **LTE add-on header** (UART + power key + VIN) for a Cat-1 module board.
-* **9–36 V input** for 12 V cars and 24 V trucks, with a sub-mA sleep target when the vehicle is parked.
+* **9–36 V input** for 12 V cars and 24 V trucks.
+* **Key-off sleep** (est. ~0.5 mA): wakes on traffic on any of the four buses, an ignition wire, or the
+  battery voltage rising when the engine starts. See [docs/LOW_POWER.md](docs/LOW_POWER.md).
 * **Bus-safe by construction:** transceivers boot in standby, firmware opens channels listen-only,
   and a channel can't transmit at all unless its **TX_EN** jumper is fitted.
 
@@ -35,7 +37,8 @@ A custom, from-scratch take on the MrDIY DuoCAN idea, grown into a set-and-forge
 | `gen/gen_lib.py` | Custom symbols + the ESP32-C5-WROOM-1 footprint (from Espressif's land pattern) |
 | `gen/gen_sch.py` | Generates the KiCad schematic from `design.py` |
 | `gen/gen_pcb.py` | Board outline, 4-layer stack, placement, ground pours |
-| `gen/route.py` | Grid A* autorouter (F.Cu / In2.Cu / B.Cu, In1.Cu = solid GND) |
+| `gen/route.py`, `route_core.c` | Autorouter: direction-aware A* (C core) + rip-up-and-reroute; 45° tracks, In1.Cu kept as solid GND |
+| `render/` | Bare-board and 3D renders (`render/render.sh` → `docs/renders/`) |
 | `gen/build.sh` | Runs the whole chain: schematic → netlist check → board → route → DRC → fab files |
 | `kicad/` | Generated KiCad 7 project (open `quadcan-c5.kicad_pro`) |
 | `fab/` | Gerbers (zip), drill, BOM, pick-and-place, schematic PDF, DRC report |
@@ -57,11 +60,11 @@ A custom, from-scratch take on the MrDIY DuoCAN idea, grown into a set-and-forge
 
 ## Ordering the board
 
-> **Current status: draft.** About 97 % of connections are auto-routed and DRC-clean. 10 short
-> connections and 4 small clearance nits remain to finish by hand in KiCad. See
+> **Current status:** fully routed, KiCad DRC shows no copper errors, never built. Details in
 > [fab/STATUS.md](fab/STATUS.md).
 
-![Top copper](docs/board-top.png)
+![Assembled board (render)](docs/renders/3d-iso.png)
+![Bare board, top](docs/renders/board-top-bare.png)
 
 1. Upload `fab/quadcan-c5-gerbers.zip` to JLCPCB/PCBWay: **4 layers, 1.6 mm, 1 oz outer / 0.5 oz inner**, any colour.
    Minimum features used: 0.15 mm clearance, 0.2 mm track, 0.3/0.6 mm vias.
@@ -79,6 +82,6 @@ Read [docs/REVIEW.md](docs/REVIEW.md) first. It lists what to check by eye in Ki
 
 ```sh
 sudo apt install kicad   # KiCad 7.x
-pip install kiutils numpy scipy pillow
+pip install kiutils numpy scipy pillow   # plus gcc for the router core
 hardware/quadcan-c5/gen/build.sh
 ```
