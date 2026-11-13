@@ -4,6 +4,7 @@ b = pcbnew.LoadBoard(sys.argv[1])
 eb = b.GetBoardEdgesBoundingBox()
 items = []
 for fp in b.GetFootprints():
+    fp.BuildCourtyardCaches()
     for side, lay in (("F", pcbnew.F_CrtYd), ("B", pcbnew.B_CrtYd)):
         c = fp.GetCourtyard(lay)
         if c.OutlineCount():
@@ -19,7 +20,9 @@ for i in range(len(items)):
         if s1 != s2:
             continue
         if c1.Collide(c2.Outline(0), 0) if hasattr(c1, "Collide") else c1.BBox().Intersects(c2.BBox()):
-            x = pcbnew.SHAPE_POLY_SET(c1); x.BooleanIntersection(c2, pcbnew.SHAPE_POLY_SET.PM_FAST)
+            x = pcbnew.SHAPE_POLY_SET(c1); x.BooleanIntersection(c2)
             if x.Area() > 0.05 * 1e12:
                 print(f"OVERLAP {r1} {r2} {x.Area()/1e12:.2f}mm2"); bad += 1
 print("issues:", bad)
+
+sys.exit(1 if bad else 0)

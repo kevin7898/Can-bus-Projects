@@ -1,3 +1,5 @@
+> Rev 1.1: also complete [BATTERY_REVISION.md](BATTERY_REVISION.md). Earlier estimates and renders are not a release approval.
+
 # Pre-order review checklist
 
 Everything in `kicad/` is generated from `gen/design.py`. These checks pass automatically:

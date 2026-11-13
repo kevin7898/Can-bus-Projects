@@ -14,7 +14,7 @@ from design import PARTS, PROJECT, TITLE, REV  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 KI = os.path.normpath(os.path.join(HERE, "..", "kicad"))
 FPLIB = "/usr/share/kicad/footprints"
-BOARD_W, BOARD_H = 110.0, 85.0
+BOARD_W, BOARD_H = 140.0, 85.0
 OX, OY = 100.0, 100.0
 mm = pcbnew.FromMM
 
@@ -36,7 +36,7 @@ PLACE = {
     "R17": (59.6, 12.3, 0, "F"), "C15": (59.6, 14.0, 180, "F"),
     "J2": (50.0, 4.4, 180, "F"), "U4": (58.5, 5.5, 90, "F"),
     "R23": (52.0, 11.0, 0, "F"), "R24": (47.5, 11.0, 180, "F"),
-    "D4": (39.0, 5.5, 90, "F"),
+    "D4": (36.0, 5.5, 90, "F"),
     "SW1": (88.0, 5.0, 0, "F"), "SW2": (88.0, 11.0, 0, "F"),
     "R18": (82.0, 30.0, 0, 'F'), "R19": (82.0, 32.5, 0, 'F'),
     # ---- IO expander, LEDs, mark button, Qwiic, LTE
@@ -99,9 +99,32 @@ for n in range(1, 5):
     PLACE[f"D{20 + n}"] = (39.5, Y - 2.5, 0, "F")         # RX LED
     PLACE[f"R{40 + n}"] = (43.0, Y - 2.5, 0, "F")
 
+# Rev 1.1 UPS strip; these coordinates are a prototype placement, pending power/RF review.
+PLACE.update({
+    "H2": (136.5,81.5,0,"F"), "H4": (136.5,3.5,0,"F"),
+    "J5": (137.5,56,180,"F"), "J6": (136.5,13,90,"F"),
+    "D3": (39,59.5,0,"F"),
+    "JP9": (41,7.5,0,"F"), "J7": (120,5,0,"F"), "F2": (114,14,0,"F"),
+    "U14": (120,19,0,"F"), "C90": (124,19,90,"F"), "C91": (116,19,90,"F"),
+    "C92": (120,25,0,"F"), "R90": (120,14,0,"F"), "R91": (124,15,0,"F"),
+    "R92": (115,23,0,"F"), "R93": (115,25,0,"F"),
+    "U15": (128,35,0,"F"), "L3": (122,33,0,"F"), "C93": (129,30,0,"F"),
+    "C94": (132,35,90,"F"), "C95": (133,41.5,90,"F"),
+    "R94": (128,38,0,"F"), "R95": (128,40,0,"F"),
+    "U16": (120,46,0,"F"), "R96": (115,44,90,"F"), "R97": (115,48,90,"F"),
+    "R98": (120,42,0,"F"), "R99": (125,46,90,"F"), "C96": (120,50,0,"F"), "C97": (120,53,0,"F"),
+    "U17": (119,64,0,"F"), "C98": (119,58,0,"F"),
+    "U18": (132,71,0,"F"), "C99": (132,66,0,"F"),
+    "R100": (127,75,90,"F"), "R101": (127,79,90,"F"), "C100": (131,77,90,"F"),
+    "R102": (115,75,90,"F"), "R103": (115,79,90,"F"), "C101": (119,77,90,"F"),
+    "U19": (58.5,34,0,"F"), "R104": (58.5,38.5,90,"F"), "C102": (58.5,30.5,0,"F"),
+    "U20": (86,49,0,"F"), "R105": (86,45,0,"F"), "C103": (86,53,0,"F"),
+})
+
 # net classes: name -> width
 WIDE = {"VIN_RAW": 1.0, "VIN_F": 1.0, "VIN": 1.0, "BUCK_SW": 1.0, "+5V": 0.8, "+5V_SYS": 0.6,
         "SCAP": 0.6, "+3V3": 0.5, "VBUS": 0.6, "GPS_3V3": 0.4, "GND": 0.5}
+WIDE.update({"BAT_PACK":0.8,"BAT":0.8,"VSYS":0.8,"BOOST_SW":0.8,"VEH_5V":0.8,"CHG_IN":0.8,"USB_PWR":0.6})
 CAN_PAIRS = [f"CAN{n}_{s}" for n in range(1, 5) for s in "HL"]
 
 
@@ -170,7 +193,7 @@ def build(out):
     ds.m_SolderMaskMinWidth = mm(0)
     ds.m_MinResolvedSpokes = 1
     nset = ds.m_NetSettings
-    dflt = nset.m_DefaultNetClass
+    dflt = nset.GetDefaultNetclass()
     dflt.SetClearance(mm(0.15)); dflt.SetTrackWidth(mm(0.2))
     dflt.SetViaDiameter(mm(0.6)); dflt.SetViaDrill(mm(0.3))
     outline(b)

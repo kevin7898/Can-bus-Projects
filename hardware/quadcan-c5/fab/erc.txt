@@ -1,0 +1,73 @@
+ERC report (2026-11-13T15:27:51-0700, Encoding UTF8)
+
+***** Sheet /
+[lib_symbol_mismatch]: Symbol 'MCP2517FD-xSL' doesn't match copy in library 'Interface_CAN_LIN'
+    ; warning
+    @(652.78 mm, 243.84 mm): Symbol U9 [MCP2517FD-xSL]
+[lib_symbol_mismatch]: Symbol 'USB_C_Receptacle_USB2.0_16P' doesn't match copy in library 'Connector'
+    ; warning
+    @(899.16 mm, 55.88 mm): Symbol J2 [USB_C_Receptacle_USB2.0_16P]
+[lib_symbol_mismatch]: Symbol 'MCP2517FD-xSL' doesn't match copy in library 'Interface_CAN_LIN'
+    ; warning
+    @(934.72 mm, 243.84 mm): Symbol U10 [MCP2517FD-xSL]
+[lib_symbol_mismatch]: Symbol 'NEO-M9N' doesn't match copy in library 'RF_GPS'
+    ; warning
+    @(909.32 mm, 370.84 mm): Symbol U13 [NEO-M9N]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 607.06 mm): Symbol U17 Pin 6 [P02, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 609.60 mm): Symbol U17 Pin 7 [P03, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 612.14 mm): Symbol U17 Pin 8 [P04, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 614.68 mm): Symbol U17 Pin 9 [P05, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 617.22 mm): Symbol U17 Pin 10 [P06, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 619.76 mm): Symbol U17 Pin 11 [P07, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 624.84 mm): Symbol U17 Pin 13 [P10, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 627.38 mm): Symbol U17 Pin 14 [P11, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 629.92 mm): Symbol U17 Pin 15 [P12, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 632.46 mm): Symbol U17 Pin 16 [P13, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 635.00 mm): Symbol U17 Pin 17 [P14, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 637.54 mm): Symbol U17 Pin 18 [P15, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 640.08 mm): Symbol U17 Pin 19 [P16, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+[pin_to_pin]: Pins of type Bidirectional and Power output are connected
+    ; warning
+    @(795.02 mm, 642.62 mm): Symbol U17 Pin 20 [P17, Bidirectional, Line]
+    @(911.86 mm, 515.62 mm): Symbol #FLG02 Pin 1 [Power output, Line]
+
+ ** ERC messages: 18  Errors 0  Warnings 18

@@ -25,7 +25,7 @@ void app_main(void)
     }
     setenv("TZ", "UTC0", 1);
     tzset();
-    io_init();
+    ESP_ERROR_CHECK(io_init());
 
     // wall clock from the RTC (GPS refines it later)
     time_t t;
@@ -44,8 +44,8 @@ void app_main(void)
     cfg_defaults(cable);
     if (logger_init() == ESP_OK) cfg_load("/sd/quadcan.cfg");
     logger_start(cable);
-    power_task_start();
     can_start();
     gps_start();
     net_start();
+    power_task_start(); // shutdown cannot race peripheral initialization
 }

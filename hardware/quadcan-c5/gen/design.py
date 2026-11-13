@@ -14,7 +14,7 @@ Edit this file, then run gen/build.sh.
 
 PROJECT = "quadcan-c5"
 TITLE = "QuadCAN-C5: 4-channel CAN-FD logger"
-REV = "1.0"
+REV = "1.1-battery-prototype"
 
 
 def P(ref, lib_id, fp, value, mpn, pins, block, note="", dnp=False):
@@ -301,11 +301,15 @@ add(P("J6", "Connector_Generic_MountingPin:Conn_01x04_MountingPin",
 for i in range(1, 5):
     add(P(f"H{i}", "Mechanical:MountingHole", "MountingHole:MountingHole_3.2mm_M3", "M3", "", {}, "mech"))
 
+# Apply the battery revision before exporting any schematic or PCB.
+from revision_battery import revise
+revise(PARTS, P, R, C)
+
 # PWR_FLAG nets (driven from off-sheet sources)
-PWR_FLAGS = ["VIN_RAW", "GND", "VIN", "+5V", "+5V_SYS", "+3V3", "VBUS", "GPS_3V3", "VBAT_RTC", "SCAP", "SD_3V3"]
+PWR_FLAGS = ["VIN_RAW", "GND", "VIN", "CHG_IN", "VBUS", "GPS_3V3", "VBAT_RTC", "SD_3V3", "BAT"]
 
 BLOCK_TITLES = {
-    "power": "POWER: 9-36V -> fuse -> TVS -> reverse diode -> TPS54360 5V buck -> hold-up -> 3.3V LDO",
+    "power": "VEHICLE INPUT: protected 9-36V -> 5V buck; battery-backed rails below",
     "sense": "VIN / IGNITION / CABLE-ID SENSE",
     "mcu": "MCU: ESP32-C5-WROOM-1 (2x native CAN-FD, Wi-Fi 6 + Wi-Fi Aware)",
     "usb": "USB-C (native USB Serial/JTAG)",
@@ -352,3 +356,11 @@ if __name__ == "__main__":
         print(f"{n:16s} {len(conns):3d} {conns if len(conns) < 6 else ''}")
     print("single-pin nets:", check())
     print(len(PARTS), "parts", len(nets()), "nets")
+
+# Explicitly reviewed unused pins; generator rejects any newly omitted pin.
+NC_PINS = {
+    'U3': {'19','20','22'}, 'J2': {'A8','B8'},
+    'U9': {'3','5','8'}, 'U10': {'3','5','8'}, 'U11': {'1'}, 'U12': {'7'},
+    'U13': {'1','2','4','5','6','14','15','16','17','18','19'},
+    'U14': {'14','15'}, 'U17': {'1'}, 'U18': {'2'},
+}

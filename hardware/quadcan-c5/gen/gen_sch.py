@@ -10,7 +10,7 @@ import uuid
 
 from kiutils.items.common import Effects, Font, Justify, PageSettings, Position, Property, TitleBlock
 from kiutils.items.schitems import (Connection, HierarchicalSheetInstance, LocalLabel, SchematicSymbol,
-                                    SymbolProjectInstance, SymbolProjectPath, Text)
+                                    SymbolProjectInstance, SymbolProjectPath, Text, NoConnect)
 from kiutils.schematic import Schematic
 from kiutils.symbol import SymbolLib
 
@@ -53,6 +53,10 @@ def lib_symbol(lib_id):
         base.extends = None
         s = base
     s.libraryNickname = lib
+    if lib_id == "Interface_CAN_LIN:MCP2517FD-xSL":
+        # Datasheet SDO is high-impedance when CS is high; KiCad calls it Output.
+        for pin in pins_of(s):
+            if pin.number == '12': pin.electricalType = 'tri_state'
     return s
 
 
@@ -85,7 +89,7 @@ def main():
     sch.generator = "eeschema"
     sch.uuid = str(uuid.uuid4())
     sch.paper = PageSettings(paperSize="A0")
-    sch.titleBlock = TitleBlock(title=design.TITLE, date="2026-11-12", revision=design.REV,
+    sch.titleBlock = TitleBlock(title=design.TITLE, date="2026-11-13", revision=design.REV,
                                 comments={1: "Generated from gen/design.py - edit that, then run gen/build.sh",
                                           2: "All transceivers boot in STANDBY; TX needs firmware + a TX_EN jumper"})
     root = "/" + sch.uuid
@@ -121,6 +125,9 @@ def main():
         for pp in pins_of(sym):
             net = p["pins"].get(pp.number)
             if net is None:
+                if pp.number not in design.NC_PINS.get(p['ref'], set()):
+                    raise RuntimeError(f"Unreviewed unused pin {p['ref']}.{pp.number}")
+                sch.noConnects.append(NoConnect(position=Position(X=x+pp.position.X, Y=y-pp.position.Y), uuid=str(uuid.uuid4())))
                 continue
             a = math.radians(pp.position.angle or 0)
             tx, ty = round(x + pp.position.X, 3), round(y - pp.position.Y, 3)

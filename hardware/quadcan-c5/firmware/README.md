@@ -1,3 +1,5 @@
+> **Rev 1.1 battery prototype:** GPIO23 is the gate-combined MCP interrupt, GPIO26 is GPS RX, and GPIO27 is buffered GPS TX. Do not flash this pin map onto rev 1.0 hardware. See `../docs/BATTERY_REVISION.md`. The pure power-policy host test passes; an ESP-IDF target build and hardware testing remain required.
+
 # QuadCAN-C5 firmware (ESP-IDF v6.0)
 
 Set-and-forget 4-channel CAN / CAN-FD logger for the QuadCAN-C5 board.
@@ -28,7 +30,7 @@ If auto-reset into the bootloader ever fails: hold **BOOT**, tap **RESET**, rele
 | Logging | ISR/task → 2 MB PSRAM ring buffer → 64 KB batches → `/sd/LOGS/YYYYMMDD_HHMMSS.qcl`, `fsync` every 5 s, new file at `file_max_mb` |
 | Time | PCF8523 RTC (CR1220 backup) at boot, then disciplined from GPS. Files are named `N000001.qcl` until the clock is valid. |
 | GPS | u-blox NEO-M9N, UBX-NAV-PVT at `gps_rate_hz` (default 20, max 25), automotive dynamic model, raw PVT logged |
-| Power fail | VIN is watched every 5 ms. When it falls below 6 V the log is flushed and closed on supercap energy (~4 s budget). The board restarts when power returns. |
+| Power fail | Charger status and battery voltage are sampled approximately every 100 ms. A 30-second absence or one second below 3.45 V stops producers, flushes the log and enters backup sleep. |
 | Sleep | Key off (buses idle, no ignition, engine not charging) for `idle_sleep_min` → SD card and GPS powered off, transceivers in standby, ESP32 deep sleep (est. ~0.5 mA at 12 V). Wakes on activity on **any** of the four buses, the ignition wire, or battery voltage rising above `wake_vin_mv`. See [../docs/LOW_POWER.md](../docs/LOW_POWER.md). |
 | MARK button | Writes an event marker record (for "that noise just happened") |
 | Phone link | Wi-Fi Aware service **`quadcan`** (+ optional WPA2 soft-AP), TCP port 7777: `LIVE`, `LIST`, `GET <file>`, `MARK [text]`, `SEND <ch> <id> <hex>` |
@@ -93,3 +95,12 @@ SD-card write stalls at that rate.
 | `main/net.c` | Wi-Fi Aware / soft-AP and the TCP command server |
 | `main/io.c` | TCA9535 expander and PCF8523 RTC |
 | `tools/qcl2candump.py` | Log converter |
+
+## Host regression test
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror firmware/tests/power_policy_test.c -o /tmp/quadcan-power-policy
+/tmp/quadcan-power-policy
+```
+
+Run from `hardware/quadcan-c5`. This tests the elapsed-time crank/low-cell policy only, not ESP-IDF drivers, SD behavior or physical power switching.

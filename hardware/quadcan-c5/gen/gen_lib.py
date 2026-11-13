@@ -8,7 +8,7 @@ ESP32-C5-WROOM-1 land pattern: Espressif ESP32-C5-WROOM-1/1U datasheet v1.3, Fig
 """
 import os
 import uuid
-from design import ESP32C5_PINS
+from design import ESP32C5_PINS, PARTS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KI = os.path.normpath(os.path.join(HERE, "..", "kicad"))
@@ -68,6 +68,14 @@ def symbols():
         box_symbol("TCAN1044AV", "U", tcan_l, tcan_r, "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
                    "https://www.ti.com/lit/ds/symlink/tcan1044a-q1.pdf", 12.7),
     ])
+    custom = {
+        "BQ24074": [("1","TS","input"),("2","BAT","passive"),("3","BAT","passive"),("4","CE_N","input"),("5","EN2","input"),("6","EN1","input"),("7","PGOOD_N","open_collector"),("8","GND","power_in"),("9","CHG_N","open_collector"),("10","OUT","power_out"),("11","OUT","passive"),("12","ILIM","passive"),("13","IN","power_in"),("14","TMR","passive"),("15","ITERM","passive"),("16","ISET","passive"),("17","EP","power_in")],
+        "TPS61023": [("1","FB","input"),("2","EN","input"),("3","VIN","power_in"),("4","GND","power_in"),("5","SW","passive"),("6","VOUT","power_out")],
+        "TLV3012B": [("1","OUT","output"),("2","V-","power_in"),("3","IN+","input"),("4","IN-","input"),("5","REF","output"),("6","V+","power_in")],
+    }
+    for name, ps in custom.items():
+        mid=(len(ps)+1)//2
+        body += "\n" + box_symbol(name,"U",ps[:mid],ps[mid:],"","https://www.ti.com/lit/ds/symlink/"+name.lower().replace('3012b','3012')+".pdf",20.32)
     return f"(kicad_symbol_lib (version 20220914) (generator quadcan_gen)\n{body}\n)\n"
 
 
@@ -127,12 +135,33 @@ def esp32c5_fp():
 '''
 
 
+def charger_footprint():
+    base = "/usr/share/kicad/footprints/Package_DFN_QFN.pretty/VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm_ThermalVias.kicad_mod"
+    s = open(base).read().replace('"VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm_ThermalVias"', '"BQ24074_ThermalVia03"', 1)
+    # Keep 0.5 mm copper rings; drill 0.3 mm matches the project's minimum hole.
+    s = s.replace('(drill 0.2)', '(drill 0.3)')
+    open(os.path.join(KI,"QuadCAN.pretty","BQ24074_ThermalVia03.kicad_mod"),"w").write(s)
+
+
+def tables():
+    # Make project libraries explicit so headless ERC/DRC does not depend on GUI setup.
+    syms = sorted({p["lib_id"].split(":")[0] for p in PARTS} | {"power"})
+    fps = sorted({p["fp"].split(":")[0] for p in PARTS})
+    for filename, kind, libs in (("sym-lib-table", "sym", syms), ("fp-lib-table", "fp", fps)):
+        lines = [f"({kind}_lib_table"]
+        for lib in libs:
+            if lib == "QuadCAN":
+                uri = "${KIPRJMOD}/QuadCAN." + ("kicad_sym" if kind == "sym" else "pretty")
+            else:
+                uri = "${KICAD9_" + ("SYMBOL" if kind == "sym" else "FOOTPRINT") + "_DIR}/" + lib + (".kicad_sym" if kind == "sym" else ".pretty")
+            lines.append(f'  (lib (name "{lib}")(type "KiCad")(uri "{uri}")(options "")(descr ""))')
+        open(os.path.join(KI,filename),"w").write("\n".join(lines)+"\n)\n")
+
+
 if __name__ == "__main__":
     os.makedirs(os.path.join(KI, "QuadCAN.pretty"), exist_ok=True)
     open(os.path.join(KI, "QuadCAN.kicad_sym"), "w").write(symbols())
     open(os.path.join(KI, "QuadCAN.pretty", "ESP32-C5-WROOM-1.kicad_mod"), "w").write(esp32c5_fp())
-    open(os.path.join(KI, "sym-lib-table"), "w").write(
-        '(sym_lib_table\n  (lib (name "QuadCAN")(type "KiCad")(uri "${KIPRJMOD}/QuadCAN.kicad_sym")(options "")(descr "QuadCAN-C5 parts"))\n)\n')
-    open(os.path.join(KI, "fp-lib-table"), "w").write(
-        '(fp_lib_table\n  (lib (name "QuadCAN")(type "KiCad")(uri "${KIPRJMOD}/QuadCAN.pretty")(options "")(descr "QuadCAN-C5 footprints"))\n)\n')
+    charger_footprint()
+    tables()
     print("library written")

@@ -19,6 +19,7 @@ usage: python3 route.py geom.json routes.json
 import copy
 import ctypes
 import json
+import hashlib
 import math
 import os
 import random
@@ -34,7 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GRID = 0.1
 LAYERS = ["F", "In2", "B", "In1"]     # In1 = GND plane: last resort only
 SIGNAL_LAYERS = (1, 1, 1, 0)
-CLR = 0.17            # clearance enforced (board rule is 0.15 mm)
+CLR = 0.25            # clearance enforced (board rule is 0.15 mm)
 EDGE_CLR = 0.45
 VIA_D, VIA_DRILL = 0.6, 0.3
 VIA_COST = 14.0
@@ -49,7 +50,8 @@ WIDE = {"VIN_RAW": 1.0, "VIN_F": 1.0, "VIN": 0.8, "BUCK_SW": 1.0, "+5V": 0.6, "+
         "SCAP": 0.5, "+3V3": 0.4, "VBUS": 0.5, "GPS_3V3": 0.4, "SD_3V3": 0.4, "GND": 0.4,
         "CAN1_H": 0.3, "CAN1_L": 0.3, "CAN2_H": 0.3, "CAN2_L": 0.3,
         "CAN3_H": 0.3, "CAN3_L": 0.3, "CAN4_H": 0.3, "CAN4_L": 0.3, "GPS_RF": 0.3}
-FIRST = ["BUCK_SW", "BUCK_BOOT", "BUCK_FB", "BUCK_COMP", "BUCK_CZ", "BUCK_EN", "BUCK_RT",
+WIDE.update({"BAT_PACK":0.8,"BAT":0.8,"VSYS":0.8,"BOOST_SW":0.8,"VEH_5V":0.8,"CHG_IN":0.8,"USB_PWR":0.6})
+FIRST = ["BOOST_SW", "BOOST_FB", "VSYS", "BAT", "CHG_IN", "BUCK_SW", "BUCK_BOOT", "BUCK_FB", "BUCK_COMP", "BUCK_CZ", "BUCK_EN", "BUCK_RT",
          "VIN_RAW", "VIN_F", "VIN", "+5V", "+5V_SYS", "SCAP", "VBUS", "USB_DP", "USB_DN",
          "GPS_RF", "GPS_BIAS", "GPS_VCC_RF", "CLK40", "RTC_XI", "RTC_XO",
          "CAN1_H", "CAN1_L", "CAN2_H", "CAN2_L", "CAN3_H", "CAN3_L", "CAN4_H", "CAN4_L",
@@ -218,10 +220,7 @@ class Grid:
             dist = distance_transform_edt(~foreign) * GRID
             f = (dist > need) & (self.edge_dist > w / 2 + EDGE_CLR)
             f |= (nm == nid)
-            own = cor == nid
-            if own.any():       # own lane may pass between neighbouring pads, but not next to foreign tracks
-                trk = foreign & (self.padmap[li] == 0) & (cor == 0)
-                f |= own & ~((nm != 0) & (nm != nid)) & (distance_transform_edt(~trk) * GRID > need)
+            # Reserved lanes cannot override clearance to real foreign pads/tracks.
             free[li] = f
             vfree &= (dist > vneed) & (self.edge_dist > VIA_D / 2 + EDGE_CLR)
         if not ghost:
@@ -449,7 +448,9 @@ class Router:
         w = WIDE["GND"]
         bad = []
         zero = np.zeros((G.H, G.W), np.float32)
+        plated = {(q['ref'],q['pad']) for q in self.pbn['GND'] if not q['smd']}
         for p in self.pbn["GND"]:
+            if (p['ref'],p['pad']) in plated: continue  # exposed pad already has plane vias
             if not p["smd"] or p["layers"][0] not in LAYERS:
                 continue
             li = LAYERS.index(p["layers"][0])
@@ -581,7 +582,7 @@ def main(src, dst):
         return (max(xs) - min(xs)) + (max(ys) - min(ys))
     order = [n for n in FIRST if n in nets] + sorted([n for n in nets if n not in FIRST], key=span)
     tracks, vias, failed = Router(g, pads_by_net, order).run(t0)
-    json.dump({"tracks": tracks, "vias": vias, "failed": failed}, open(dst, "w"))
+    json.dump({"geometry_sha256": hashlib.sha256(open(src,"rb").read()).hexdigest(), "tracks": tracks, "vias": vias, "failed": failed}, open(dst, "w"))
     inner = sum(1 for t in tracks if t["layer"] == "In1")
     print(f"done in {time.time() - t0:.0f}s: {len(tracks)} tracks, {len(vias)} vias, {len(failed)} failed, "
           f"{inner} tracks on the In1 plane {STATS}")

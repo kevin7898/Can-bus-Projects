@@ -143,7 +143,7 @@ static FILE *open_new_file(size_t *written)
         h.data_bitrate[i] = g_cfg.data_bitrate[i];
         if (g_cfg.listen_only[i]) h.listen_only_mask |= 1u << i;
     }
-    strncpy(h.hw, "QuadCAN-C5 1.0", sizeof(h.hw) - 1);
+    strncpy(h.hw, "QuadCAN-C5 1.1", sizeof(h.hw) - 1);
     fwrite(&h, sizeof(h), 1, f);
     *written = sizeof(h);
     ESP_LOGI(TAG, "logging to %s", name);
@@ -153,6 +153,12 @@ static FILE *open_new_file(size_t *written)
 static void logger_task(void *arg)
 {
     uint8_t *wbuf = heap_caps_malloc(WBUF_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!wbuf) {
+        ESP_LOGE(TAG, "no logger write buffer");
+        xSemaphoreGive(s_closed);
+        vTaskDelete(NULL);
+        return;
+    }
     size_t fill = 0, file_bytes = 0;
     FILE *f = s_card_ok ? open_new_file(&file_bytes) : NULL;
     int64_t last_flush = esp_timer_get_time(), last_sync = last_flush;
@@ -168,27 +174,30 @@ static void logger_task(void *arg)
                 fill = 0;
                 io_led(XP_LED_SD_N, false);
             }
-            memcpy(wbuf + fill, item, sz);
-            fill += sz;
+            if (f) { // no card/file: discard safely instead of overflowing the write buffer
+                memcpy(wbuf + fill, item, sz);
+                fill += sz;
+            }
             vRingbufferReturnItem(s_rb, item);
         }
+        bool drained = s_stop && !item;
         int64_t now = esp_timer_get_time();
-        if (f && fill && (now - last_flush > 1000000 || s_stop)) {
+        if (f && fill && (now - last_flush > 1000000 || drained)) {
             fwrite(wbuf, 1, fill, f);
             file_bytes += fill;
             fill = 0;
             last_flush = now;
         }
-        if (f && (now - last_sync > 5000000 || s_stop)) {
+        if (f && (now - last_sync > 5000000 || drained)) {
             fflush(f);
             fsync(fileno(f));      // bounded data loss if power vanishes without warning
             last_sync = now;
         }
-        if (f && file_bytes > (size_t)g_cfg.file_max_mb * 1024 * 1024) {
+        if (!s_stop && f && file_bytes > (size_t)g_cfg.file_max_mb * 1024 * 1024) {
             fclose(f);
             f = open_new_file(&file_bytes);
         }
-        if (s_stop) {
+        if (drained) {
             if (f) fclose(f);
             f = NULL;
             ESP_LOGW(TAG, "log closed");
@@ -209,7 +218,9 @@ void logger_shutdown(void)
 {
     if (s_stop) return;
     s_stop = true;
-    xSemaphoreTake(s_closed, pdMS_TO_TICKS(1500));
+    // Never unmount or power off a card while the writer still owns it.
+    // A hung card can still exhaust backup energy; hardware UVLO is the last limit.
+    xSemaphoreTake(s_closed, portMAX_DELAY);
     if (s_card_ok) esp_vfs_fat_sdcard_unmount(MOUNT, s_card);
     s_card_ok = false;
     xp_write(XP_SD_PWR_N, true);               // card off: an idle card can draw ~1 mA
