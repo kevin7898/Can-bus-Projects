@@ -1,6 +1,6 @@
 # Rev 1.1 battery prototype — engineering draft
 
-**Not released for manufacture.** Generated with KiCad 9.0.2; no assembled board has been powered. Firmware target compilation and hardware tests are still outstanding. See [the revision and release gates](../docs/BATTERY_REVISION.md).
+**Not released for manufacture.** Generated with KiCad 9.0.2; no assembled board has been powered. Firmware target compilation passes; hardware tests are still outstanding. See [the revision and release gates](../docs/BATTERY_REVISION.md).
 
 | Check | Result |
 |---|---|
@@ -13,7 +13,8 @@
 | Signal tracks on In1 ground plane | 0 |
 | DRC warnings | 416; breakdown below |
 | Backup policy host test | Pass with `-Wall -Wextra -Werror`; address/undefined sanitizers also pass with leak checking disabled for this environment |
-| ESP-IDF target build | Not run; toolchain unavailable |
+| CAN configuration host test | Pass; bitrate, data rate and listen-only keys remain distinct; malformed keys rejected |
+| ESP-IDF target build | Pass with v6.0.3 for ESP32-C5; app image 1,182,496 bytes; 23% app partition free; [build evidence](../firmware/tests/VALIDATION.md) |
 | Bench, temperature, transient, battery, RF/USB and thermal testing | Not run |
 
 The remaining PCB warnings are 199 silkscreen-over-copper, 199 silkscreen overlaps, 14 silkscreen-edge clearances, one short dangling track stub, one back-layer text mirroring warning, and two footprint/library mismatch warnings (U3 ESP32 module and J4 u.FL connector). Inspect them rather than treating a zero-error count as a manufacturing approval.

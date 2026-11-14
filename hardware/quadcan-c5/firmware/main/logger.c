@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include "app.h"
+#include "config_key.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -261,11 +262,12 @@ void cfg_load(const char *path)
     char line[128], key[32], val[80];
     while (fgets(line, sizeof(line), f)) {
         if (line[0] == '#' || sscanf(line, " %31[^= ] = %79s", key, val) != 2) continue;
-        int ch;
+        unsigned ch;
+        can_key_t kind = can_config_key(key, NUM_CAN, &ch);
         unsigned long v = strtoul(val, NULL, 10);
-        if (sscanf(key, "can%d_fd", &ch) == 1 && ch >= 1 && ch <= NUM_CAN) g_cfg.data_bitrate[ch - 1] = v;
-        else if (sscanf(key, "can%d_listen", &ch) == 1 && ch >= 1 && ch <= NUM_CAN) g_cfg.listen_only[ch - 1] = v != 0;
-        else if (sscanf(key, "can%d", &ch) == 1 && ch >= 1 && ch <= NUM_CAN) g_cfg.bitrate[ch - 1] = v;
+        if (kind == CAN_KEY_DATA_RATE) g_cfg.data_bitrate[ch] = v;
+        else if (kind == CAN_KEY_LISTEN) g_cfg.listen_only[ch] = v != 0;
+        else if (kind == CAN_KEY_BITRATE) g_cfg.bitrate[ch] = v;
         else if (!strcmp(key, "idle_sleep_min")) g_cfg.idle_sleep_min = v;
         else if (!strcmp(key, "wake_vin_mv")) g_cfg.wake_vin_mv = v;
         else if (!strcmp(key, "sleep_check_s")) g_cfg.sleep_check_s = v < 5 ? 5 : v;

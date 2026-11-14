@@ -38,8 +38,8 @@ void app_main(void)
 
     cable_id_t cable = io_cable_id();
     static const char *names[] = {"custom", "J1939", "OBD-II", "none"};
-    ESP_LOGI(TAG, "cable: %s, ignition %s, wake cause %d", names[cable], io_ignition_on() ? "on" : "off",
-             (int)esp_sleep_get_wakeup_cause());
+    ESP_LOGI(TAG, "cable: %s, ignition %s, wake causes 0x%lx", names[cable], io_ignition_on() ? "on" : "off",
+             (unsigned long)esp_sleep_get_wakeup_causes());
 
     cfg_defaults(cable);
     if (logger_init() == ESP_OK) cfg_load("/sd/quadcan.cfg");

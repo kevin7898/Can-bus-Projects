@@ -1,17 +1,16 @@
-> **Rev 1.1 battery prototype:** GPIO23 is the gate-combined MCP interrupt, GPIO26 is GPS RX, and GPIO27 is buffered GPS TX. Do not flash this pin map onto rev 1.0 hardware. See `../docs/BATTERY_REVISION.md`. The pure power-policy host test passes; an ESP-IDF target build and hardware testing remain required.
+> **Rev 1.1 battery prototype:** GPIO23 is the gate-combined MCP interrupt, GPIO26 is GPS RX, and GPIO27 is buffered GPS TX. Do not flash this pin map onto rev 1.0 hardware. See `../docs/BATTERY_REVISION.md`. The ESP32-C5 target build and host tests pass; hardware testing remains required.
 
-# QuadCAN-C5 firmware (ESP-IDF v6.0)
+# QuadCAN-C5 firmware (ESP-IDF v6.0.3)
 
 Set-and-forget 4-channel CAN / CAN-FD logger for the QuadCAN-C5 board.
 
-> **Status: written against the ESP-IDF v6.0.3 headers but not yet compiled or run on hardware.**
-> It wasn't compiled because the session that wrote it couldn't run the ESP-IDF installer.
-> Expect a short round of compile fixes on first build.
+> **Status: compiled and linked for ESP32-C5 with ESP-IDF v6.0.3; not run on hardware.**
+> See [tests/VALIDATION.md](tests/VALIDATION.md) for build evidence and remaining limits.
 
 ## Build and flash
 
 ```sh
-# ESP-IDF v6.0.x installed and exported (. $IDF_PATH/export.sh)
+# ESP-IDF v6.0.3 installed and exported (. $IDF_PATH/export.sh)
 cd hardware/quadcan-c5/firmware
 idf.py set-target esp32c5
 idf.py build
@@ -31,7 +30,7 @@ If auto-reset into the bootloader ever fails: hold **BOOT**, tap **RESET**, rele
 | Time | PCF8523 RTC (CR1220 backup) at boot, then disciplined from GPS. Files are named `N000001.qcl` until the clock is valid. |
 | GPS | u-blox NEO-M9N, UBX-NAV-PVT at `gps_rate_hz` (default 20, max 25), automotive dynamic model, raw PVT logged |
 | Power fail | Charger status and battery voltage are sampled approximately every 100 ms. A 30-second absence or one second below 3.45 V stops producers, flushes the log and enters backup sleep. |
-| Sleep | Key off (buses idle, no ignition, engine not charging) for `idle_sleep_min` → SD card and GPS powered off, transceivers in standby, ESP32 deep sleep (est. ~0.5 mA at 12 V). Wakes on activity on **any** of the four buses, the ignition wire, or battery voltage rising above `wake_vin_mv`. See [../docs/LOW_POWER.md](../docs/LOW_POWER.md). |
+| Sleep | Key off (buses idle, no ignition, engine not charging) for `idle_sleep_min` → SD card and GPS powered off, transceivers in standby, ESP32 deep sleep. Rev 1.1 sleep current is unmeasured. Wakes on activity on **any** of the four buses, the ignition wire, or battery voltage rising above `wake_vin_mv`. See [../docs/LOW_POWER.md](../docs/LOW_POWER.md). |
 | MARK button | Writes an event marker record (for "that noise just happened") |
 | Phone link | Wi-Fi Aware service **`quadcan`** (+ optional WPA2 soft-AP), TCP port 7777: `LIVE`, `LIST`, `GET <file>`, `MARK [text]`, `SEND <ch> <id> <hex>` |
 | LEDs | STAT heartbeat (fast = no SD card), SD = write activity, LINK = phone data path up, GPS = 1 pps with a fix, RX1–4 = bus activity (hardware) |
@@ -96,11 +95,10 @@ SD-card write stalls at that rate.
 | `main/io.c` | TCA9535 expander and PCF8523 RTC |
 | `tools/qcl2candump.py` | Log converter |
 
-## Host regression test
+## Host regression tests
 
 ```sh
-cc -std=c11 -Wall -Wextra -Werror firmware/tests/power_policy_test.c -o /tmp/quadcan-power-policy
-/tmp/quadcan-power-policy
+sh firmware/tests/run_host_tests.sh
 ```
 
-Run from `hardware/quadcan-c5`. This tests the elapsed-time crank/low-cell policy only, not ESP-IDF drivers, SD behavior or physical power switching.
+Run from `hardware/quadcan-c5`. This checks the elapsed-time crank/low-cell policy and exact CAN configuration-key matching, including malformed keys. It does not test ESP-IDF drivers, SD behavior or physical power switching.

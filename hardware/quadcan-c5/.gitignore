@@ -3,3 +3,6 @@ kicad/*-backups/
 kicad/*.kicad_prl
 kicad/fp-info-cache
 gen/route_core.so
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old

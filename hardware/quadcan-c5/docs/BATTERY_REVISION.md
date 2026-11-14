@@ -33,8 +33,10 @@ The small pack is for the CAN logger, SD and optional GPS. It is not sized for a
 - Charger and boost pin maps use custom symbols matched to their manufacturer pin tables. The charger exposed pad is ground.
 - Reviewed unused pins receive explicit no-connect markers. MCP SDO is represented as tri-state, matching deselected SPI behavior. The inherited pin-compatible MCP2517FD library symbol is used with the MCP2518FD value/MPN; SDO type is corrected in the embedded symbol. No global output-conflict rule is disabled.
 - D3 placement moves closer to U1's switch node. This is a placement improvement, not a completed switching-loop sign-off.
-- Shutdown waits for the SD queue to drain and the writer to acknowledge closure before unmounting; the old 1.5-second timeout could cut power during a write. The no-file logger path no longer fills an unflushed RAM buffer. CAN transmit and MCP receive/sleep operations share a mutex to avoid shutdown racing an active SPI transaction. These target-side changes still require firmware compilation and hardware testing.
+- Shutdown waits for the SD queue to drain and the writer to acknowledge closure before unmounting; the old 1.5-second timeout could cut power during a write. The no-file logger path no longer fills an unflushed RAM buffer. CAN transmit and MCP receive/sleep operations share a mutex to avoid shutdown racing an active SPI transaction. These target-side changes compile and link with ESP-IDF v6.0.3; hardware testing remains outstanding.
 - IO-expander output updates now use a mutex and retain the previous shadow state on a failed write.
+- Exact CAN configuration-key matching fixes the old `sscanf` parser accepting `can1` and `can1_listen` as `can1_fd`. A host regression test covers the distinct settings and malformed keys.
+- Wake checks use the ESP-IDF v6 wake-source bitmap; a simultaneous CAN/ignition and timer wake takes the normal boot path.
 
 ## Power-loss behavior
 
@@ -64,7 +66,7 @@ Before a fabrication release:
 3. Route and validate USB as a controlled 90 Ω differential pair, and GPS RF as a controlled 50 Ω path using the chosen fabricator stack-up. Existing automatic routing is not an impedance-controlled design.
 4. Check 3.3 V LDO heating, charger thermal regulation, peak load, capacitor DC bias, minimum battery voltage startup, battery-absent operation and return-to-charge behavior.
 5. Resolve all electrical DRC errors and remaining actionable ERC warnings. Check component orientation, footprint pad numbering and assembly rotations against actual ordered MPNs.
-6. Build the complete firmware with the intended ESP-IDF v6 toolchain, then test real SD flush/recovery, SPI concurrency, hot GPS reset, independent CAN interrupts and wake behavior. Only the pure backup policy has a host compile/test here.
+6. The complete ESP32-C5 build with ESP-IDF v6.0.3 and both host tests pass (see `firmware/tests/VALIDATION.md`). Still test real SD flush/recovery, SPI concurrency, hot GPS reset, independent CAN interrupts and wake behavior on hardware.
 7. Bench-test vehicle power interruption and slow/fast crank profiles with a programmable supply, oscilloscope and real load. Verify no 5 V/3.3 V brownout, no input backfeed and no corrupt log. Test NTC open/short, cold/hot charge inhibit, depleted pack and repeated dips.
 8. Test input transients/reverse polarity for the target vehicle environment. The existing TVS/fuse/buck circuit is not certified load-dump protection.
 

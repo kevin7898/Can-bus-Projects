@@ -79,7 +79,8 @@ static void enter_sleep(float vin)
 
 void power_early_wake_check(void)
 {
-    if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) return;   // power-on, CAN or ignition: boot
+    // Only shortcut a timer-only wake. A simultaneous CAN/ignition wake must boot.
+    if (esp_sleep_get_wakeup_causes() != (1UL << ESP_SLEEP_WAKEUP_TIMER)) return;
     gpio_config_t io = {.pin_bit_mask = WAKE_PIN_MASK, .mode = GPIO_MODE_INPUT};
     gpio_config(&io);
     bool line_low = !gpio_get_level(PIN_CAN1_RX) || !gpio_get_level(PIN_CAN2_RX) || !gpio_get_level(PIN_WAKE_N);
