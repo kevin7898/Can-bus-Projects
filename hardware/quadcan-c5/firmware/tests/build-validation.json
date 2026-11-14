@@ -1,0 +1,52 @@
+{
+  "status": "compile-and-host-tests-only; no hardware tested",
+  "sdk_tag": "v6.0.3",
+  "sdk_commit": "76f5dedd9950a3012fee8fb7d5586df21fc67802",
+  "compiler": "riscv32-esp-elf-gcc (crosstool-NG esp-15.2.0_20251204) 15.2.0",
+  "target": "esp32c5",
+  "sdkconfig_sha256": "a4f6cfdc00d5cf69a18b86809e3b825f4045140d3d681ba2d6ab22594b1d5bde",
+  "build_app_version": "960909e-dirty",
+  "app_partition_bytes": 1536000,
+  "source_sha256": {
+    "CMakeLists.txt": "568d236b4127831305eebcc6c6b2071f883fea3cc18348de19fa2429c4b39cf5",
+    "sdkconfig.defaults": "c46e7aa7c0967165264ebc464a723b8e9cac63ae28495d073ab64c6f84e0441d",
+    "main/CMakeLists.txt": "c2b9055b9b33151e64388c3d6b1908d52e7902ab5eb6e7ea8be29c9ec37ad77c",
+    "main/app.h": "479361cdd02dc7a434593ca686519205734f5c234855a82424d09f4cb5871dc5",
+    "main/board.h": "a2eeb0afaafaa386e5ff539cf098547da6a8f58d96c570cbfc81454b8a7cced6",
+    "main/can.c": "9a5f1e6df1fb318d765ca5549035df0219a9a3bf50564c77fcd2ea51a8cedce5",
+    "main/config_key.h": "7de77a0f05e007a2333adb5d945f93c3b223576bee8633e205c1c470bb570419",
+    "main/gps.c": "bcd4b8a5ad4166eb216a893e3e6b48c020be36466a54115a12f8a30a733819fb",
+    "main/io.c": "05638efb90e2514f92bc2bf5cc519396567018f1d83696332ac8f6bec62b53c0",
+    "main/io.h": "332731389232616b2f224691577424915ed889aa955e71e74efdd4af09daf299",
+    "main/logger.c": "1dc6ae8199c05569eaaa3147940effad3b92559a74f911f4bdcd464ff05edda0",
+    "main/main.c": "9855c590a10e68ac34b0f6757e2fba3692f68a2aecabeda3a36b4b910eed2b26",
+    "main/mcp2518fd.c": "8e8c3c1f755b5d98062e5ae209eb0b7deecb8ab78763b26f04e481fc59ceab60",
+    "main/mcp2518fd.h": "f2c9781724c7ed2d53c7d6fec486ac4f4022e7cd71f45cf33e699b26fec275b3",
+    "main/net.c": "46af4d36d758da6b4852181a50d15f5debaab2a794373fc7c7f2409af76ccd7c",
+    "main/power.c": "95d74ac51fc014dda08cee079e7d2b40696a24ce5377cbb89175d3a0aed33ee2",
+    "main/power_policy.h": "582bd62574785a94885ba657d2eb7ffa995391b5b5b09f97d5fd35f232366829",
+    "main/qcl_format.h": "a6d5a3e5ed8b0d54c6c783bbd51b76867e7a0c22da7bb772bf031fe7f87163e8",
+    "tests/config_key_test.c": "a80eca7abf5888a0a19368830875872fa6123a63709017e16ae265693489590b",
+    "tests/power_policy_test.c": "e3ec73bf3b3243b521183e377281e4658a494cffd99504f268c19fb27bc119a5",
+    "tests/run_host_tests.sh": "de1f02e55675fb2a9f09c377ed85beb7247e596363e498c4a41e24feef3f7bc5"
+  },
+  "artifacts": {
+    "quadcan_c5.bin": {
+      "bytes": 1182496,
+      "sha256": "f3e641b665c634fca817afd31be4a4d9be6c61d4fda2b42f2ca2e4932f0d77d1"
+    },
+    "bootloader/bootloader.bin": {
+      "bytes": 20384,
+      "sha256": "af44cab46fc6c72427d2833b62c3f9e6d0ca3145d264f3b50d61ea8ad5e834c9"
+    },
+    "partition_table/partition-table.bin": {
+      "bytes": 3072,
+      "sha256": "5295e8c42d6fb5f95e4e8a185932c6191d27cfc5078322475347e40e71af815a"
+    }
+  },
+  "host_tests": [
+    "power_policy: pass",
+    "config_key: pass"
+  ],
+  "host_sanitizers": "address + undefined: pass; leak checker disabled in ptrace environment"
+}

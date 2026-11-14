@@ -1,17 +1,18 @@
+// REV 1.1 DRAFT: board clearance only; pack cradle and final cable restraint not designed.
 // QuadCAN-C5 enclosure - two-part box (base + lid), print in PETG or ASA (PLA softens in a hot car).
 // Board coordinates match gen/gen_pcb.py: origin = board top-left, +x right, +y down (toward the SD slot).
 // Render: openscad -D 'part="base"' -o base.stl quadcan_enclosure.scad   (part = base | lid | both)
 
 part = "both";
 
-BW = 110; BH = 85; BT = 1.6;        // board
+BW = 140; BH = 85; BT = 1.6;        // board
 gap = 0.6;                          // board-to-wall clearance
 wall = 2.2; floor_t = 2.0; lid_t = 2.0;
 stand = 6.0;                        // standoff height (CR1220 holder sits under the board)
 above = 15.0;                       // tallest part above the board: 47 uF cap (12 mm) + margin
 IW = BW + 2 * gap; IH = BH + 2 * gap;
 base_h = floor_t + stand + BT + above;
-holes = [[3.5, 3.5], [106.5, 3.5], [106.5, 81.5], [58, 50]];
+holes = [[3.5, 3.5], [136.5, 3.5], [136.5, 81.5], [58, 50]];
 
 // board (x, y) -> box XY (y flipped so the SD slot faces -Y)
 function P(x, y) = [wall + gap + x, wall + gap + (BH - y)];

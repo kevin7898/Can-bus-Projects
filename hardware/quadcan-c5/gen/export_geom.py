@@ -32,7 +32,7 @@ def main(src, dst):
             polys = {}
             for k, v in LAYERS.items():
                 if pad.IsOnLayer(k):
-                    sps = pad.GetEffectivePolygon()
+                    sps = pad.GetEffectivePolygon(k)
                     polys[v] = poly_pts(sps)
             pos = pad.GetPosition()
             g["pads"].append({
@@ -51,7 +51,9 @@ def main(src, dst):
     for z in b.Zones():
         if z.GetIsRuleArea():
             g["keepouts"].append(poly_pts(z.Outline()))
-    json.dump(g, open(dst, "w"))
+    for key in ("pads", "holes", "keepouts"):
+        g[key].sort(key=lambda item: json.dumps(item, sort_keys=True))
+    json.dump(g, open(dst, "w"), sort_keys=True)
     print(f"exported {len(g['pads'])} pads, {len(g['holes'])} holes, {len(g['keepouts'])} keepouts")
 
 

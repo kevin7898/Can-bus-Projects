@@ -4,6 +4,7 @@ usage: /usr/bin/python3 apply_routes.py placed.kicad_pcb routes.json out.kicad_p
 """
 import json
 import sys
+import subprocess
 
 import pcbnew
 
@@ -29,13 +30,13 @@ def main(src, routes, out, drc):
         via = pcbnew.PCB_VIA(b)
         via.SetPosition(pcbnew.VECTOR2I(mm(v["x"]), mm(v["y"])))
         via.SetDrill(mm(0.3))
-        via.SetWidth(mm(0.6))
+        via.SetWidth(pcbnew.F_Cu, mm(0.6))
         via.SetNet(nets[v["net"]])
         b.Add(via)
     pcbnew.ZONE_FILLER(b).Fill(b.Zones())
     pcbnew.SaveBoard(out, b)
     if drc:
-        pcbnew.WriteDRCReport(b, drc, pcbnew.EDA_UNITS_MILLIMETRES, True)
+        subprocess.run(["kicad-cli", "pcb", "drc", "-o", drc, out], check=True)
     print("wrote", out)
 
 

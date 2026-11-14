@@ -7,6 +7,7 @@
 //   MARK [text] -> drop an event marker into the log
 //   SEND <ch> <id-hex> <data-hex>  -> transmit (only on channels opened with can<n>_listen=0)
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -28,6 +29,7 @@ static const char *TAG = "net";
 #define PORT 7777
 static StreamBufferHandle_t s_live;
 static volatile bool s_live_on;
+static volatile bool s_net_stop, s_server_done = true;
 
 static void tap(const qcl_rec_t *r, const uint8_t *payload)
 {
@@ -54,7 +56,7 @@ static void ndp_confirm(void *arg, esp_event_base_t base, int32_t id, void *data
 static void send_all(int s, const void *p, size_t n)
 {
     const uint8_t *b = p;
-    while (n) {
+    while (n && !s_net_stop) {
         int w = send(s, b, n, 0);
         if (w <= 0) return;
         b += w;
@@ -78,9 +80,11 @@ static void client(int s)
 {
     char line[160];
     int n = 0;
-    for (;;) {
+    while (!s_net_stop) {
         char c;
-        if (recv(s, &c, 1, 0) <= 0) break;
+        int got = recv(s, &c, 1, 0);
+        if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+        if (got <= 0) break;
         if (c != '\n' && n < (int)sizeof(line) - 1) { line[n++] = c; continue; }
         line[n] = 0;
         n = 0;
@@ -88,7 +92,7 @@ static void client(int s)
             xStreamBufferReset(s_live);
             s_live_on = true;
             uint8_t buf[2048];
-            for (;;) {
+            while (!s_net_stop) {
                 size_t got = xStreamBufferReceive(s_live, buf, sizeof(buf), pdMS_TO_TICKS(200));
                 if (got && send(s, buf, got, 0) <= 0) break;
             }
@@ -98,7 +102,7 @@ static void client(int s)
             DIR *d = opendir(logger_dir());
             struct dirent *e;
             char path[300], out[300];
-            while (d && (e = readdir(d))) {
+            while (!s_net_stop && d && (e = readdir(d))) {
                 struct stat st;
                 snprintf(path, sizeof(path), "%s/%s", logger_dir(), e->d_name);
                 if (stat(path, &st) == 0) {
@@ -118,7 +122,7 @@ static void client(int s)
             send_all(s, hdr, k);
             static uint8_t fb[4096];
             size_t r;
-            while ((r = fread(fb, 1, sizeof(fb), f)) > 0) send_all(s, fb, r);
+            while (!s_net_stop && (r = fread(fb, 1, sizeof(fb), f)) > 0) send_all(s, fb, r);
             fclose(f);
         } else if (!strncmp(line, "MARK", 4)) {
             const char *txt = line[4] == ' ' ? line + 5 : "";
@@ -147,10 +151,22 @@ static void server_task(void *arg)
     bind(ls, (struct sockaddr *)&a, sizeof(a));
     listen(ls, 2);
     ESP_LOGI(TAG, "TCP server on port %d", PORT);
-    for (;;) {
+    while (!s_net_stop && ls >= 0) {
+        fd_set readfds;
+        FD_ZERO(&readfds); FD_SET(ls, &readfds);
+        struct timeval poll = {.tv_sec = 0, .tv_usec = 200000};
+        if (select(ls + 1, &readfds, NULL, NULL, &poll) <= 0) continue;
         int s = accept(ls, NULL, NULL);
-        if (s >= 0) client(s);
+        if (s >= 0) {
+            struct timeval timeout = {.tv_sec = 0, .tv_usec = 200000};
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+            client(s); // closes any file/DIR before returning, including stop requests
+        }
     }
+    if (ls >= 0) close(ls);
+    s_server_done = true;
+    vTaskDelete(NULL);
 }
 
 esp_err_t net_start(void)
@@ -190,6 +206,20 @@ esp_err_t net_start(void)
         if (!esp_wifi_nan_publish_service(&pub)) ESP_LOGE(TAG, "NAN publish failed");
         else ESP_LOGI(TAG, "Wi-Fi Aware service 'quadcan' published");
     }
-    xTaskCreate(server_task, "tcp", 6144, NULL, 5, NULL);
+    s_net_stop = false;
+    s_server_done = false;
+    if (xTaskCreate(server_task, "tcp", 6144, NULL, 5, NULL) != pdPASS) {
+        s_server_done = true;
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
+}
+
+void net_stop(void)
+{
+    s_net_stop = true;
+    s_live_on = false;
+    esp_wifi_stop();
+    // Wait for active GET/LIST operations to release the card before unmount.
+    while (!s_server_done) vTaskDelay(pdMS_TO_TICKS(10));
 }

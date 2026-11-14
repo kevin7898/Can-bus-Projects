@@ -1,3 +1,4 @@
+#include "esp_check.h"
 // MCP2518FD driver - register layout per Microchip DS20006027 (same as Linux mcp251xfd).
 #include "mcp2518fd.h"
 
@@ -60,7 +61,7 @@ enum { MODE_MIXED = 0, MODE_SLEEP = 1, MODE_LISTEN = 3, MODE_CONFIG = 4, MODE_CA
 #define OSC_OSCRDY (1u << 10)
 #define IOCON_XSTBYEN (1u << 6)
 #define IOCON_TRIS0   (1u << 0)
-#define IOCON_INTOD   (1u << 30)   /* INT pins open-drain: both controllers share one line */
+#define IOCON_INTOD   (1u << 30)   /* open-drain INT, separately pulled up into U19 */
 
 #define RX_FIFO 1
 #define TX_FIFO 2
@@ -134,7 +135,9 @@ esp_err_t mcp2518fd_init(mcp2518fd_t *d, spi_host_device_t host, int cs, uint32_
     // INT0/GPIO0 drives the transceiver STB pin: high in sleep, low otherwise
     uint32_t io = rd32(d, REG_IOCON);
     io = (io | IOCON_XSTBYEN | IOCON_INTOD) & ~IOCON_TRIS0;
-    wr32(d, REG_IOCON, io);
+    // IOCON is byte-write only (MCP2518FD data sheet, IOCON register).
+    ESP_RETURN_ON_ERROR(wr8(d, REG_IOCON, (uint8_t)io), TAG, "IOCON low byte");
+    ESP_RETURN_ON_ERROR(wr8(d, REG_IOCON + 3, (uint8_t)(io >> 24)), TAG, "IOCON high byte");
     return ESP_OK;
 }
 

@@ -14,13 +14,15 @@
 #define PIN_SPI_MOSI       GPIO_NUM_7    // IOMUX FSPID
 #define PIN_CAN3_CS        GPIO_NUM_9
 #define PIN_CAN4_CS        GPIO_NUM_10
-#define PIN_MCP_INT        GPIO_NUM_26   // both MCP2518FD INT pins, open-drain, active low
+#define PIN_MCP_INT        GPIO_NUM_23   // U19 AND of independent active-low MCP interrupts
 #define PIN_SD_CS          GPIO_NUM_24
 
 // ---- I2C: TCA9535 expander (0x20), PCF8523 RTC (0x68), Qwiic ------------
 #define PIN_I2C_SDA        GPIO_NUM_25
 #define PIN_I2C_SCL        GPIO_NUM_28   // also the BOOT strap / BOOT button
 #define I2C_ADDR_EXPANDER  0x20
+#define I2C_ADDR_POWER     0x21
+#define I2C_ADDR_BAT_ADC   0x48
 #define I2C_ADDR_RTC       0x68
 
 // ---- deep-sleep wake inputs (all LP GPIOs, all active low) ----------------
@@ -35,8 +37,8 @@
 #define VIN_DIODE_DROP_V   0.45f         // D2 reverse-polarity diode sits before the divider
 
 // ---- UARTs ---------------------------------------------------------------
-#define PIN_GPS_TX         GPIO_NUM_23   // ESP -> NEO-M9N RXD
-#define PIN_GPS_RX         GPIO_NUM_27   // NEO-M9N TXD -> ESP
+#define PIN_GPS_TX         GPIO_NUM_27   // boot strap -> U20 -> NEO-M9N RXD
+#define PIN_GPS_RX         GPIO_NUM_26   // NEO-M9N TXD -> ESP
 #define PIN_LTE_TX         GPIO_NUM_11   // U0TXD -> LTE module RXD
 #define PIN_LTE_RX         GPIO_NUM_12   // U0RXD <- LTE module TXD
 

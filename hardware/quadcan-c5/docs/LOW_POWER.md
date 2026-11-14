@@ -30,26 +30,15 @@ of the engine starting.
 If you poll the car over CAN1 (`can1_listen=0`), stop polling when replies stop: a tester that
 keeps talking can hold the car's own gateway awake. The firmware never polls on its own.
 
-## What is powered in sleep
+## Rev 1.1 backup and sleep
 
-| Block | State | Estimate at 3.3 / 5 V |
-|---|---|---|
-| ESP32-C5 module | deep sleep (PSRAM in standby) | ~50–100 µA |
-| 4 × TCAN1044AV | standby, bus wake armed | ≤ 60 µA total |
-| 2 × MCP2518FD | sleep mode, 40 MHz oscillator disabled | ~20 µA |
-| TCA9535, PCF8523, pull-ups, VIN divider | holding state | ~40 µA |
-| AP7361C LDO | quiescent | ~60 µA |
-| NEO-M9N (if fitted) | main rail off, backup rail on for hot starts | ~45 µA |
-| microSD card | **rail switched off** (Q3) | 0 |
-| GPS main rail, LEDs, Wi-Fi | off | 0 |
-| TPS54360 buck | light-load pulse skipping | ~150 µA at VIN |
+The charger status, not the vehicle ADC alone, determines whether external power is available. A continuous absence shorter than 30 seconds keeps logging. Restoration resets that timer. A cell measurement below 3.45 V for one second requests shutdown sooner. An unavailable status expander is treated as absent power; an unavailable battery ADC does not disable the 30-second limit.
 
-**Estimated draw: about 0.4–0.6 mA at 12 V**, plus roughly 0.1 mA average for the periodic
-voltage check. That's well under the 20–50 mA parasitic draw most car makers allow. A 60 Ah
-battery would take years to notice it.
+Shutdown stops Wi-Fi, CAN and GPS, stops the external oscillator, flushes/closes the SD log, then enters deep sleep. Backup shutdown disables CAN wake and samples vehicle VIN every five seconds; VIN above approximately 8 V restarts the logger. USB-only restoration after backup sleep currently requires RESET. This is a software limitation, not seamless USB wake support.
 
-These are datasheet-based estimates, not measurements. Measure the first assembled board with
-a meter in series with harness pin 1 before leaving it in a car for weeks.
+Deep sleep is not a hard battery disconnect. The always-on circuitry and ADC still consume power until the UVLO cuts the boost off near 3.16 V. Its nominal restart threshold is 3.66 V. Pack protection remains the final independent safeguard. An exact cell, charger temperature limits, real peak load and sleep current must be validated before installation.
+
+The rev 1.0 estimate of 0.4–0.6 mA at vehicle VIN is withdrawn for this revision: it omitted the added charger, boost, comparator, ADC, second expander and dividers. Measure both VIN and pack current in active, key-off, backup-sleep and UVLO-off states.
 
 ## Config keys (`/sd/quadcan.cfg`)
 

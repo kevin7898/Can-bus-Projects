@@ -16,3 +16,6 @@ void io_led(int led_bit, bool on);          // XP_LED_*_N (active low)
 
 esp_err_t rtc_get(time_t *t);               // ESP_ERR_INVALID_STATE if the RTC lost power
 esp_err_t rtc_set(time_t t);
+
+esp_err_t io_external_power_good(bool *good);
+esp_err_t io_battery_mv(uint32_t *mv);

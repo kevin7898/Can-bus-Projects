@@ -56,3 +56,5 @@ void power_task_start(void);         // VIN monitor, power-fail, sleep, MARK but
 // lines, and goes straight back to deep sleep (never returns) unless the vehicle has woken up.
 void power_early_wake_check(void);
 esp_err_t net_start(void);
+
+void net_stop(void); // closes network file readers before SD unmount

@@ -8,6 +8,7 @@
 #include "esp_twai_onchip.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "io.h"
 #include "mcp2518fd.h"
 
@@ -19,6 +20,8 @@ static bool s_open[NUM_CAN];
 static volatile uint32_t s_frames[NUM_CAN];
 static volatile int64_t s_last_rx;
 static TaskHandle_t s_mcp_task;
+static SemaphoreHandle_t s_mcp_lock;
+static volatile bool s_stopping;
 
 uint32_t can_frames(int ch) { return s_frames[ch]; }
 int64_t can_last_rx_us(void) { return s_last_rx; }
@@ -69,7 +72,7 @@ static esp_err_t open_onchip(int ch)
 }
 
 // ---------------------------------------------------------------- MCP2518FD channels
-// Both MCP2518FD share one open-drain, level-triggered interrupt line: mask it in the ISR and
+// U19 combines the independent MCP2518FD interrupts into one level-triggered line: mask it in the ISR and
 // re-arm once both RX FIFOs are empty, so a frame arriving mid-drain can never be missed.
 static void IRAM_ATTR mcp_isr(void *arg)
 {
@@ -86,7 +89,8 @@ static void mcp_task(void *arg)
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
         int64_t now = esp_timer_get_time();
-        for (int i = 0; i < 2; i++) {
+        xSemaphoreTake(s_mcp_lock, portMAX_DELAY);
+        for (int i = 0; i < 2 && !s_stopping; i++) {
             int ch = 2 + i;
             if (!s_open[ch]) continue;
             if (now - last_sync > 500000) mcp2518fd_sync_time(&s_mcp[i]);
@@ -99,7 +103,8 @@ static void mcp_task(void *arg)
             }
         }
         if (now - last_sync > 500000) last_sync = now;
-        gpio_intr_enable(PIN_MCP_INT);
+        if (!s_stopping) gpio_intr_enable(PIN_MCP_INT);
+        xSemaphoreGive(s_mcp_lock);
     }
 }
 
@@ -114,6 +119,9 @@ static esp_err_t open_mcp(int i)
 
 esp_err_t can_start(void)
 {
+    s_mcp_lock = xSemaphoreCreateMutex();
+    if (!s_mcp_lock) return ESP_ERR_NO_MEM;
+    s_stopping = false;
     gpio_install_isr_service(0);
     xTaskCreate(mcp_task, "mcp", 4096, NULL, 12, &s_mcp_task);
     gpio_config_t io = {.pin_bit_mask = 1ULL << PIN_MCP_INT, .mode = GPIO_MODE_INPUT, .intr_type = GPIO_INTR_LOW_LEVEL};
@@ -132,6 +140,9 @@ esp_err_t can_start(void)
 
 void can_stop(void)
 {
+    s_stopping = true;
+    gpio_intr_disable(PIN_MCP_INT);
+    if (s_mcp_lock) xSemaphoreTake(s_mcp_lock, portMAX_DELAY);
     for (int ch = 0; ch < 2; ch++) {
         if (s_open[ch]) {
             twai_node_disable(s_node[ch]);
@@ -144,12 +155,18 @@ void can_stop(void)
         if (s_open[2 + i]) mcp2518fd_sleep(&s_mcp[i]);   // XSTBY puts the transceiver in standby
         s_open[2 + i] = false;
     }
+    if (s_mcp_lock) xSemaphoreGive(s_mcp_lock);
 }
 
 esp_err_t can_send(int ch, uint32_t id, uint8_t flags, const uint8_t *data, uint8_t len)
 {
-    if (ch < 0 || ch >= NUM_CAN || !s_open[ch]) return ESP_ERR_INVALID_STATE;
-    if (g_cfg.listen_only[ch]) return ESP_ERR_NOT_ALLOWED;
+    if (ch < 0 || ch >= NUM_CAN || !s_mcp_lock) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_mcp_lock, portMAX_DELAY);
+    if (s_stopping || !s_open[ch] || g_cfg.listen_only[ch]) {
+        esp_err_t err = g_cfg.listen_only[ch] ? ESP_ERR_NOT_ALLOWED : ESP_ERR_INVALID_STATE;
+        xSemaphoreGive(s_mcp_lock);
+        return err;
+    }
     esp_err_t err;
     if (ch < 2) {
         twai_frame_t f = {
@@ -161,6 +178,7 @@ esp_err_t can_send(int ch, uint32_t id, uint8_t flags, const uint8_t *data, uint
     } else {
         err = mcp2518fd_send(&s_mcp[ch - 2], id, flags, data, len);
     }
+    xSemaphoreGive(s_mcp_lock);
     if (err == ESP_OK) log_push(QCL_REC_CAN, (uint8_t)ch, flags | QCL_F_TX, id, esp_timer_get_time(), data, len);
     return err;
 }
